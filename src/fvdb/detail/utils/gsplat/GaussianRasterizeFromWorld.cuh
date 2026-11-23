@@ -10,6 +10,7 @@
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianCameras.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianMath.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianTileRange.cuh>
 
 #include <nanovdb/math/Math.h>
 #include <nanovdb/math/Ray.h>
@@ -17,15 +18,74 @@
 #include <cuda/std/tuple>
 
 #include <cstdint>
+#include <type_traits>
 
 namespace fvdb::detail::ops {
 
 /// Opacity threshold used by 3DGS alpha compositing.
 constexpr __device__ float kAlphaThreshold = 0.99f;
 
+/// Number of feature channels each rasterization pass holds in registers.
+constexpr uint32_t kRasterChannelChunk = 64;
+
+/// Largest channel remainder that joins the last full chunk instead of taking its own pass.
+constexpr uint32_t kRasterMaxFoldedRemainder = 8;
+
+/// Number of channels a per-channel loop unrolls when it keeps no per-channel state.
+template <uint32_t NUM_CHANNELS>
+constexpr uint32_t kRasterChannelUnroll =
+    NUM_CHANNELS < kRasterChannelChunk ? NUM_CHANNELS : kRasterChannelChunk;
+
+/// Chunk schedule for NUM_CHANNELS: NUM_FULL passes of kRasterChannelChunk channels, then one
+/// pass of TAIL channels (none if TAIL is 0). A remainder of at most kRasterMaxFoldedRemainder
+/// channels widens the last full chunk; a larger one gets its own pass.
+template <uint32_t NUM_CHANNELS> struct RasterChannelSchedule {
+    static constexpr uint32_t CHUNK = kRasterChannelChunk;
+    static constexpr uint32_t REM   = NUM_CHANNELS % CHUNK;
+    static constexpr bool FOLD_REM =
+        (NUM_CHANNELS > CHUNK) && (REM != 0) && (REM <= kRasterMaxFoldedRemainder);
+    static constexpr uint32_t NUM_FULL = NUM_CHANNELS / CHUNK - (FOLD_REM ? 1 : 0);
+    static constexpr uint32_t TAIL     = FOLD_REM ? CHUNK + REM : REM;
+};
+
+// The compiled channel counts only have remainders of 0 or 1 above kRasterChannelChunk, so the
+// separate tail pass after full chunks (e.g. 100 = 64 + 36) is never instantiated. These checks
+// pin the schedule for that case and the folded ones.
+static_assert(RasterChannelSchedule<33>::NUM_FULL == 0 && RasterChannelSchedule<33>::TAIL == 33);
+static_assert(RasterChannelSchedule<64>::NUM_FULL == 1 && RasterChannelSchedule<64>::TAIL == 0);
+static_assert(RasterChannelSchedule<65>::NUM_FULL == 0 && RasterChannelSchedule<65>::TAIL == 65);
+static_assert(RasterChannelSchedule<100>::NUM_FULL == 1 && RasterChannelSchedule<100>::TAIL == 36);
+static_assert(RasterChannelSchedule<129>::NUM_FULL == 1 && RasterChannelSchedule<129>::TAIL == 65);
+static_assert(RasterChannelSchedule<192>::NUM_FULL == 3 && RasterChannelSchedule<192>::TAIL == 0);
+
+/// Split NUM_CHANNELS into register-resident chunks per RasterChannelSchedule and call
+/// `fn(std::integral_constant<uint32_t, WIDTH>{}, channelStart)` once per chunk, in order.
+///
+/// Every chunk has a compile-time width, so per-channel arrays stay in registers and need no
+/// tail predicates.
+template <uint32_t NUM_CHANNELS, typename Fn>
+inline __device__ void
+forEachRasterChannelChunk(Fn &&fn) {
+    using Schedule              = RasterChannelSchedule<NUM_CHANNELS>;
+    constexpr uint32_t CHUNK    = Schedule::CHUNK;
+    constexpr uint32_t NUM_FULL = Schedule::NUM_FULL;
+    constexpr uint32_t TAIL     = Schedule::TAIL;
+
+    // Guarded so a zero trip count never emits `chunk < 0`, which older nvcc rejects (#186-D).
+    if constexpr (NUM_FULL != 0) {
+#pragma unroll 1
+        for (uint32_t chunk = 0; chunk < NUM_FULL; ++chunk) {
+            fn(std::integral_constant<uint32_t, CHUNK>{}, chunk * CHUNK);
+        }
+    }
+    if constexpr (TAIL != 0) {
+        fn(std::integral_constant<uint32_t, TAIL>{}, NUM_FULL * CHUNK);
+    }
+}
+
 /// Common dense-tile rasterization arguments shared by from-world forward/backward kernels.
 struct RasterizeFromWorldCommonArgs {
-    using TileOffsetsAccessor     = fvdb::TorchRAcc64<int32_t, 3>;
+    using TileOffsetsAccessor     = fvdb::TorchRAcc64<int64_t, 3>;
     using TileGaussianIdsAccessor = fvdb::TorchRAcc64<int32_t, 1>;
     using Acc2f                   = fvdb::TorchRAcc64<float, 2>;
     using Acc3f                   = fvdb::TorchRAcc64<float, 3>;
@@ -38,7 +98,7 @@ struct RasterizeFromWorldCommonArgs {
     uint32_t numTilesW;
     uint32_t numTilesH;
     uint32_t numChannels;
-    int32_t totalIntersections;
+    int64_t totalIntersections;
 
     TileOffsetsAccessor tileOffsets;         // [C, TH, TW]
     TileGaussianIdsAccessor tileGaussianIds; // [n_isects]
@@ -57,8 +117,9 @@ struct RasterizeFromWorldCommonArgs {
                      uint32_t &tileRow,
                      uint32_t &tileCol,
                      uint32_t &row,
-                     uint32_t &col) const {
-        const uint32_t globalLinearBlockIdx = blockIdx.x;
+                     uint32_t &col,
+                     const uint32_t blockOffset = 0) const {
+        const uint32_t globalLinearBlockIdx = blockOffset + blockIdx.x;
         const uint32_t tileExtentW          = numTilesW;
         const uint32_t tileExtentH          = numTilesH;
 
@@ -80,20 +141,18 @@ struct RasterizeFromWorldCommonArgs {
         return (masks != nullptr) && (!masks[tileId(cameraId, tileRow, tileCol)]);
     }
 
-    inline __device__ cuda::std::tuple<int32_t, int32_t>
+    inline __device__ cuda::std::tuple<int64_t, int64_t>
     tileGaussianRange(const uint32_t cameraId,
                       const uint32_t tileRow,
                       const uint32_t tileCol) const {
-        const uint32_t numCameras            = tileOffsets.size(0);
-        const int32_t firstGaussianIdInBlock = tileOffsets[cameraId][tileRow][tileCol];
-        auto [nextTileRow, nextTileCol]      = (tileCol < numTilesW - 1)
-                                                   ? cuda::std::make_tuple(tileRow, tileCol + 1)
-                                                   : cuda::std::make_tuple(tileRow + 1, 0u);
-        const int32_t lastGaussianIdInBlock =
-            ((cameraId == numCameras - 1) && (nextTileRow == numTilesH))
-                ? totalIntersections
-                : tileOffsets[cameraId][nextTileRow][nextTileCol];
-        return {firstGaussianIdInBlock, lastGaussianIdInBlock};
+        return fvdb::detail::ops::tileGaussianRange(tileOffsets,
+                                                    totalIntersections,
+                                                    tileOffsets.size(0),
+                                                    numTilesH,
+                                                    numTilesW,
+                                                    cameraId,
+                                                    tileRow,
+                                                    tileCol);
     }
 
     inline __device__ float

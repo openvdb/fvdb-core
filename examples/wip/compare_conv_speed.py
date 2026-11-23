@@ -6,9 +6,9 @@ import time
 import numpy as np
 import torch
 import tqdm
-from fvdb.utils.examples import load_dragon_mesh
 
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from fvdb.utils.examples import load_dragon_mesh
 
 
 def benchmark_inplace_conv(grid: GridBatch, in_feature, in_kernel):

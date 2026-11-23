@@ -8,6 +8,7 @@
 #include <fvdb/Config.h>
 #include <fvdb/FVDB.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
@@ -488,10 +489,55 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     version.attr("torch")   = py::str(TORCH_VERSION);
 
     // -----------------------------------------------------------------------
-    // GatherScatterDefault convolution: Python-side autograd
+    // Convolution geometry and GatherScatterDefault: Python-side autograd
     // -----------------------------------------------------------------------
 
-    using GSDTopo = fvdb::detail::ops::GatherScatterDefaultTopology;
+    using ConvGeometry = fvdb::detail::ops::ConvolutionGeometry;
+    using GSDTopo      = fvdb::detail::ops::GatherScatterDefaultTopology;
+
+    py::class_<ConvGeometry>(m, "ConvolutionGeometry")
+        .def(py::init([](const torch::Tensor &kernelSize, const torch::Tensor &stride) {
+                 return ConvGeometry(pyToCoord(kernelSize), pyToCoord(stride));
+             }),
+             py::arg("kernel_size"),
+             py::arg("stride"))
+        .def_property_readonly("kernel_size",
+                               [](const ConvGeometry &geometry) {
+                                   const auto &size = geometry.kernelSize();
+                                   return std::vector<int>{size[0], size[1], size[2]};
+                               })
+        .def_property_readonly("stride",
+                               [](const ConvGeometry &geometry) {
+                                   const auto &stride = geometry.stride();
+                                   return std::vector<int>{stride[0], stride[1], stride[2]};
+                               })
+        .def_property_readonly("dilation",
+                               [](const ConvGeometry &) {
+                                   const auto dilation = ConvGeometry::dilation();
+                                   return std::vector<int>{dilation[0], dilation[1], dilation[2]};
+                               })
+        .def_property_readonly("padding_before",
+                               [](const ConvGeometry &geometry) {
+                                   const auto &padding = geometry.paddingBefore();
+                                   return std::vector<int>{padding[0], padding[1], padding[2]};
+                               })
+        .def_property_readonly("padding_after",
+                               [](const ConvGeometry &geometry) {
+                                   const auto &padding = geometry.paddingAfter();
+                                   return std::vector<int>{padding[0], padding[1], padding[2]};
+                               })
+        .def_property_readonly("registration_offset",
+                               [](const ConvGeometry &) {
+                                   const auto registration = ConvGeometry::registrationOffset();
+                                   return std::vector<int>{
+                                       registration[0], registration[1], registration[2]};
+                               })
+        .def_property_readonly(
+            "semantics_version",
+            [](const ConvGeometry &) { return ConvGeometry::semanticsVersion(); })
+        .def_property_readonly("kernel_volume", &ConvGeometry::kernelVolume)
+        .def_property_readonly("phase_policy",
+                               [](const ConvGeometry &) { return "torch_same_phase"; });
 
     py::class_<GSDTopo>(m, "GatherScatterDefaultTopology")
         .def_readonly("gather_indices", &GSDTopo::gatherIndices)
@@ -513,6 +559,11 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_property_readonly("is_transposed", [](const GSDTopo &t) {
             return t.direction == fvdb::detail::ops::ConvDirection::Transposed;
         });
+
+    m.def("gs_reverse_topology",
+          &fvdb::detail::ops::reverseGatherScatterDefaultTopology,
+          "Return a constant-time reversed view of a gather-scatter topology.",
+          py::arg("topology"));
 
     // --- Forward topology + conv ---
 
@@ -627,8 +678,19 @@ TORCH_LIBRARY(fvdb, m) {
     m.class_<fvdb::JaggedTensor>("JaggedTensor");
     m.class_<fvdb::GridBatchData>("GridBatchData");
 
+    m.def("_copy_image_to_device(Tensor image, Device device) -> Tensor");
+
+    m.def("_fused_l1_loss(Tensor img1, Tensor img2) -> Tensor");
+    m.def(
+        "_fused_l1_loss_backward(Tensor img1, Tensor img2, Tensor grad_loss, bool need_img1, bool need_img2) -> (Tensor?, Tensor?)");
+
     m.def(
         "_fused_ssim(float C1, float C2, Tensor img1, Tensor img2, bool train) -> (Tensor, Tensor, Tensor, Tensor)");
     m.def(
-        "_fused_ssim_backward(float C1, float C2, Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
+        "_fused_ssim_backward(Tensor img1, Tensor img2, Tensor dL_dmap, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12) -> Tensor");
+
+    m.def(
+        "_fused_l1_ssim(Tensor img1, Tensor img2, float ssim_weight, float C1, float C2, bool train, bool normalize_target=False) -> (Tensor, Tensor, Tensor, Tensor)");
+    m.def(
+        "_fused_l1_ssim_backward(Tensor img1, Tensor img2, Tensor grad_loss, Tensor dm_dmu1, Tensor dm_dsigma1_sq, Tensor dm_dsigma12, float ssim_weight, bool normalize_target=False) -> Tensor");
 }

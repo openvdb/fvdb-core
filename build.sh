@@ -13,6 +13,8 @@ usage() {
   echo "                   wheel      - Build the Python wheel."
   echo "                   ctest      - Run tests (requires tests to be built)."
   echo "                   docstest   - Run pytest markdown documentation tests."
+  echo "                   format     - Run clang-format, Ruff import sorting, and ruff format (matches CI)."
+  echo "                                Pass 'check' to report violations without rewriting files."
   echo ""
   echo "Options:"
   echo "  -h, --help     Display this help message and exit."
@@ -53,20 +55,27 @@ setup_parallel_build_jobs() {
   if [ "$NUM_ARCH" -lt 1 ]; then
     NUM_ARCH=1
   fi
-  NVCC_THREADS=$NUM_ARCH
 
-  # Check if we have enough RAM for even one job with full NVCC_THREADS
-  # Requirement: JOB_RAM_GB * NVCC_THREADS
-  MIN_RAM_REQUIRED=$((JOB_RAM_GB * NVCC_THREADS))
+  # if NVCC_THREADS is set, use that; otherwise derive from the number of CUDA architectures
+  if [ -n "$NVCC_THREADS" ]; then
+    echo "Using NVCC_THREADS=$NVCC_THREADS"
+  else
+    NVCC_THREADS=$NUM_ARCH
 
-  if [ "$RAM_GB" -lt "$MIN_RAM_REQUIRED" ]; then
-      NVCC_THREADS=1
+    # Check if we have enough RAM for even one job with full NVCC_THREADS
+    # Requirement: JOB_RAM_GB * NVCC_THREADS
+    MIN_RAM_REQUIRED=$((JOB_RAM_GB * NVCC_THREADS))
+
+    if [ "$RAM_GB" -lt "$MIN_RAM_REQUIRED" ]; then
+        NVCC_THREADS=1
+    fi
+
+    # Limit NVCC_THREADS to NPROC to ensure we don't oversubscribe
+    if [ "$NVCC_THREADS" -gt "$NPROC" ]; then
+        NVCC_THREADS=$NPROC
+    fi
   fi
-
-  # Limit NVCC_THREADS to NPROC to ensure we don't oversubscribe
-  if [ "$NVCC_THREADS" -gt "$NPROC" ]; then
-      NVCC_THREADS=$NPROC
-  fi
+  export NVCC_THREADS
 
   # Determine max jobs based on CPU:
   # We want CMAKE_BUILD_PARALLEL_LEVEL * NVCC_THREADS <= NPROC
@@ -88,7 +97,6 @@ setup_parallel_build_jobs() {
   if [ -n "$CMAKE_BUILD_PARALLEL_LEVEL" ]; then
     echo "Using CMAKE_BUILD_PARALLEL_LEVEL=$CMAKE_BUILD_PARALLEL_LEVEL"
   else
-
     CMAKE_BUILD_PARALLEL_LEVEL=$PARALLEL_JOBS
 
     echo "Setting nvcc --threads to $NVCC_THREADS based on the number of CUDA architectures ($NUM_ARCH)"
@@ -97,7 +105,6 @@ setup_parallel_build_jobs() {
     echo "  Constraint: Estimated RAM ($((CMAKE_BUILD_PARALLEL_LEVEL * NVCC_THREADS * JOB_RAM_GB))) GB <= Available RAM ($RAM_GB GB)"
 
     export CMAKE_BUILD_PARALLEL_LEVEL
-    export NVCC_THREADS
   fi
 }
 
@@ -230,7 +237,7 @@ _first_arg_val="$1"
 BUILD_TYPE="install" # Default build type
 
 if [[ -n "$_first_arg_val" ]]; then
-  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" || "$_first_arg_val" == "docstest" ]]; then
+  if [[ "$_first_arg_val" == "install" || "$_first_arg_val" == "wheel" || "$_first_arg_val" == "ctest" || "$_first_arg_val" == "docstest" || "$_first_arg_val" == "format" ]]; then
     BUILD_TYPE="$_first_arg_val"
     shift # Consume the build_type argument
   else
@@ -362,6 +369,35 @@ fi
 # Construct PIP_ARGS with potential CMake args and other pass-through args
 export PIP_ARGS="--no-build-isolation$CONFIG_SETTINGS$PASS_THROUGH_ARGS"
 
+if [ "$BUILD_TYPE" == "format" ]; then
+    # Formatting needs no CUDA or build-job setup. Ruff reads its style settings
+    # from pyproject.toml; select only import rules for the sorting pass.
+    FORMAT_MODE="${PASS_THROUGH_ARGS# }"
+    FORMAT_MODE="${FORMAT_MODE:-format}"
+    if [[ "$FORMAT_MODE" != "format" && "$FORMAT_MODE" != "check" ]]; then
+        echo "Error: 'format' accepts an optional 'check' argument, got: $FORMAT_MODE"
+        exit 1
+    fi
+    FORMAT_EXIT_CODE=0
+
+    echo "Running clang-format ($FORMAT_MODE)"
+    ./src/scripts/run_clang_format.sh "$FORMAT_MODE" || FORMAT_EXIT_CODE=$?
+
+    echo "Running Ruff import sorting and formatting ($FORMAT_MODE)"
+    if ! command -v ruff >/dev/null 2>&1; then
+        echo "Error: ruff is not installed. Install with: python -m pip install \"ruff==0.15.7\""
+        exit 127
+    fi
+    if [ "$FORMAT_MODE" == "check" ]; then
+        ruff check --select I . || FORMAT_EXIT_CODE=$?
+        ruff format --check --diff . || FORMAT_EXIT_CODE=$?
+    else
+        ruff check --select I --fix . || FORMAT_EXIT_CODE=$?
+        ruff format . || FORMAT_EXIT_CODE=$?
+    fi
+    exit $FORMAT_EXIT_CODE
+fi
+
 # Detect and export CUDA architectures early so builds pick it up
 set_cuda_arch_list "$CUDA_ARCH_LIST_ARG"
 
@@ -463,6 +499,6 @@ elif [ "$BUILD_TYPE" == "docstest" ]; then
 
 else
     echo "Invalid build/run type: $BUILD_TYPE"
-    echo "Valid build/run types are: wheel, install, ctest, docstest"
+    echo "Valid build/run types are: wheel, install, ctest, docstest, format"
     exit 1
 fi

@@ -1,34 +1,57 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
-#include <fvdb/detail/utils/nanovdb/CreateEmptyGridHandle.h>
+#include <fvdb/detail/utils/nanovdb/BuildDistributedGrid.cuh>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
-#if CCCL_DEVICE_MERGE_SUPPORTED
-#include <nanovdb/tools/cuda/DistributedPointsToGrid.cuh>
-#else
+#if !CCCL_DEVICE_MERGE_SUPPORTED
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 #endif
+#include <nanovdb/HostBuffer.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
 
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
-template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer> dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+template <torch::DeviceType> GridStorage dispatchCreateNanoGridFromIJK(const JaggedTensor &ijk);
+
+// NanoVDB's PointsToGrid / DistributedPointsToGrid radix sort casts the per-grid coordinate count
+// to int32 (PointsToGrid.cuh:645), which silently corrupts the grid above 2^31 candidates. Reject
+// that here rather than return a garbage grid. Takes an already-on-host joffsets accessor so each
+// dispatch reuses the host copy it makes anyway -- no extra device sync.
+static void
+checkCandidateCountsFitInt32(const torch::TensorAccessor<fvdb::JOffsetsType, 1> &joffsetsAcc) {
+    for (int64_t gi = 0; gi + 1 < joffsetsAcc.size(0); gi += 1) {
+        const int64_t nCoords = joffsetsAcc[gi + 1] - joffsetsAcc[gi];
+        TORCH_CHECK(nCoords <= std::numeric_limits<int32_t>::max(),
+                    "Grid ",
+                    gi,
+                    " would be built from ",
+                    nCoords,
+                    " candidate coordinates, which exceeds the ",
+                    std::numeric_limits<int32_t>::max(),
+                    "-coordinate limit of the NanoVDB grid builder. Reduce the grid size.");
+    }
+}
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
     using GridT = nanovdb::ValueOnIndex;
 
@@ -38,21 +61,21 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
     TORCH_CHECK(ijk.scalar_type() == torch::kInt32 || ijk.scalar_type() == torch::kInt64,
                 "ijk must be int32 or int64");
 
-    c10::cuda::CUDAGuard deviceGuard(ijk.device());
+    const torch::Device device = ijk.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
     static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t), "nanovdb::Coord must be 3 ints");
-
-    // This guide buffer is a hack to pass in a device with an index to the cudaCreateNanoGrid
-    // function. We can't pass in a device directly but we can pass in a buffer which gets
-    // passed to TorchDeviceBuffer::create. The guide buffer holds the device and effectively
-    // passes it to the created buffer.
-    TorchDeviceBuffer guide(0, ijk.device());
 
     // FIXME: This is slow because we have to copy this data to the host and then build the
     // grids. Ideally we want to do this in a single invocation.
     torch::Tensor ijkBOffsetTensor = ijk.joffsets().cpu();
     auto ijkBOffset                = ijkBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
-    torch::Tensor ijkData          = ijk.jdata();
+    checkCandidateCountsFitInt32(ijkBOffset);
+    torch::Tensor ijkData = ijk.jdata();
     if (ijkData.scalar_type() != torch::kInt32) {
         ijkData = ijkData.to(torch::kInt32);
     }
@@ -60,34 +83,29 @@ dispatchCreateNanoGridFromIJK<torch::kCUDA>(const JaggedTensor &ijk) {
     TORCH_CHECK(ijkData.dim() == 2, "ijk must have shape (N, 3)");
     TORCH_CHECK(ijkData.size(1) == 3, "ijk must have shape (N, 3)");
 
-    // Create a grid for each batch item and store the handles
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    // Build one grid per batch item, then lay them end to end in one storage.
+    GridStorageParts parts(device, stream, ijkBOffset.size(0) - 1);
     for (int i = 0; i < (ijkBOffset.size(0) - 1); i += 1) {
         const int64_t startIdx = ijkBOffset[i];
         const int64_t nVoxels  = ijkBOffset[i + 1] - startIdx;
-        // torch::Tensor ijkDataSlice = ijkData.narrow(0, startIdx, nVoxels);
         const int32_t *dataPtr = ijkData.data_ptr<int32_t>() + 3 * startIdx;
 
-        handles.push_back(
-            nVoxels == 0
-                ? createEmptyGridHandle(guide.device())
-                : nanovdb::tools::cuda::voxelsToGrid<GridT, nanovdb::Coord *, TorchDeviceBuffer>(
-                      (nanovdb::Coord *)dataPtr, nVoxels, 1.0, guide));
+        if (nVoxels == 0) {
+            parts.addEmpty();
+        } else {
+            parts.add(GridStorage(
+                nanovdb::tools::cuda::
+                    voxelsToGrid<GridT, nanovdb::Coord *, DeviceGridBuffer, BuilderResource>(
+                        (nanovdb::Coord *)dataPtr, nVoxels, 1.0, proto, stream),
+                device));
+        }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multie
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return parts.merge();
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
     using GridT = nanovdb::ValueOnIndex;
 
@@ -99,67 +117,52 @@ dispatchCreateNanoGridFromIJK<torch::kPrivateUse1>(const JaggedTensor &ijk) {
 
     static_assert(sizeof(nanovdb::Coord) == 3 * sizeof(int32_t), "nanovdb::Coord must be 3 ints");
 
-    // This guide buffer is a hack to pass in a device with an index to the
-    // cudaCreateNanoGrid function. We can't pass in a device directly but we can pass in a
-    // buffer which gets passed to TorchDeviceBuffer::create. The guide buffer holds the
-    // device and effectively passes it to the created buffer.
-    TorchDeviceBuffer guide(0, ijk.device());
+    const torch::Device device = ijk.device();
+    // The built parts are unified storage, which retains no stream. Merging several items runs
+    // on storageStream(PrivateUse1), the legacy default stream, and synchronizes it.
+    const cudaStream_t stream = storageStream(device);
 
     // FIXME: This is slow because we have to copy this data to the host and then build the
     // grids. Ideally we want to do this in a single invocation.
     torch::Tensor ijkBOffsetTensor = ijk.joffsets().cpu();
     auto ijkBOffset                = ijkBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
-    torch::Tensor ijkData          = ijk.jdata();
+    checkCandidateCountsFitInt32(ijkBOffset);
+    torch::Tensor ijkData = ijk.jdata();
     TORCH_CHECK(ijkData.is_contiguous(), "ijk must be contiguous");
     TORCH_CHECK(ijkData.dim() == 2, "ijk must have shape (N, 3)");
     TORCH_CHECK(ijkData.size(1) == 3, "ijk must have shape (N, 3)");
 
+    // The coordinates were written by torch on each device's current stream; the mesh streams
+    // the builder runs on are not ordered after them.
     for (const auto device_index: c10::irange(c10::cuda::device_count())) {
         c10::cuda::getCurrentCUDAStream(device_index).synchronize();
     }
 
-    // Create a grid for each batch item and store the handles
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> handles;
+    // Build one grid per batch item, then lay them end to end in one storage.
+    GridStorageParts parts(device, stream, ijkBOffset.size(0) - 1);
     for (int i = 0; i < (ijkBOffset.size(0) - 1); i += 1) {
         const int64_t startIdx = ijkBOffset[i];
         const int64_t nVoxels  = ijkBOffset[i + 1] - startIdx;
 
         if (!nVoxels) {
-            auto handle = createEmptyGridHandle(ijk.device());
-            handles.emplace_back(std::move(handle));
+            parts.addEmpty();
         } else {
-            int32_t *dataPtr = ijkData.data_ptr<int32_t>() + ijkData.stride(0) * startIdx;
-            auto coordPtr    = reinterpret_cast<nanovdb::Coord *>(dataPtr);
+            auto *coordPtr =
+                static_cast<nanovdb::Coord *>(ijkData.narrow(0, startIdx, nVoxels).data_ptr());
 
-            nanovdb::cuda::DeviceMesh mesh;
-            nanovdb::tools::cuda::DistributedPointsToGrid<GridT> converter(mesh);
-            auto handle =
-                converter.getHandle<nanovdb::Coord *, TorchDeviceBuffer>(coordPtr, nVoxels, guide);
-            handles.emplace_back(std::move(handle));
+            parts.add(GridStorage(buildDistributedGrid<GridT>(coordPtr, nVoxels), device));
         }
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-
-    for (const auto device_index: c10::irange(c10::cuda::device_count())) {
-        c10::cuda::getCurrentCUDAStream(device_index).synchronize();
-    }
-
-    if (handles.size() == 1) {
-        // If there's only one handle, just return it
-        return std::move(handles[0]);
-    } else {
-        // This copies all the handles into a single handle -- only do it if there are multiple
-        // grids
-        return nanovdb::cuda::mergeGridHandles(handles, &guide);
-    }
+    return parts.merge();
 #else
     TORCH_CHECK(false, "Distributed creation of grids requires CUDA 12.8 or later");
-    return nanovdb::GridHandle<TorchDeviceBuffer>();
+    return GridStorage();
 #endif
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
     using GridT = nanovdb::ValueOnIndex;
 
@@ -179,8 +182,9 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
                 jaggedCoords.jdata().accessor<ScalarT, 2>();
             const torch::TensorAccessor<fvdb::JOffsetsType, 1> &coordsBOffsetsAcc =
                 jaggedCoords.joffsets().accessor<fvdb::JOffsetsType, 1>();
+            checkCandidateCountsFitInt32(coordsBOffsetsAcc);
 
-            std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+            std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
             batchHandles.reserve(coordsBOffsetsAcc.size(0) - 1);
             for (int bi = 0; bi < (coordsBOffsetsAcc.size(0) - 1); bi += 1) {
                 auto proxyGrid         = std::make_shared<ProxyGridT>(-1.0f);
@@ -195,22 +199,18 @@ dispatchCreateNanoGridFromIJK<torch::kCPU>(const JaggedTensor &jaggedCoords) {
                 }
 
                 proxyGridAccessor.merge();
-                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-                    *proxyGrid, 0u, false, false);
-                ret.buffer().to(torch::kCPU);
-                batchHandles.push_back(std::move(ret));
+                batchHandles.push_back(
+                    nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                        *proxyGrid, 0u, false, false));
             }
 
-            if (batchHandles.size() == 1) {
-                return std::move(batchHandles[0]);
-            } else {
-                return nanovdb::mergeGrids(batchHandles);
-            }
+            return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                        : nanovdb::mergeGrids(batchHandles));
         }),
         AT_EXPAND(AT_INTEGRAL_TYPES));
 }
 
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 _createNanoGridFromIJK(const JaggedTensor &ijk) {
     TORCH_CHECK_VALUE(
         ijk.ldim() == 1,
@@ -236,6 +236,9 @@ _createNanoGridFromIJK(const JaggedTensor &ijk) {
     const int64_t numGrids = ijk.joffsets().size(0) - 1;
     TORCH_CHECK(numGrids == ijk.num_outer_lists(),
                 "If this happens, Francis' paranoia was justified. File a bug");
+
+    // The >2^31-candidate overflow guard runs inside each dispatch (checkCandidateCountsFitInt32),
+    // reusing the host joffsets copy those paths already make -- no extra device sync here.
     return FVDB_DISPATCH_KERNEL(ijk.device(),
                                 [&]() { return dispatchCreateNanoGridFromIJK<DeviceTag>(ijk); });
 }
@@ -244,8 +247,7 @@ c10::intrusive_ptr<GridBatchData>
 createNanoGridFromIJK(const JaggedTensor &ijk,
                       const std::vector<nanovdb::Vec3d> &voxelSizes,
                       const std::vector<nanovdb::Vec3d> &origins) {
-    auto handle = _createNanoGridFromIJK(ijk);
-    return makeGridBatchData(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(_createNanoGridFromIJK(ijk), voxelSizes, origins);
 }
 
 } // namespace ops

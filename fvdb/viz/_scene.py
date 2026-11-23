@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 import logging
+import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 
-from ..gaussian_splatting import GaussianSplat3d
 from ..types import (
     NumericMaxRank1,
     NumericMaxRank2,
@@ -18,10 +19,18 @@ from ..types import (
     to_Vec3fBatch,
 )
 from ._camera_view import CamerasView
+from ._fog_volume_view import FogVolumeView
 from ._gaussian_splat_3d_view import GaussianSplat3dView
+from ._gaussian_splat_view_data import GaussianSplatViewData, ShOrderingMode
 from ._image_view import ImageView
+from ._level_set_view import LevelSetView
+from ._nanovdb_grid_view import add_nanovdb_grid_views
 from ._point_cloud_view import PointCloudView
 from ._viewer_server import _get_viewer_server_cpp
+from ._widget_views import CheckboxView, NumberView, SliderView, TextView
+
+if TYPE_CHECKING:
+    from .. import Grid, GridBatch, JaggedTensor
 
 
 def get_scene(name: str = "fVDB Scene") -> "Scene":
@@ -39,19 +48,34 @@ def get_scene(name: str = "fVDB Scene") -> "Scene":
 
 
 class Scene:
+    """A named collection of views and interactive widgets in the viewer.
+
+    Use :func:`fvdb.viz.get_scene` to create a scene, then add geometry with
+    methods such as :meth:`add_point_cloud` and :meth:`add_level_set`.
+    Keep the scene alive while displaying its contents: deleting this object
+    removes its scene and views from the viewer.
+
+    Args:
+        name (str): Name identifying the scene in the viewer.
+    """
+
     def __init__(self, name: str):
         self._name = name
         self._logger = logging.getLogger(f"{self.__class__.__module__}.{self.__class__.__name__}")
+        self._widgets: dict[str, SliderView | NumberView | TextView | CheckboxView] = {}
+
         # TODO: Register scene with name in the viewer and use the returned scene ID.
         server = _get_viewer_server_cpp()
         server.add_scene(name)
 
     def __del__(self):
         """
-        Delete the scene. This will remove the scene and its views from the viewer.
+        Delete the scene, removing it and its views from the viewer.
         """
-        server = _get_viewer_server_cpp()
-        server.remove_scene(self._name)
+        try:
+            _get_viewer_server_cpp().remove_scene(self._name)
+        except Exception:
+            pass
 
     def reset(self):
         """
@@ -60,6 +84,8 @@ class Scene:
         server = _get_viewer_server_cpp()
         server.reset()
         server.add_scene(self._name)
+
+        self._widgets.clear()
 
     @torch.no_grad()
     def add_point_cloud(
@@ -117,10 +143,17 @@ class Scene:
         )
 
     @torch.no_grad()
-    def add_gaussian_splat_3d(
+    def add_gaussian_splat_tensors(
         self,
         name: str,
-        gaussian_splat_3d: GaussianSplat3d,
+        *,
+        means: torch.Tensor,
+        quats: torch.Tensor,
+        log_scales: torch.Tensor,
+        logit_opacities: torch.Tensor,
+        sh0: torch.Tensor,
+        shN: torch.Tensor,
+        sh_ordering: ShOrderingMode = ShOrderingMode.RGB_RGB_RGB,
         tile_size: int = 16,
         min_radius_2d: float = 0.0,
         eps_2d: float = 0.3,
@@ -128,11 +161,22 @@ class Scene:
         sh_degree_to_use: int = -1,
     ) -> GaussianSplat3dView:
         """
-        Add a :class:`fvdb.GaussianSplat3d` to the viewer and return a view for it.
+        Add renderer-ready Gaussian splat tensors to the viewer and return a view for them.
+
+        All tensor parameters are keyword-only. They use the same shape and type contract as
+        :class:`GaussianSplatViewData`.
 
         Args:
             name (str): The name of the Gaussian splat 3D scene. This must be unique among all views added to the scene.
-            gaussian_splat_3d (GaussianSplat3d): The Gaussian splat 3D scene to add.
+            means (torch.Tensor): Gaussian means with shape ``(N, 3)``.
+            quats (torch.Tensor): Gaussian quaternions with shape ``(N, 4)`` in
+                ``(w, x, y, z)`` component order.
+            log_scales (torch.Tensor): Gaussian logarithmic scales with shape ``(N, 3)``.
+            logit_opacities (torch.Tensor): Gaussian opacity logits with shape ``(N,)``.
+            sh0 (torch.Tensor): Zeroth-order spherical harmonics coefficients.
+            shN (torch.Tensor): Higher-order spherical harmonics coefficients.
+            sh_ordering (str): Spherical harmonics tensor layout. Must be ``"rgb_rgb_rgb"`` or
+                ``"rrr_ggg_bbb"``. Default is ``"rgb_rgb_rgb"``.
             tile_size (int): The tile size to use for rendering. Default is 16.
             min_radius_2d (float): The minimum radius in pixels to use when rendering splats. Default is 0.0.
             eps_2d (float): The epsilon value to use when rendering splats. Default is 0.3.
@@ -143,21 +187,101 @@ class Scene:
         Returns:
             gaussian_splat_3d_view (GaussianSplat3dView): A view for the Gaussian splats added to the scene.
         """
+        data = GaussianSplatViewData(
+            means=means,
+            quats=quats,
+            log_scales=log_scales,
+            logit_opacities=logit_opacities,
+            sh0=sh0,
+            shN=shN,
+            sh_ordering=sh_ordering,
+        )
         return GaussianSplat3dView(
             scene_name=self._name,
             name=name,
-            means=gaussian_splat_3d.means,
-            quats=gaussian_splat_3d.quats,
-            log_scales=gaussian_splat_3d.log_scales,
-            logit_opacities=gaussian_splat_3d.logit_opacities,
-            sh0=gaussian_splat_3d.sh0,
-            shN=gaussian_splat_3d.shN,
+            means=data.means,
+            quats=data.quats,
+            log_scales=data.log_scales,
+            logit_opacities=data.logit_opacities,
+            sh0=data.sh0,
+            shN=data.shN,
             tile_size=tile_size,
             min_radius_2d=min_radius_2d,
             eps_2d=eps_2d,
             antialias=antialias,
             sh_degree_to_use=sh_degree_to_use,
+            sh_ordering_mode=data.sh_ordering,
             _private=GaussianSplat3dView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_gaussian_splat_3d(
+        self,
+        name: str,
+        gaussian_splat_3d: GaussianSplatViewData,
+        tile_size: int = 16,
+        min_radius_2d: float = 0.0,
+        eps_2d: float = 0.3,
+        antialias: bool = False,
+        sh_degree_to_use: int = -1,
+    ) -> GaussianSplat3dView:
+        """Add Gaussian splat view data to the viewer and return a view for it.
+
+        Args:
+            name (str): The unique name of the Gaussian splat view within this scene.
+            gaussian_splat_3d (GaussianSplatViewData): Renderer-ready Gaussian splat tensors and
+                their spherical harmonics layout. Passing an object that only exposes the six
+                legacy tensor properties remains supported temporarily, but is deprecated.
+            tile_size (int): The tile size to use for rendering. Default is 16.
+            min_radius_2d (float): The minimum radius in pixels to render. Default is 0.0.
+            eps_2d (float): The 2D epsilon used when rendering. Default is 0.3.
+            antialias (bool): Whether to use antialiasing. Default is False.
+            sh_degree_to_use (int): The spherical harmonics degree to render. ``-1`` selects the
+                maximum degree available in the data. Default is -1.
+
+        Returns:
+            GaussianSplat3dView: A view for the Gaussian splats added to the scene.
+        """
+        if isinstance(gaussian_splat_3d, GaussianSplatViewData):
+            data = gaussian_splat_3d
+        else:
+            warnings.warn(
+                "Passing a model-shaped object to Scene.add_gaussian_splat_3d() is deprecated; "
+                "pass GaussianSplatViewData instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            tensor_fields = ("means", "quats", "log_scales", "logit_opacities", "sh0", "shN")
+            missing_fields = [field for field in tensor_fields if not hasattr(gaussian_splat_3d, field)]
+            if missing_fields:
+                missing = ", ".join(missing_fields)
+                raise TypeError(
+                    "gaussian_splat_3d must be GaussianSplatViewData; "
+                    f"the deprecated model-shaped input is missing: {missing}"
+                )
+            data = GaussianSplatViewData(
+                means=gaussian_splat_3d.means,
+                quats=gaussian_splat_3d.quats,
+                log_scales=gaussian_splat_3d.log_scales,
+                logit_opacities=gaussian_splat_3d.logit_opacities,
+                sh0=gaussian_splat_3d.sh0,
+                shN=gaussian_splat_3d.shN,
+            )
+
+        return self.add_gaussian_splat_tensors(
+            name,
+            means=data.means,
+            quats=data.quats,
+            log_scales=data.log_scales,
+            logit_opacities=data.logit_opacities,
+            sh0=data.sh0,
+            shN=data.shN,
+            sh_ordering=data.sh_ordering,
+            tile_size=tile_size,
+            min_radius_2d=min_radius_2d,
+            eps_2d=eps_2d,
+            antialias=antialias,
+            sh_degree_to_use=sh_degree_to_use,
         )
 
     @torch.no_grad()
@@ -202,6 +326,83 @@ class Scene:
             width=width,
             height=height,
             _private=ImageView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_level_set(
+        self,
+        name: str,
+        grid: "Grid | GridBatch",
+        sdf: "JaggedTensor",
+    ) -> LevelSetView:
+        """
+        Add an fvdb sparse grid with per-voxel SDF values to the viewer as an isosurface.
+
+        The surface is rendered by the ``nanovdb_surface`` pipeline (HDDA zero-crossing).
+        If a view with ``name`` already exists it is replaced.
+
+        .. note::
+
+            The nanovdb-editor renders one grid per view.  If ``grid`` is a
+            :class:`~fvdb.GridBatch` with more than one grid, one view is created per
+            grid, named ``name[i]`` for grid ``i``.
+
+        Args:
+            name (str): Unique name for this view within the scene.
+            grid: A :class:`~fvdb.Grid` or :class:`~fvdb.GridBatch` whose active voxels
+                define the domain.
+            sdf: A :class:`~fvdb.JaggedTensor` of shape ``(N,)`` and dtype ``float32``
+                containing one signed-distance value per active voxel (summed over the
+                batch), in world-space units.  Negative values are inside the surface,
+                positive values are outside.
+
+        Returns:
+            level_set_view (LevelSetView): The newly created view.
+        """
+        view_names = add_nanovdb_grid_views(self._name, name, grid, sdf, "add_level_set_view", "sdf")
+        return LevelSetView(
+            scene_name=self._name,
+            name=name,
+            view_names=view_names,
+            _private=LevelSetView.__PRIVATE__,
+        )
+
+    @torch.no_grad()
+    def add_fog_volume(
+        self,
+        name: str,
+        grid: "Grid | GridBatch",
+        density: "JaggedTensor",
+    ) -> FogVolumeView:
+        """
+        Add an fvdb sparse grid with per-voxel density values to the viewer as a fog volume.
+
+        The volume is rendered by the ``nanovdb_render`` pipeline (ray-marcher).
+        If a view with ``name`` already exists it is replaced.
+
+        .. note::
+
+            The nanovdb-editor renders one grid per view.  If ``grid`` is a
+            :class:`~fvdb.GridBatch` with more than one grid, one view is created per
+            grid, named ``name[i]`` for grid ``i``.
+
+        Args:
+            name (str): Unique name for this view within the scene.
+            grid: A :class:`~fvdb.Grid` or :class:`~fvdb.GridBatch` whose active voxels
+                define the domain.
+            density: A :class:`~fvdb.JaggedTensor` of shape ``(N,)`` and dtype ``float32``
+                containing one non-negative density value per active voxel (summed over
+                the batch).
+
+        Returns:
+            fog_volume_view (FogVolumeView): The newly created view.
+        """
+        view_names = add_nanovdb_grid_views(self._name, name, grid, density, "add_fog_volume_view", "density")
+        return FogVolumeView(
+            scene_name=self._name,
+            name=name,
+            view_names=view_names,
+            _private=FogVolumeView.__PRIVATE__,
         )
 
     @torch.no_grad()
@@ -535,3 +736,187 @@ class Scene:
         server.set_camera_view_direction(self._name, *view_direction_vec3f)
         server.set_camera_orbit_radius(self._name, orbit_radius)
         server.set_camera_up_direction(self._name, *up_direction_vec3f)
+
+    def add_slider(
+        self,
+        name: str,
+        min: float,
+        max: float,
+        initial: float | None = None,
+        step: float = 0.01,
+    ) -> SliderView:
+        """
+        Add a float slider widget to this scene's `Params` window.
+
+        Args:
+            name (str): Unique field name. Used both as the widget label and
+                as the lookup key on the scene; if a widget with this name
+                already exists it is replaced.
+            min (float): Minimum slider value.
+            max (float): Maximum slider value (must be greater than ``min``).
+            initial (float | None): Initial slider value. Defaults to ``min``
+                when not provided. Clamped to ``[min, max]``.
+            step (float): Slider step size. Must be positive.
+
+        Returns:
+            SliderView: A handle whose ``value`` property reads or writes the
+            live slider value.
+        """
+        if not (max > min):
+            raise ValueError(f"Slider 'max' must be greater than 'min' (got min={min}, max={max})")
+        if step <= 0.0:
+            raise ValueError(f"Slider 'step' must be positive (got {step})")
+        if initial is None:
+            initial = min
+        initial = float(initial)
+        if initial < min:
+            initial = float(min)
+        elif initial > max:
+            initial = float(max)
+        handle = SliderView(
+            scene_name=self._name,
+            name=name,
+            min=float(min),
+            max=float(max),
+            initial=initial,
+            step=float(step),
+            _private=SliderView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_number(
+        self,
+        name: str,
+        initial: float = 0.0,
+        min: float | None = None,
+        max: float | None = None,
+        step: float = 0.01,
+    ) -> NumberView:
+        """
+        Add a numeric drag widget (no slider) to this scene's `Params` window.
+
+        Args:
+            name (str): Unique field name.
+            initial (float): Initial value.
+            min (float | None): Optional lower bound for clamping.
+            max (float | None): Optional upper bound for clamping.
+            step (float): Drag step size. Must be positive.
+
+        Returns:
+            NumberView: A handle whose ``value`` property reads or writes the
+            live numeric value.
+        """
+        if step <= 0.0:
+            raise ValueError(f"Number 'step' must be positive (got {step})")
+        if min is not None and max is not None and not (max > min):
+            raise ValueError(f"Number 'max' must be greater than 'min' (got min={min}, max={max})")
+        initial = float(initial)
+        if min is not None and initial < min:
+            initial = float(min)
+        if max is not None and initial > max:
+            initial = float(max)
+        handle = NumberView(
+            scene_name=self._name,
+            name=name,
+            initial=initial,
+            min=None if min is None else float(min),
+            max=None if max is None else float(max),
+            step=float(step),
+            _private=NumberView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_text(
+        self,
+        name: str,
+        initial: str = "",
+        max_length: int = 256,
+        commit_on_enter: bool = False,
+    ) -> TextView:
+        """
+        Add a text input field to this scene's `Scene Params` window.
+
+        The buffer commits per keystroke; ``on_update`` callbacks fire on
+        every change. Pass ``commit_on_enter=True`` to additionally enable
+        :meth:`TextView.on_submit`, which fires only when the user presses
+        Enter.
+
+        Args:
+            name: Unique field name.
+            initial: Initial string value (must fit in ``max_length - 1``
+                bytes when UTF-8 encoded; the last byte is the NUL terminator).
+            max_length: Capacity of the underlying ``char[N]`` buffer
+                including the NUL terminator. Must be at least ``2``.
+            commit_on_enter: Enable Enter-driven ``on_submit`` callbacks.
+
+        Returns:
+            TextView: A handle whose ``value`` reads or writes the live string.
+        """
+        if max_length < 2:
+            raise ValueError(f"Text 'max_length' must be at least 2 (got {max_length})")
+        if len(initial.encode("utf-8")) > max_length - 1:
+            raise ValueError(
+                f"Initial value for text widget {name!r} is longer than max_length - 1 = "
+                f"{max_length - 1} bytes (got {len(initial.encode('utf-8'))} bytes)"
+            )
+        handle = TextView(
+            scene_name=self._name,
+            name=name,
+            initial=initial,
+            max_length=int(max_length),
+            commit_on_enter=bool(commit_on_enter),
+            _private=TextView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def add_checkbox(
+        self,
+        name: str,
+        initial: bool = False,
+    ) -> CheckboxView:
+        """
+        Add a checkbox widget to this scene's `Scene Params` window.
+
+        Args:
+            name (str): Unique field name.
+            initial (bool): Initial checkbox state.
+
+        Returns:
+            CheckboxView: A handle whose ``value`` property reads or writes
+            the live bool value.
+        """
+        handle = CheckboxView(
+            scene_name=self._name,
+            name=name,
+            initial=bool(initial),
+            _private=CheckboxView.__PRIVATE__,
+        )
+        self._widgets[name] = handle
+        return handle
+
+    def poll_widgets(self) -> list[str]:
+        """
+        Fire any pending ``on_update`` and ``on_submit`` callbacks.
+
+        ``on_update`` fires when the widget value changed since the last
+        poll. ``on_submit`` fires when a :class:`TextView` created with
+        ``commit_on_enter=True`` observed a fresh Enter press. Returns
+        the names of the widgets that fired any callback (each name at
+        most once per call).
+        """
+        changed: list[str] = []
+        for name, handle in self._widgets.items():
+            updated = handle._fire_on_update_if_changed()
+            submitted = handle._fire_on_submit_if_changed()
+            if updated or submitted:
+                changed.append(name)
+        return changed
+
+    def get_widget(self, name: str) -> SliderView | NumberView | TextView | CheckboxView | None:
+        """
+        Look up a previously-added widget on this scene by name.
+        """
+        return self._widgets.get(name)

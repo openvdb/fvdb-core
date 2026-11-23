@@ -24,6 +24,49 @@ class version:
     cuda: str
     torch: str
 
+class ConvolutionGeometry:
+    """Immutable canonical index-space geometry for sparse convolution."""
+
+    def __init__(self, kernel_size: Vec3iOrScalar, stride: Vec3iOrScalar) -> None: ...
+    @property
+    def kernel_size(self) -> list[int]: ...
+    @property
+    def stride(self) -> list[int]: ...
+    @property
+    def dilation(self) -> list[int]: ...
+    @property
+    def padding_before(self) -> list[int]: ...
+    @property
+    def padding_after(self) -> list[int]: ...
+    @property
+    def registration_offset(self) -> list[int]: ...
+    @property
+    def semantics_version(self) -> int: ...
+    @property
+    def kernel_volume(self) -> int: ...
+    @property
+    def phase_policy(self) -> str: ...
+
+class BuildGridForConvResourceStats:
+    """Explicit staging accounting for the most recent generated forward topology."""
+
+    @property
+    def input_voxel_count(self) -> int: ...
+    @property
+    def kernel_volume(self) -> int: ...
+    @property
+    def valid_emission_count(self) -> int: ...
+    @property
+    def count_requested_bytes(self) -> int: ...
+    @property
+    def prefix_requested_bytes(self) -> int: ...
+    @property
+    def emission_requested_bytes(self) -> int: ...
+    @property
+    def peak_requested_bytes(self) -> int: ...
+    @property
+    def used_direct_projection(self) -> bool: ...
+
 class GatherScatterDefaultTopology:
     """Precomputed compacted CSR topology for default gather-scatter sparse convolution."""
 
@@ -47,6 +90,8 @@ class GatherScatterDefaultTopology:
     def stride(self) -> list[int]: ...
     @property
     def is_transposed(self) -> bool: ...
+
+def gs_reverse_topology(topology: GatherScatterDefaultTopology) -> GatherScatterDefaultTopology: ...
 
 # Forward topology + conv
 def gs_build_topology(
@@ -107,7 +152,7 @@ def rasterize_num_contributing_gaussians(
     image_origin_h: int,
     tile_size: int,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
-def sparse_rasterize_num_contributing_gaussians(
+def rasterize_num_contributing_gaussians_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -138,7 +183,7 @@ def rasterize_contributing_gaussian_ids(
     num_depth_samples: int,
     num_contributing_gaussians: Optional[torch.Tensor] = ...,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
-def sparse_rasterize_contributing_gaussian_ids(
+def rasterize_contributing_gaussian_ids_sparse(
     means2d: torch.Tensor,
     conics: torch.Tensor,
     opacities: torch.Tensor,
@@ -156,6 +201,37 @@ def sparse_rasterize_contributing_gaussian_ids(
     tile_size: int,
     num_depth_samples: int,
     num_contributing_gaussians: Optional[JaggedTensor] = ...,
+) -> tuple[JaggedTensor, JaggedTensor]: ...
+def rasterize_top_contributing_gaussian_ids(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+def rasterize_top_contributing_gaussian_ids_sparse(
+    means2d: torch.Tensor,
+    conics: torch.Tensor,
+    opacities: torch.Tensor,
+    tile_offsets: torch.Tensor,
+    tile_gaussian_ids: torch.Tensor,
+    pixels_to_render: JaggedTensor,
+    active_tiles: torch.Tensor,
+    tile_pixel_mask: torch.Tensor,
+    tile_pixel_cumsum: torch.Tensor,
+    pixel_map: torch.Tensor,
+    image_width: int,
+    image_height: int,
+    image_origin_w: int,
+    image_origin_h: int,
+    tile_size: int,
+    num_depth_samples: int,
 ) -> tuple[JaggedTensor, JaggedTensor]: ...
 def mcmc_relocate_gaussians(
     log_scales: torch.Tensor,
@@ -212,33 +288,36 @@ def project_gaussians_analytic_fwd(
     min_radius_2d: float,
     calc_compensations: bool,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def project_gaussians_analytic_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     scales: torch.Tensor,
     world_to_cam_matrices: torch.Tensor,
     projection_matrices: torch.Tensor,
-    compensations: torch.Tensor,
+    compensations: Optional[torch.Tensor],
     image_width: int,
     image_height: int,
     eps2d: float,
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
-    d_loss_d_compensations: torch.Tensor,
+    d_loss_d_compensations: Optional[torch.Tensor],
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
     out_normalized_d_loss_d_means2d_norm_accum: Optional[torch.Tensor] = ...,
     out_normalized_max_radii_accum: Optional[torch.Tensor] = ...,
     out_gradient_step_counts: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def evaluate_spherical_harmonics_fwd(
     sh_degree_to_use: int,
     num_cameras: int,
-    view_dirs: torch.Tensor,
+    means: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    camera_ids: torch.Tensor,
+    gaussian_ids: torch.Tensor,
     sh0_coeffs: torch.Tensor,
     sh_n_coeffs: torch.Tensor,
     radii: torch.Tensor,
@@ -247,12 +326,16 @@ def evaluate_spherical_harmonics_bwd(
     sh_degree_to_use: int,
     num_cameras: int,
     num_gaussians: int,
-    view_dirs: torch.Tensor,
+    means: torch.Tensor,
+    world_to_cam_matrices: torch.Tensor,
+    camera_ids: torch.Tensor,
+    gaussian_ids: torch.Tensor,
     sh_n_coeffs: torch.Tensor,
     d_loss_d_colors: torch.Tensor,
     radii: torch.Tensor,
-    compute_d_loss_d_view_dirs: bool,
-) -> tuple[torch.Tensor, ...]: ...
+    compute_d_loss_d_means: bool,
+    compute_d_loss_d_world_to_cam_matrices: bool,
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]: ...
 def rasterize_screen_space_gaussians_fwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -265,9 +348,10 @@ def rasterize_screen_space_gaussians_fwd(
     tile_size: int,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_screen_space_gaussians_bwd(
     means2d: torch.Tensor,
     conics: torch.Tensor,
@@ -288,7 +372,7 @@ def rasterize_screen_space_gaussians_bwd(
     num_shared_channels_override: int = ...,
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_screen_space_gaussians_sparse_fwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
@@ -306,9 +390,10 @@ def rasterize_screen_space_gaussians_sparse_fwd(
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
     pixel_map: torch.Tensor,
-    backgrounds: Optional[torch.Tensor],
-    masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+    num_shared_channels_override: int = ...,
+    backgrounds: Optional[torch.Tensor] = ...,
+    masks: Optional[torch.Tensor] = ...,
+) -> tuple[JaggedTensor, JaggedTensor, JaggedTensor]: ...
 def rasterize_screen_space_gaussians_sparse_bwd(
     pixels_to_render: JaggedTensor,
     means2d: torch.Tensor,
@@ -322,10 +407,10 @@ def rasterize_screen_space_gaussians_sparse_bwd(
     tile_size: int,
     tile_offsets: torch.Tensor,
     tile_gaussian_ids: torch.Tensor,
-    rendered_alphas: torch.Tensor,
-    last_ids: torch.Tensor,
-    d_loss_d_rendered_features: torch.Tensor,
-    d_loss_d_rendered_alphas: torch.Tensor,
+    rendered_alphas: JaggedTensor,
+    last_ids: JaggedTensor,
+    d_loss_d_rendered_features: JaggedTensor,
+    d_loss_d_rendered_alphas: JaggedTensor,
     active_tiles: torch.Tensor,
     tile_pixel_mask: torch.Tensor,
     tile_pixel_cumsum: torch.Tensor,
@@ -334,7 +419,7 @@ def rasterize_screen_space_gaussians_sparse_bwd(
     num_shared_channels_override: int = ...,
     backgrounds: Optional[torch.Tensor] = ...,
     masks: Optional[torch.Tensor] = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_world_space_gaussians_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -356,7 +441,7 @@ def rasterize_world_space_gaussians_fwd(
     tile_gaussian_ids: torch.Tensor,
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def rasterize_world_space_gaussians_bwd(
     means: torch.Tensor,
     quats: torch.Tensor,
@@ -382,7 +467,7 @@ def rasterize_world_space_gaussians_bwd(
     d_loss_d_rendered_alphas: torch.Tensor,
     backgrounds: Optional[torch.Tensor],
     masks: Optional[torch.Tensor],
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
 def project_gaussians_analytic_jagged_fwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
@@ -398,7 +483,7 @@ def project_gaussians_analytic_jagged_fwd(
     far: float,
     min_radius_2d: float,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def project_gaussians_analytic_jagged_bwd(
     g_sizes: torch.Tensor,
     means: torch.Tensor,
@@ -413,11 +498,11 @@ def project_gaussians_analytic_jagged_bwd(
     radii: torch.Tensor,
     conics: torch.Tensor,
     d_loss_d_means2d: torch.Tensor,
-    d_loss_d_depths: torch.Tensor,
+    d_loss_d_depths: Optional[torch.Tensor],
     d_loss_d_conics: torch.Tensor,
     world_to_cam_matrices_requires_grad: bool,
     ortho: bool,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 def intersect_gaussian_tiles(
     means2d: torch.Tensor,
     radii: torch.Tensor,
@@ -427,6 +512,8 @@ def intersect_gaussian_tiles(
     num_tiles_h: int,
     num_tiles_w: int,
     camera_ids: Optional[torch.Tensor] = ...,
+    conics: Optional[torch.Tensor] = ...,
+    opacities: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 def intersect_gaussian_tiles_sparse(
     means2d: torch.Tensor,
@@ -439,14 +526,18 @@ def intersect_gaussian_tiles_sparse(
     num_tiles_h: int,
     num_tiles_w: int,
     camera_ids: Optional[torch.Tensor] = ...,
+    conics: Optional[torch.Tensor] = ...,
+    opacities: Optional[torch.Tensor] = ...,
 ) -> tuple[torch.Tensor, torch.Tensor]: ...
 def build_sparse_gaussian_tile_layout(
     tile_side_length: int,
     num_tiles_w: int,
     num_tiles_h: int,
     pixels_to_render: JaggedTensor,
-) -> tuple[torch.Tensor, ...]: ...
-def project_gaussians_unscented_fwd(
+    image_width: Optional[int] = ...,
+    image_height: Optional[int] = ...,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: ...
+def project_gaussians_ut_fwd(
     means: torch.Tensor,
     quats: torch.Tensor,
     log_scales: torch.Tensor,
@@ -468,7 +559,7 @@ def project_gaussians_unscented_fwd(
     ut_kappa: float = ...,
     ut_in_image_margin: float = ...,
     ut_require_all_sigma_points_in_image: bool = ...,
-) -> tuple[torch.Tensor, ...]: ...
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None]: ...
 
 class GridBatchData:
     MAX_GRIDS_PER_BATCH: ClassVar[int] = ...
@@ -911,6 +1002,7 @@ def upsample_grid(
     mask: JaggedTensor | None = ...,
 ) -> GridBatchData: ...
 def dual_grid(grid: GridBatchData, exclude_border: bool = ...) -> GridBatchData: ...
+def build_padded_grid(grid: GridBatchData, bmin: int, bmax: int, exclude_border: bool = ...) -> GridBatchData: ...
 def clip_grid(
     grid: GridBatchData,
     ijk_min: list[list[int]],
@@ -935,6 +1027,7 @@ def conv_grid(
     kernel_size: list[int],
     stride: list[int],
 ) -> GridBatchData: ...
+def last_conv_grid_resource_stats() -> BuildGridForConvResourceStats: ...
 def conv_transpose_grid(
     grid: GridBatchData,
     kernel_size: list[int],
@@ -982,11 +1075,20 @@ class JaggedTensor:
     def from_data_and_offsets(arg0: torch.Tensor, arg1: torch.Tensor) -> JaggedTensor: ...
     @staticmethod
     def from_data_indices_and_list_ids(
-        data: torch.Tensor, indices: torch.Tensor, list_ids: torch.Tensor, num_tensors: int
+        data: torch.Tensor,
+        indices: torch.Tensor,
+        list_ids: torch.Tensor,
+        num_tensors: int,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     @staticmethod
     def from_data_offsets_and_list_ids(
-        data: torch.Tensor, offsets: torch.Tensor, list_ids: torch.Tensor
+        data: torch.Tensor,
+        offsets: torch.Tensor,
+        list_ids: torch.Tensor,
+        *,
+        num_outer_lists: int | None = None,
     ) -> JaggedTensor: ...
     def int(self) -> JaggedTensor: ...
     def jagged_like(self, data: torch.Tensor) -> JaggedTensor: ...
@@ -1268,11 +1370,74 @@ class CameraView:
     @frustum_color.setter
     def frustum_color(self, value: tuple[float, float, float]) -> None: ...
 
+class SliderView:
+    @property
+    def name(self) -> str: ...
+    @property
+    def scene_name(self) -> str: ...
+    @property
+    def min(self) -> float: ...
+    @property
+    def max(self) -> float: ...
+    @property
+    def step(self) -> float: ...
+    @property
+    def value(self) -> float: ...
+    @value.setter
+    def value(self, v: float) -> None: ...
+
+class NumberView:
+    @property
+    def name(self) -> str: ...
+    @property
+    def scene_name(self) -> str: ...
+    @property
+    def has_min(self) -> bool: ...
+    @property
+    def has_max(self) -> bool: ...
+    @property
+    def min(self) -> float: ...
+    @property
+    def max(self) -> float: ...
+    @property
+    def step(self) -> float: ...
+    @property
+    def value(self) -> float: ...
+    @value.setter
+    def value(self, v: float) -> None: ...
+
+class TextView:
+    @property
+    def name(self) -> str: ...
+    @property
+    def scene_name(self) -> str: ...
+    @property
+    def max_length(self) -> int: ...
+    @property
+    def commit_on_enter(self) -> bool: ...
+    @property
+    def submit_counter(self) -> int: ...
+    @property
+    def value(self) -> str: ...
+    @value.setter
+    def value(self, v: str) -> None: ...
+
+class CheckboxView:
+    @property
+    def name(self) -> str: ...
+    @property
+    def scene_name(self) -> str: ...
+    @property
+    def value(self) -> bool: ...
+    @value.setter
+    def value(self, v: bool) -> None: ...
+
 class Viewer:
     def __init__(self, ip_address: str, port: int, device_id: int, verbose: bool) -> None: ...
     def port(self) -> int: ...
     def ip_address(self) -> str: ...
     def reset(self) -> None: ...
+    def stop(self) -> None: ...
     def add_scene(self, scene_name: str) -> None: ...
     def remove_scene(self, scene_name: str) -> None: ...
     def remove_view(self, scene_name: str, name: str) -> None: ...
@@ -1331,7 +1496,60 @@ class Viewer:
         width: int,
         height: int,
     ) -> None: ...
+    def add_level_set_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        sdf: JaggedTensor,
+    ) -> None: ...
+    def add_fog_volume_view(
+        self,
+        scene_name: str,
+        name: str,
+        grid: GridBatchData,
+        density: JaggedTensor,
+    ) -> None: ...
+    def has_nanovdb_view(self, name: str) -> bool: ...
     def wait_for_interrupt(self) -> None: ...
+    def add_slider(
+        self,
+        scene_name: str,
+        name: str,
+        min: float,
+        max: float,
+        initial: float,
+        step: float,
+    ) -> SliderView: ...
+    def add_number(
+        self,
+        scene_name: str,
+        name: str,
+        initial: float,
+        has_min: bool,
+        min: float,
+        has_max: bool,
+        max: float,
+        step: float,
+    ) -> NumberView: ...
+    def add_text(
+        self,
+        scene_name: str,
+        name: str,
+        initial: str,
+        max_length: int,
+        commit_on_enter: bool = False,
+    ) -> TextView: ...
+    def add_checkbox(self, scene_name: str, name: str, initial: bool) -> CheckboxView: ...
+    def has_slider(self, name: str) -> bool: ...
+    def has_number(self, name: str) -> bool: ...
+    def has_text(self, name: str) -> bool: ...
+    def has_checkbox(self, name: str) -> bool: ...
+    def get_slider(self, name: str) -> SliderView: ...
+    def get_number(self, name: str) -> NumberView: ...
+    def get_text(self, name: str) -> TextView: ...
+    def get_checkbox(self, name: str) -> CheckboxView: ...
+    def scene_widget_names(self, scene_name: str) -> list[str]: ...
 
 class config:
     enable_ultra_sparse_acceleration: ClassVar[bool] = ...

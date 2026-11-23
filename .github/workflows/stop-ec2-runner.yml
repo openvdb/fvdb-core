@@ -1,0 +1,128 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# De-register and terminate a self-hosted EC2 runner started by
+# start-ec2-runner.yml. Callers keep their own `needs:` and
+# `if: always() && needs.<start-job>.result != 'skipped'` guards; this workflow
+# is only the teardown itself.
+#
+# Two call shapes, matching the two ways the repo provisions runners:
+#   * pass `ec2-instance-id` straight from the start job's output (tests.yml,
+#     cu130.yml, cu132.yml, nightly-publish.yml);
+#   * leave it empty and the instance is looked up by its `RunnerLabel` tag
+#     (publish.yml, whose start job fans out over a matrix, so there is no
+#     single job output to read).
+#
+# Security note: like its start counterpart, this workflow mints a
+# runner-registration token from the fvdb-ec2-runners GitHub App and therefore
+# never checks out code or runs a local action -- see
+# .github/scripts/check_runner_token_policy.py.
+name: Stop EC2 Runner
+
+on:
+  workflow_call:
+    inputs:
+      label:
+        description: >-
+          Runner label. Pass the same literal that was given to
+          start-ec2-runner.yml as runner-label, NOT the start job's `label`
+          output: the output is empty when that job was cancelled mid-flight,
+          and the literal is what lets the RunnerLabel tag lookup below recover
+          the instance in that case.
+        type: string
+        required: true
+      ec2-instance-id:
+        description: >-
+          Instance id emitted by start-ec2-runner.yml. Leave empty to resolve it
+          from the instance's RunnerLabel tag instead.
+        type: string
+        required: false
+        default: ''
+      aws-role:
+        description: IAM role to assume via OIDC (needs.versions.outputs.aws-runner-role).
+        type: string
+        required: true
+      aws-region:
+        description: AWS region the instance is running in.
+        type: string
+        required: true
+
+permissions:
+  id-token: write # Required for AWS OIDC
+
+jobs:
+  stop:
+    name: Stop EC2 runner
+    runs-on: ubuntu-latest
+    # The runner role (aws.runner_role in versions.json) trusts only OIDC
+    # tokens whose subject names the ci-aws environment, and a job's token
+    # names an environment only if the job declares one. ci-aws has no
+    # required reviewers; its deployment-branch policy limits which refs can
+    # start a runner. Approval of external PRs happens earlier, in
+    # approval-gate.yml.
+    #
+    # deployment: false keeps the environment (its deployment-branch policy
+    # still applies and the OIDC subject still names ci-aws) but records no
+    # deployment, so PRs are not filled with "deployed to ci-aws" events.
+    # Both were verified in openvdb/fvdb-test.
+    environment:
+      name: ci-aws
+      deployment: false
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+          # 900s is the STS minimum. This job finishes in seconds, so a leaked
+          # session is useful for 15 minutes instead of the default hour.
+          role-duration-seconds: 900
+
+      # The runner action needs a token that can register and remove this
+      # repository's self-hosted runners (Administration: write). It comes from
+      # the fvdb-ec2-runners GitHub App: minted for this job, limited to this
+      # repository, and revoked when the job ends. The App's private key is a
+      # secret of the ci-aws environment, so only jobs that declare ci-aws, on
+      # refs its deployment-branch policy allows, can read it.
+      - name: Mint a runner-registration token
+        id: runner-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RUNNER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNNER_APP_KEY }}
+          permission-administration: write
+
+      - name: Find EC2 instance ID by label
+        id: find-instance
+        if: inputs.ec2-instance-id == ''
+        env:
+          LABEL: ${{ inputs.label }}
+        run: |
+          echo "Looking for instance with RunnerLabel: $LABEL"
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:RunnerLabel,Values=$LABEL" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations[0].Instances[0].InstanceId' \
+            --output text)
+
+          if [ "$INSTANCE_ID" == "None" ] || [ -z "$INSTANCE_ID" ]; then
+            # Not an error: this is the normal outcome when the start job was
+            # cancelled before (or without) launching an instance, or when the
+            # start job's own cancellation cleanup already terminated it.
+            echo "::warning::No EC2 instance tagged RunnerLabel=$LABEL is running; nothing to stop."
+            echo "instance-id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Found instance: $INSTANCE_ID"
+          echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Stop EC2 runner
+        # The lookup step is skipped when the caller supplied an id, so its
+        # output is empty then; `||` picks whichever of the two we actually have.
+        # Skip entirely when neither route produced an id.
+        if: inputs.ec2-instance-id != '' || steps.find-instance.outputs.instance-id != ''
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ inputs.label }}
+          ec2-instance-id: ${{ inputs.ec2-instance-id || steps.find-instance.outputs.instance-id }}

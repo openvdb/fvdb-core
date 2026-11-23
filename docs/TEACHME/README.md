@@ -40,7 +40,6 @@ Each lesson includes:
 
 ## Not covered
 
-- Gaussian Splatting (`fvdb.GaussianSplat3d`, `fvdb.gaussian_splatting`) — not yet included
+- Gaussian Splatting (`fvdb_reality_capture.GaussianSplat3d`) — provided by fVDB Reality Capture
 - Visualization (`fvdb.viz`) — not yet included
 - Volume rendering and ray marching — not yet included
-

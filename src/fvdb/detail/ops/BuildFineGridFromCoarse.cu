@@ -1,17 +1,24 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildFineGridFromCoarse.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
+#include <fvdb/detail/ops/MakeContiguous.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/VoxelSizeUtils.h>
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
@@ -31,10 +38,9 @@ JaggedTensor dispatchFineIJKForCoarseGrid(const GridBatchData &batchHdl,
                                           const std::optional<JaggedTensor> &maybeMask);
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
-                                const nanovdb::Coord subdivisionFactor,
-                                const std::optional<JaggedTensor> &subdivMask);
+GridStorage dispatchBuildFineGridFromCoarse(const GridBatchData &coarseBatchHdl,
+                                            const nanovdb::Coord subdivisionFactor,
+                                            const std::optional<JaggedTensor> &subdivMask);
 
 __device__ inline void
 copyCoords(const fvdb::JIdxType bidx,
@@ -234,8 +240,11 @@ dispatchFineIJKForCoarseGrid<torch::kCUDA>(const GridBatchData &batchHdl,
 
         forEachVoxelCUDA(1, batchHdl, cb);
 
-        return JaggedTensor::from_data_offsets_and_list_ids(
-            outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+        return JaggedTensor::from_data_offsets_and_list_ids_unsafe(outIJK,
+                                                                   batchHdl.voxelOffsets() *
+                                                                       totalPadAmount,
+                                                                   batchHdl.jlidx(),
+                                                                   batchHdl.batchSize());
     }
 }
 
@@ -301,24 +310,35 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
 
             void *dTempStorage      = nullptr;
             size_t tempStorageBytes = 0;
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaMallocAsync(&dTempStorage, tempStorageBytes, stream);
-            cub::DeviceSegmentedReduce::Sum(dTempStorage,
-                                            tempStorageBytes,
-                                            mask.value().jdata().const_data_ptr<bool>(),
-                                            maskCounts,
-                                            deviceNumSegments,
-                                            beginOffsets,
-                                            endOffsets,
-                                            stream);
-            cudaFreeAsync(dTempStorage, stream);
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            // Route the CUB scratch through the builder resource rather than bare
+            // cudaMallocAsync, so it shares torch's pool instead of partitioning VRAM against
+            // it (same rationale as the nanoVDB builders -- see fvdb/BuilderResource.h).
+            auto &resource = nanovdb::cuda::default_resource<BuilderResource>();
+            dTempStorage   = resource.allocate_async(
+                tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
+
+            C10_CUDA_CHECK(
+                cub::DeviceSegmentedReduce::Sum(dTempStorage,
+                                                tempStorageBytes,
+                                                mask.value().jdata().const_data_ptr<bool>(),
+                                                maskCounts,
+                                                deviceNumSegments,
+                                                beginOffsets,
+                                                endOffsets,
+                                                stream));
+
+            resource.deallocate_async(
+                dTempStorage, tempStorageBytes, BuilderResource::DEFAULT_ALIGNMENT, stream);
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -348,23 +368,86 @@ dispatchFineIJKForCoarseGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
 
         forEachVoxelPrivateUse1(1, batchHdl, cb);
 
-        return JaggedTensor::from_data_offsets_and_list_ids(
-            outIJK, batchHdl.voxelOffsets() * totalPadAmount, batchHdl.jlidx());
+        return JaggedTensor::from_data_offsets_and_list_ids_unsafe(outIJK,
+                                                                   batchHdl.voxelOffsets() *
+                                                                       totalPadAmount,
+                                                                   batchHdl.jlidx(),
+                                                                   batchHdl.batchSize());
     }
 }
 
-template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchData &coarseBatchHdl,
-                                              const nanovdb::Coord subdivisionFactor,
-                                              const std::optional<JaggedTensor> &subdivMask) {
-    JaggedTensor coords =
-        dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, subdivisionFactor, subdivMask);
-    return ops::_createNanoGridFromIJK(coords);
+// If `factor` is a uniform power of two, returns log2(factor); -1 otherwise (factor 1 -> 0).
+static int
+subdivUniformPowerOfTwoLog2(const nanovdb::Coord &factor) {
+    if (factor[0] != factor[1] || factor[1] != factor[2] || factor[0] < 1) {
+        return -1;
+    }
+    int v = factor[0];
+    if ((v & (v - 1)) != 0) {
+        return -1;
+    }
+    int log2 = 0;
+    while (v > 1) {
+        v >>= 1;
+        log2 += 1;
+    }
+    return log2;
+}
+
+GridStorage
+fineGridStorageFromCoarseCUDA(const GridBatchData &coarseBatchHdl,
+                              const nanovdb::Coord &factor,
+                              const std::optional<JaggedTensor> &mask) {
+    // fvdb subdivision maps coarse voxel c to the fine block c*factor + [0, factor-1]^3; a factor-2
+    // refine pass maps c to 2c + {0,1}^3. So a uniform power-of-two factor is that many batched
+    // leaf-mask refine passes over the whole batch (BatchedTopologyBuilder) -- no coordinate list,
+    // no per-member builds. A per-coarse-voxel mask is applied by pruning the coarse grid to it
+    // first (PruneGrid), then refining. Non-power-of-two / non-uniform factors keep the coord path.
+    const int nPasses = subdivUniformPowerOfTwoLog2(factor);
+    if (nPasses < 0) {
+        JaggedTensor coords =
+            dispatchFineIJKForCoarseGrid<torch::kCUDA>(coarseBatchHdl, factor, mask);
+        return ops::_createNanoGridFromIJK(coords);
+    }
+
+    c10::cuda::CUDAGuard deviceGuard(coarseBatchHdl.device());
+    const cudaStream_t stream = storageStream(coarseBatchHdl.device());
+
+    // The grid to refine is the coarse grid, or -- for masked subdivision -- the coarse grid pruned
+    // to the selected voxels. pruneGrid keeps the coarse transform and canonical order; only its
+    // topology is used here.
+    c10::intrusive_ptr<GridBatchData> prunedCoarse;
+    const GridBatchData *src = &coarseBatchHdl;
+    if (mask.has_value()) {
+        prunedCoarse = ops::pruneGrid(coarseBatchHdl, mask.value());
+        src          = prunedCoarse.get();
+    }
+
+    if (nPasses == 0) {
+        // Subdivision factor 1 is the identity: the fine grid == the (masked) coarse grid `src`.
+        // Compact its selected grids into fresh contiguous storage (byte copy + header fixup) --
+        // correct whether `src` is the freshly pruned coarse grid (masked) or a sliced coarse view.
+        return ops::contiguousGridStorage(*src);
+    }
+
+    // All batch members are refined together, one batched pass per factor of 2: a single output
+    // storage, one stream synchronization per pass, no per-member builds or merging
+    // (issue #755). Empty members become valid empty grids inline.
+    const std::vector<batched::TopologyPassSpec> passes(nPasses,
+                                                        batched::TopologyPassSpec::refine());
+    return batched::batchedTopologyStorage(*src, passes, stream);
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
+dispatchBuildFineGridFromCoarse<torch::kCUDA>(const GridBatchData &coarseBatchHdl,
+                                              const nanovdb::Coord subdivisionFactor,
+                                              const std::optional<JaggedTensor> &subdivMask) {
+    return fineGridStorageFromCoarseCUDA(coarseBatchHdl, subdivisionFactor, subdivMask);
+}
+
+template <>
+GridStorage
 dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
     const GridBatchData &coarseBatchHdl,
     const nanovdb::Coord subdivisionFactor,
@@ -375,7 +458,7 @@ dispatchBuildFineGridFromCoarse<torch::kPrivateUse1>(
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchData &coarseBatchHdl,
                                              const nanovdb::Coord subdivisionFactor,
                                              const std::optional<JaggedTensor> &subdivMask) {
@@ -389,13 +472,12 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchData &coarseBatchHdl
 
     using IndexTree = nanovdb::NanoTree<GridT>;
 
-    const nanovdb::GridHandle<TorchDeviceBuffer> &coarseGridHdl = coarseBatchHdl.nanoGridHandle();
     const torch::TensorAccessor<bool, 1> &subdivMaskAcc = subdivMaskTensor.accessor<bool, 1>();
 
-    std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
-    batchHandles.reserve(coarseGridHdl.gridCount());
-    for (uint32_t bidx = 0; bidx < coarseGridHdl.gridCount(); bidx += 1) {
-        const nanovdb::OnIndexGrid *coarseGrid = coarseGridHdl.template grid<GridT>(bidx);
+    std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
+    batchHandles.reserve(coarseBatchHdl.batchSize());
+    for (int64_t bidx = 0; bidx < coarseBatchHdl.batchSize(); bidx += 1) {
+        const nanovdb::OnIndexGrid *coarseGrid = coarseBatchHdl.hostGridPtrAt(bidx);
         if (!coarseGrid) {
             throw std::runtime_error("Failed to get pointer to nanovdb index grid");
         }
@@ -426,17 +508,13 @@ dispatchBuildFineGridFromCoarse<torch::kCPU>(const GridBatchData &coarseBatchHdl
         }
 
         proxyGridAccessor.merge();
-        auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-            *proxyGrid, 0u, false, false);
-        ret.buffer().to(torch::kCPU);
-        batchHandles.push_back(std::move(ret));
+        batchHandles.push_back(
+            nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                *proxyGrid, 0u, false, false));
     }
 
-    if (batchHandles.size() == 1) {
-        return std::move(batchHandles[0]);
-    } else {
-        return nanovdb::mergeGrids(batchHandles);
-    }
+    return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                : nanovdb::mergeGrids(batchHandles));
 }
 
 c10::intrusive_ptr<GridBatchData>

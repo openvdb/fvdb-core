@@ -1,9 +1,6 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-import itertools
-import os
-import pickle
 import unittest
 
 import numpy as np
@@ -12,6 +9,8 @@ from parameterized import parameterized
 
 import fvdb
 from fvdb import GridBatch
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -125,7 +124,7 @@ class TestBasicOps(unittest.TestCase):
         self.assertTrue(torch.equal(dual_bbox_mins, expected_minmaxs))
         self.assertTrue(torch.equal(dual_bbox_maxs, expected_minmaxs))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_building_zero_voxels_grids_from_ijk(self, device, dtype):
         batch_size = 1
         grid_ijk = fvdb.JaggedTensor([torch.randint(-512, 512, (0, 3)) for i in range(batch_size)]).to(device)
@@ -147,7 +146,7 @@ class TestBasicOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             GridBatch.from_ijk(grid_ijk_bad)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_building_grid_with_one_zero_voxels_element_in_jagged_tensor(self, device, dtype):
         shapes = [512, 0, 128]
         batch_size = len(shapes)
@@ -162,7 +161,7 @@ class TestBasicOps(unittest.TestCase):
             self.assertEqual(grid.joffsets[i + 1].item(), off + shapes[i])
             off += shapes[i]
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_building_zero_voxels_grids_from_points(self, device, dtype):
         batch_size = 1
         grid_ijk = fvdb.JaggedTensor([torch.rand(0, 3) for i in range(batch_size)]).to(device)
@@ -183,7 +182,7 @@ class TestBasicOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             GridBatch.from_points(grid_ijk_bad)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_building_zero_voxels_grids_from_nearest_points(self, device, dtype):
         batch_size = 1
         grid_ijk = fvdb.JaggedTensor([torch.rand(0, 3) for i in range(batch_size)]).to(device)
@@ -204,7 +203,7 @@ class TestBasicOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             GridBatch.from_nearest_voxels_to_points(grid_ijk_bad)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_fvdb_cat(self, device, dtype):
         def _make_random_grid(batch_size):
             sizes = [np.random.randint(100, 200) for _ in range(batch_size)]
@@ -276,7 +275,7 @@ class TestBasicOps(unittest.TestCase):
         )
         self.assertEqual(len(grid_cat2), 25)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_fvdb_cat_zero_voxels_grid(self, device, dtype):
 
         def _make_random_grid(batch_size):

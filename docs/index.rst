@@ -9,7 +9,7 @@ Applications of fVDB include 3D deep learning, computer graphics/vision, robotic
 .. raw:: html
 
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/fvdb_intro_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/fvdb_intro_480p.mp4" type="video/mp4" />
   </video>
 
 |
@@ -28,7 +28,6 @@ Features
 ƒVDB provides the following key features:
 
 -   A sparse volumetric grid data structure optimized for GPU memory efficiency and performance.
--   A highly optimized Gaussian splat data structure for representing radiance fields on the GPU.
 -   A jagged tensor data structure for efficient representation of sparse, non-uniform data on the GPU.
 -   A suite of GPU-accelerated algorithms for volumetric data manipulation, ray tracing, and volume rendering.
 -   A state of the art visualizer capable of streaming massive volumetric datasets to a web browser or Jupyter notebook.
@@ -49,14 +48,14 @@ The videos below show ƒVDB being used for large-scale 3D reconstruction, simula
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
    ƒVDB being used to reconstruct radiance (25 million splats) fields and TSDF volumes (100 million voxels) from images and points</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/spot_airport_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/spot_airport_480p.mp4" type="video/mp4" />
   </video>
 
    <br>
    <p style="text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; font-size: medium; text-decoration-skip-ink: none; margin-bottom: 0.5em;">
    ƒVDB being used to process a sparse SDF on a grid with 181 million voxels. Visualized in a browser.</p>
   <video autoplay loop controls muted width="90%" style="display: block; margin: 0 auto;">
-     <source src="https://fvdb-data.s3.us-east-2.amazonaws.com/fvdb-reality-capture/crawler_480p.mp4" type="video/mp4" />
+     <source src="https://d184pg3x235vug.cloudfront.net/fvdb-reality-capture/crawler_480p.mp4" type="video/mp4" />
   </video>
 
 |
@@ -76,7 +75,7 @@ spatial intelligence research and applications.
 In addition to the core ƒVDB library, we also provide the `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ toolbox,
 which is a collection of tools and utilities for 3D reconstruction and scene understanding using ƒVDB. Analogous to how `torchvision <https://pytorch.org/vision/stable/index.html>`_
 provides datasets, models, and transforms for computer vision tasks, `ƒVDB Reality Capture <https://fvdb-reality-capture.readthedocs.io/>`_ provides datasets, models, and
-algorithms for 3D reconstruction from sensor data.
+algorithms for 3D reconstruction from sensor data, including the high-level Gaussian splatting Python API.
 
 .. toctree::
    :caption: Introduction
@@ -112,10 +111,10 @@ algorithms for 3D reconstruction from sensor data.
    :caption: Documentation
 
    api/jagged_tensor
+   api/operations
    api/convolution_plan
    api/sparse_grids
    api/functional
-   api/gaussian_splatting
    api/viz
    api/enums
    api/nn

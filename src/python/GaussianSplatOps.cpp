@@ -3,15 +3,15 @@
 //
 // Pybind11 bindings for Gaussian splat free-function ops.
 // These expose the fvdb::detail::ops functions as module-level functions on
-// _fvdb_cpp, enabling the Python functional layer.
+// _fvdb_cpp. The public Python surface is fvdb.functional, which wraps each
+// binding one to one; differentiable composition lives downstream.
 //
 // Design note on accumulator mutability:
 // The C++ projection backward kernel mutates three accumulator tensors in-place
 // (gradient norms, max 2D radii, step counts) via atomicAdd. These support
 // Gaussian densification (split/clone/prune decisions during training).
 // The backward binding (projectGaussiansAnalyticBwd) accepts these as
-// optional tensors. The Python GaussianSplat3d class owns the accumulators
-// and passes them through to the C++ backward dispatch.
+// optional tensors owned by the caller.
 
 #include <pybind11/stl.h>
 
@@ -22,6 +22,7 @@
 #include <fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsBackward.h>
 #include <fvdb/detail/ops/gsplat/EvaluateSphericalHarmonicsForward.h>
 #include <fvdb/detail/ops/gsplat/IdentifyContributingGaussians.h>
+#include <fvdb/detail/ops/gsplat/IdentifyTopContributingGaussians.h>
 #include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticBackward.h>
 #include <fvdb/detail/ops/gsplat/ProjectGaussiansAnalyticForward.h>
@@ -84,7 +85,7 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("image_origin_h"),
           py::arg("tile_size"));
 
-    m.def("sparse_rasterize_num_contributing_gaussians",
+    m.def("rasterize_num_contributing_gaussians_sparse",
           &ops::countContributingGaussiansSparse,
           py::arg("means2d"),
           py::arg("conics"),
@@ -117,7 +118,7 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("num_depth_samples"),
           py::arg("num_contributing_gaussians") = py::none());
 
-    m.def("sparse_rasterize_contributing_gaussian_ids",
+    m.def("rasterize_contributing_gaussian_ids_sparse",
           &ops::identifyContributingGaussiansSparse,
           py::arg("means2d"),
           py::arg("conics"),
@@ -136,6 +137,39 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_size"),
           py::arg("num_depth_samples"),
           py::arg("num_contributing_gaussians") = py::none());
+
+    m.def("rasterize_top_contributing_gaussian_ids",
+          &ops::identifyTopContributingGaussians,
+          py::arg("means2d"),
+          py::arg("conics"),
+          py::arg("opacities"),
+          py::arg("tile_offsets"),
+          py::arg("tile_gaussian_ids"),
+          py::arg("image_width"),
+          py::arg("image_height"),
+          py::arg("image_origin_w"),
+          py::arg("image_origin_h"),
+          py::arg("tile_size"),
+          py::arg("num_depth_samples"));
+
+    m.def("rasterize_top_contributing_gaussian_ids_sparse",
+          &ops::identifyTopContributingGaussiansSparse,
+          py::arg("means2d"),
+          py::arg("conics"),
+          py::arg("opacities"),
+          py::arg("tile_offsets"),
+          py::arg("tile_gaussian_ids"),
+          py::arg("pixels_to_render"),
+          py::arg("active_tiles"),
+          py::arg("tile_pixel_mask"),
+          py::arg("tile_pixel_cumsum"),
+          py::arg("pixel_map"),
+          py::arg("image_width"),
+          py::arg("image_height"),
+          py::arg("image_origin_w"),
+          py::arg("image_origin_h"),
+          py::arg("tile_size"),
+          py::arg("num_depth_samples"));
 
     // -----------------------------------------------------------------------
     // MCMC operations
@@ -180,7 +214,7 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("filename"),
           py::arg("device") = torch::kCPU);
 
-    // ------- Raw forward/backward dispatch (for Python autograd) -------
+    // ------- Forward/backward kernel pairs -------
 
     m.def("project_gaussians_analytic_fwd",
           &ops::projectGaussiansAnalyticFwd,
@@ -225,7 +259,10 @@ bind_gaussian_splat_ops(py::module &m) {
           &ops::evaluateSphericalHarmonicsFwd,
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh0_coeffs"),
           py::arg("sh_n_coeffs"),
           py::arg("radii"));
@@ -235,11 +272,15 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("sh_degree_to_use"),
           py::arg("num_cameras"),
           py::arg("num_gaussians"),
-          py::arg("view_dirs"),
+          py::arg("means"),
+          py::arg("world_to_cam_matrices"),
+          py::arg("camera_ids"),
+          py::arg("gaussian_ids"),
           py::arg("sh_n_coeffs"),
           py::arg("d_loss_d_colors"),
           py::arg("radii"),
-          py::arg("compute_d_loss_d_view_dirs"));
+          py::arg("compute_d_loss_d_means"),
+          py::arg("compute_d_loss_d_world_to_cam_matrices"));
 
     m.def("rasterize_screen_space_gaussians_fwd",
           &ops::rasterizeScreenSpaceGaussiansFwd,
@@ -427,9 +468,19 @@ bind_gaussian_splat_ops(py::module &m) {
            const uint32_t tileSize,
            const uint32_t numTilesH,
            const uint32_t numTilesW,
-           const at::optional<torch::Tensor> &cameraIds) {
-            return ops::intersectGaussianTiles(
-                means2d, radii, depths, cameraIds, numCameras, tileSize, numTilesH, numTilesW);
+           const at::optional<torch::Tensor> &cameraIds,
+           const at::optional<torch::Tensor> &conics,
+           const at::optional<torch::Tensor> &opacities) {
+            return ops::intersectGaussianTiles(means2d,
+                                               radii,
+                                               depths,
+                                               cameraIds,
+                                               numCameras,
+                                               tileSize,
+                                               numTilesH,
+                                               numTilesW,
+                                               conics,
+                                               opacities);
         },
         py::arg("means2d"),
         py::arg("radii"),
@@ -438,7 +489,9 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("tile_size"),
         py::arg("num_tiles_h"),
         py::arg("num_tiles_w"),
-        py::arg("camera_ids") = py::none());
+        py::arg("camera_ids") = py::none(),
+        py::arg("conics")     = py::none(),
+        py::arg("opacities")  = py::none());
 
     // ------- Sparse tile intersection (non-differentiable) -------
 
@@ -453,7 +506,9 @@ bind_gaussian_splat_ops(py::module &m) {
            const uint32_t tileSize,
            const uint32_t numTilesH,
            const uint32_t numTilesW,
-           const at::optional<torch::Tensor> &cameraIds) {
+           const at::optional<torch::Tensor> &cameraIds,
+           const at::optional<torch::Tensor> &conics,
+           const at::optional<torch::Tensor> &opacities) {
             return ops::intersectGaussianTilesSparse(means2d,
                                                      radii,
                                                      depths,
@@ -463,7 +518,9 @@ bind_gaussian_splat_ops(py::module &m) {
                                                      numCameras,
                                                      tileSize,
                                                      numTilesH,
-                                                     numTilesW);
+                                                     numTilesW,
+                                                     conics,
+                                                     opacities);
         },
         py::arg("means2d"),
         py::arg("radii"),
@@ -474,7 +531,9 @@ bind_gaussian_splat_ops(py::module &m) {
         py::arg("tile_size"),
         py::arg("num_tiles_h"),
         py::arg("num_tiles_w"),
-        py::arg("camera_ids") = py::none());
+        py::arg("camera_ids") = py::none(),
+        py::arg("conics")     = py::none(),
+        py::arg("opacities")  = py::none());
 
     // ------- Sparse tile layout (non-differentiable) -------
 
@@ -483,12 +542,14 @@ bind_gaussian_splat_ops(py::module &m) {
           py::arg("tile_side_length"),
           py::arg("num_tiles_w"),
           py::arg("num_tiles_h"),
-          py::arg("pixels_to_render"));
+          py::arg("pixels_to_render"),
+          py::arg("image_width")  = py::none(),
+          py::arg("image_height") = py::none());
 
     // ------- UT projection forward (non-differentiable) -------
 
     m.def(
-        "project_gaussians_unscented_fwd",
+        "project_gaussians_ut_fwd",
         [](const torch::Tensor &means,
            const torch::Tensor &quats,
            const torch::Tensor &logScales,

@@ -2,19 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <fvdb/detail/io/SaveNanoVDB.h>
 #include <fvdb/detail/viewer/CameraView.h>
 #include <fvdb/detail/viewer/GaussianSplat3dView.h>
+#include <fvdb/detail/viewer/ParamViews.h>
 #include <fvdb/detail/viewer/Viewer.h>
 
 #include <c10/util/Exception.h>
 
 #include <nanovdb_editor/putil/Raster.h>
+#include <nanovdb_editor/putil/Reflect.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+#include <vector>
 
 inline void
 pNanoLogPrint(pnanovdb_compute_log_level_t level, const char *format, ...) {
@@ -65,6 +73,19 @@ namespace fvdb::detail::viewer {
 
 constexpr float DEFAULT_CAMERA_FOV_RADIANS  = 60.f * M_PI / 180.f;
 constexpr float DEFAULT_CAMERA_ASPECT_RATIO = 4.f / 3.f;
+
+inline pnanovdb_pipeline_type_t
+getPipelineType(pnanovdb_editor_t &editor, const char *typeId) {
+    pnanovdb_pipeline_type_t type      = 0;
+    pnanovdb_editor_token_t *typeToken = editor.get_token(typeId);
+    TORCH_CHECK(
+        typeToken, "nanovdb-editor could not create token for pipeline type '", typeId, "'");
+    TORCH_CHECK(editor.get_pipeline_type(&editor, typeToken, &type),
+                "nanovdb-editor could not resolve pipeline type '",
+                typeId,
+                "'");
+    return type;
+}
 
 void
 Viewer::updateCamera(const std::string &scene_name) {
@@ -122,10 +143,12 @@ Viewer::~Viewer() {
     mSplat3dViews.clear();
     mCameraViews.clear();
 
+    // The editor releases GPU buffers through the device queue during shutdown.
+    pnanovdb_editor_free(&mEditor.editor);
+
     mEditor.compute.device_interface.destroy_device(mEditor.deviceManager, mEditor.device);
     mEditor.compute.device_interface.destroy_device_manager(mEditor.deviceManager);
 
-    pnanovdb_editor_free(&mEditor.editor);
     pnanovdb_compute_free(&mEditor.compute);
     pnanovdb_compiler_free(&mEditor.compiler);
 }
@@ -136,6 +159,11 @@ Viewer::reset() {
 
     mCameraViews.clear();
     mSplat3dViews.clear();
+    mSliderViews.clear();
+    mNumberViews.clear();
+    mTextViews.clear();
+    mCheckboxViews.clear();
+    mSceneCustomParams.clear();
 }
 
 void
@@ -165,6 +193,24 @@ Viewer::removeScene(const std::string &scene_name) {
             ++it;
         }
     }
+
+    // Erase all custom-scene-params widget views and specs belonging to the
+    // removed scene. Widget views identify their owning scene by name (not
+    // by token) since their state lives in mSceneCustomParams[scene_name].
+    auto eraseByScene = [&scene_name](auto &views) {
+        for (auto it = views.begin(); it != views.end();) {
+            if (it->second.getSceneName() == scene_name) {
+                it = views.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+    eraseByScene(mSliderViews);
+    eraseByScene(mNumberViews);
+    eraseByScene(mTextViews);
+    eraseByScene(mCheckboxViews);
+    mSceneCustomParams.erase(scene_name);
 }
 
 void
@@ -175,6 +221,40 @@ Viewer::removeView(const std::string &scene_name, const std::string &name) {
 
     mCameraViews.erase(name);
     mSplat3dViews.erase(name);
+
+    // Removing a widget view also removes its spec from the schema and
+    // resubmits the JSON so the editor's `Scene Params` window updates.
+    bool removedWidget = false;
+    if (mSliderViews.erase(name) > 0) {
+        removedWidget = true;
+    }
+    if (mNumberViews.erase(name) > 0) {
+        removedWidget = true;
+    }
+    if (mTextViews.erase(name) > 0) {
+        removedWidget = true;
+    }
+    if (mCheckboxViews.erase(name) > 0) {
+        removedWidget = true;
+    }
+    if (removedWidget) {
+        auto it = mSceneCustomParams.find(scene_name);
+        if (it != mSceneCustomParams.end()) {
+            auto &specs               = it->second;
+            const std::string counter = name + std::string(kSubmitCounterSuffix);
+            specs.erase(std::remove_if(specs.begin(),
+                                       specs.end(),
+                                       [&name, &counter](const CustomParamSpec &s) {
+                                           return s.name == name || s.name == counter;
+                                       }),
+                        specs.end());
+            if (specs.empty()) {
+                mSceneCustomParams.erase(it);
+            } else {
+                submitSchemaForScene(scene_name);
+            }
+        }
+    }
 }
 
 fvdb::detail::viewer::GaussianSplat3dView &
@@ -269,6 +349,11 @@ Viewer::stopServer() {
         mEditor.editor.stop(&mEditor.editor);
         mIsEditorRunning = false;
     }
+}
+
+void
+Viewer::stop() {
+    stopServer();
 }
 
 void
@@ -555,6 +640,746 @@ Viewer::addImage(const std::string &scene_name,
     }
 
     mEditor.compute.destroy_array(image_nanovdb);
+}
+
+void
+Viewer::addLevelSetView(const std::string &scene_name,
+                        const std::string &name,
+                        const GridBatchData &grid,
+                        const JaggedTensor &sdf) {
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       sdf,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_surface"));
+}
+
+void
+Viewer::addFogVolumeView(const std::string &scene_name,
+                         const std::string &name,
+                         const GridBatchData &grid,
+                         const JaggedTensor &density) {
+    addNanoVDBGridView(scene_name,
+                       name,
+                       grid,
+                       density,
+                       getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_nanovdb_render"));
+}
+
+void
+Viewer::addNanoVDBGridView(const std::string &scene_name,
+                           const std::string &name,
+                           const GridBatchData &grid,
+                           const JaggedTensor &floatValues,
+                           pnanovdb_pipeline_type_t render_pipeline,
+                           const std::string &render_shader) {
+    // The nanovdb-editor renders exactly one grid per view (its shader decodes a single
+    // grid anchored at byte offset 0 of the uploaded buffer). Callers must expand a
+    // multi-grid GridBatch into one view per grid; see fvdb.viz._nanovdb_grid_view.
+    TORCH_CHECK(grid.batchSize() == 1,
+                "addNanoVDBGridView expects a single grid (batchSize == 1), got a batch of ",
+                grid.batchSize(),
+                ". The viewer renders one grid per view; add one view per grid.");
+
+    auto handle = detail::io::toNVDBWithBlindFloat(grid, floatValues);
+
+    // Match the editor's own NanoVDB upload convention (compute.load_nanovdb): a NanoVDB
+    // buffer is a uint32 array, so element_size = 4. This becomes the GPU buffer's
+    // structure_stride at upload time. NanoVDB grids are 32-byte aligned, so the buffer
+    // size is always a multiple of 4.
+    const uint64_t bufferBytes = handle.buffer().size();
+    TORCH_CHECK(bufferBytes % sizeof(uint32_t) == 0,
+                "Internal error: NanoVDB buffer size ",
+                bufferBytes,
+                " is not 4-byte aligned");
+    pnanovdb_compute_array_t *array = mEditor.compute.create_array(
+        sizeof(uint32_t), bufferBytes / sizeof(uint32_t), handle.buffer().data());
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *nameToken  = mEditor.editor.get_token(name.c_str());
+
+    mEditor.editor.add_nanovdb_3(&mEditor.editor,
+                                 sceneToken,
+                                 nameToken,
+                                 array,
+                                 getPipelineType(mEditor.editor, "pnanovdb_pipeline_type_noop"),
+                                 render_pipeline);
+
+    if (!render_shader.empty()) {
+        pnanovdb_editor_shader_name_t *mapped =
+            (pnanovdb_editor_shader_name_t *)mEditor.editor.map_params(
+                &mEditor.editor,
+                sceneToken,
+                nameToken,
+                PNANOVDB_REFLECT_DATA_TYPE(pnanovdb_editor_shader_name_t));
+        if (mapped) {
+            mapped->shader_name = mEditor.editor.get_token(render_shader.c_str());
+            mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nameToken);
+        }
+    }
+
+    mEditor.compute.destroy_array(array);
+
+    mNanoVDBViews[name] = NanoVDBView{name};
+}
+
+namespace {
+
+void
+appendJsonString(std::ostringstream &os, const std::string &s) {
+    os << '"';
+    for (char c: s) {
+        switch (c) {
+        case '"': os << "\\\""; break;
+        case '\\': os << "\\\\"; break;
+        case '\b': os << "\\b"; break;
+        case '\f': os << "\\f"; break;
+        case '\n': os << "\\n"; break;
+        case '\r': os << "\\r"; break;
+        case '\t': os << "\\t"; break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                char buf[8] = {};
+                std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c) & 0xff);
+                os << buf;
+            } else {
+                os << c;
+            }
+        }
+    }
+    os << '"';
+}
+
+void
+appendJsonFloat(std::ostringstream &os, float v) {
+    if (!std::isfinite(v)) {
+        // clamp to 0 to avoid a parse error
+        os << "0.0";
+        return;
+    }
+    char buf[64] = {};
+    std::snprintf(buf, sizeof(buf), "%.9g", static_cast<double>(v));
+    os << buf;
+    // Make sure the output is valid JSON if `%g` printed an integer-looking
+    // number for a float (e.g. "1" instead of "1.0").
+    bool hasDot = false;
+    for (char c: std::string(buf)) {
+        if (c == '.' || c == 'e' || c == 'E') {
+            hasDot = true;
+            break;
+        }
+    }
+    if (!hasDot) {
+        os << ".0";
+    }
+}
+
+} // namespace
+
+std::string
+Viewer::buildSchemaJson(const std::vector<CustomParamSpec> &specs) {
+    std::ostringstream os;
+    os << "{\"SceneParams\":{";
+    bool first = true;
+    for (const auto &spec: specs) {
+        if (!first) {
+            os << ',';
+        }
+        first = false;
+        appendJsonString(os, spec.name);
+        os << ":{";
+
+        switch (spec.kind) {
+        case CustomParamKind::Slider:
+        case CustomParamKind::Number: {
+            os << "\"type\":\"float\",\"value\":";
+            appendJsonFloat(os, spec.defaultFloat);
+            if (spec.hasMin) {
+                os << ",\"min\":";
+                appendJsonFloat(os, spec.minValue);
+            }
+            if (spec.hasMax) {
+                os << ",\"max\":";
+                appendJsonFloat(os, spec.maxValue);
+            }
+            if (spec.hasStep) {
+                os << ",\"step\":";
+                appendJsonFloat(os, spec.stepValue);
+            }
+            if (spec.kind == CustomParamKind::Slider) {
+                os << ",\"useSlider\":true";
+            }
+            break;
+        }
+        case CustomParamKind::Text: {
+            os << "\"type\":\"string\",\"length\":" << spec.lengthChars << ",\"value\":";
+            appendJsonString(os, spec.defaultText);
+            if (spec.commitOnEnter) {
+                os << ",\"commitOnEnter\":true";
+                if (!spec.submitCounterField.empty()) {
+                    os << ",\"submitCounterField\":";
+                    appendJsonString(os, spec.submitCounterField);
+                }
+            }
+            break;
+        }
+        case CustomParamKind::Checkbox: {
+            os << "\"type\":\"bool\",\"isBool\":true,\"value\":"
+               << (spec.defaultBool ? "true" : "false");
+            break;
+        }
+        case CustomParamKind::SubmitCounter: {
+            // Hidden uint32, lives alongside a Text field that has commit_on_enter set.
+            os << "\"type\":\"uint32\",\"value\":0,\"hidden\":true";
+            break;
+        }
+        }
+        os << '}';
+    }
+    os << "}}";
+    return os.str();
+}
+
+bool
+Viewer::findFieldInfo(const std::string &scene_name,
+                      const std::string &field_name,
+                      FieldInfo &out) {
+    if (!mEditor.editor.get_custom_scene_params_data_type) {
+        return false;
+    }
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    const pnanovdb_reflect_data_type_t *dataType =
+        mEditor.editor.get_custom_scene_params_data_type(&mEditor.editor, sceneToken);
+    if (!dataType) {
+        return false;
+    }
+
+    for (pnanovdb_uint64_t i = 0; i < dataType->child_reflect_data_count; ++i) {
+        const pnanovdb_reflect_data_t *child = dataType->child_reflect_datas + i;
+        const std::string childName          = child->name ? child->name : "";
+        if (childName != field_name) {
+            continue;
+        }
+        out.name                                      = childName;
+        out.offset                                    = static_cast<uint64_t>(child->data_offset);
+        const pnanovdb_reflect_data_type_t *childType = child->data_type;
+        if (!childType) {
+            return false;
+        }
+        const char *typeStr = pnanovdb_reflect_type_to_string(childType->data_type);
+        out.type            = typeStr ? typeStr : "unknown";
+        out.size            = static_cast<uint64_t>(childType->element_size);
+        uint64_t scalarSize = 0;
+        switch (childType->data_type) {
+        case PNANOVDB_REFLECT_TYPE_INT32: scalarSize = 4; break;
+        case PNANOVDB_REFLECT_TYPE_UINT32: scalarSize = 4; break;
+        case PNANOVDB_REFLECT_TYPE_FLOAT: scalarSize = 4; break;
+        case PNANOVDB_REFLECT_TYPE_BOOL32: scalarSize = 4; break;
+        case PNANOVDB_REFLECT_TYPE_UINT8: scalarSize = 1; break;
+        case PNANOVDB_REFLECT_TYPE_UINT16: scalarSize = 2; break;
+        case PNANOVDB_REFLECT_TYPE_UINT64: scalarSize = 8; break;
+        case PNANOVDB_REFLECT_TYPE_CHAR: scalarSize = 1; break;
+        case PNANOVDB_REFLECT_TYPE_DOUBLE: scalarSize = 8; break;
+        case PNANOVDB_REFLECT_TYPE_INT64: scalarSize = 8; break;
+        default: scalarSize = 0; break;
+        }
+        out.element_size = scalarSize > 0 ? scalarSize : out.size;
+        return true;
+    }
+    return false;
+}
+
+bool
+Viewer::readFieldBytes(const std::string &scene_name, const FieldInfo &field, void *dest) {
+    if (!mEditor.editor.get_custom_scene_params_data_type || !mEditor.editor.map_params ||
+        !mEditor.editor.unmap_params) {
+        return false;
+    }
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    const pnanovdb_reflect_data_type_t *dataType =
+        mEditor.editor.get_custom_scene_params_data_type(&mEditor.editor, sceneToken);
+    if (!dataType || dataType->element_size == 0) {
+        return false;
+    }
+    void *mapped = mEditor.editor.map_params(&mEditor.editor, sceneToken, nullptr, dataType);
+    if (!mapped) {
+        return false;
+    }
+    std::memcpy(dest, static_cast<const uint8_t *>(mapped) + field.offset, field.size);
+    mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nullptr);
+    return true;
+}
+
+bool
+Viewer::writeFieldBytes(const std::string &scene_name, const FieldInfo &field, const void *src) {
+    if (!mEditor.editor.get_custom_scene_params_data_type || !mEditor.editor.map_params ||
+        !mEditor.editor.unmap_params) {
+        return false;
+    }
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    const pnanovdb_reflect_data_type_t *dataType =
+        mEditor.editor.get_custom_scene_params_data_type(&mEditor.editor, sceneToken);
+    if (!dataType || dataType->element_size == 0) {
+        return false;
+    }
+    void *mapped = mEditor.editor.map_params(&mEditor.editor, sceneToken, nullptr, dataType);
+    if (!mapped) {
+        return false;
+    }
+    std::memcpy(static_cast<uint8_t *>(mapped) + field.offset, src, field.size);
+    mEditor.editor.unmap_params(&mEditor.editor, sceneToken, nullptr);
+    return true;
+}
+
+const Viewer::CustomParamSpec *
+Viewer::findSpec(const std::string &scene_name, const std::string &field_name) const {
+    auto it = mSceneCustomParams.find(scene_name);
+    if (it == mSceneCustomParams.end()) {
+        return nullptr;
+    }
+    for (const auto &spec: it->second) {
+        if (spec.name == field_name) {
+            return &spec;
+        }
+    }
+    return nullptr;
+}
+
+Viewer::CustomParamSpec &
+Viewer::replaceOrAppendSpec(const std::string &scene_name, const CustomParamSpec &spec) {
+    auto &specs = mSceneCustomParams[scene_name];
+    for (auto &existing: specs) {
+        if (existing.name == spec.name) {
+            existing = spec;
+            return existing;
+        }
+    }
+    specs.push_back(spec);
+    return specs.back();
+}
+
+void
+Viewer::submitSchemaForScene(const std::string &scene_name) {
+    auto it = mSceneCustomParams.find(scene_name);
+    if (it == mSceneCustomParams.end() || it->second.empty()) {
+        return;
+    }
+    const auto &specs = it->second;
+
+    if (!mEditor.editor.set_custom_scene_params) {
+        throw std::runtime_error(
+            "set_custom_scene_params is not available in the loaded nanovdb_editor binary");
+    }
+
+    // Snapshot any currently-loaded values so they survive the schema reload.
+    struct SnapshotEntry {
+        std::vector<uint8_t> bytes;
+        FieldInfo info;
+    };
+    std::unordered_map<std::string, SnapshotEntry> snapshot;
+    for (const auto &spec: specs) {
+        FieldInfo info{};
+        if (!findFieldInfo(scene_name, spec.name, info)) {
+            continue;
+        }
+        SnapshotEntry entry;
+        entry.bytes.resize(info.size);
+        entry.info = info;
+        if (readFieldBytes(scene_name, info, entry.bytes.data())) {
+            snapshot.emplace(spec.name, std::move(entry));
+        }
+    }
+
+    const std::string json = buildSchemaJson(specs);
+
+    pnanovdb_editor_token_t *sceneToken = mEditor.editor.get_token(scene_name.c_str());
+    pnanovdb_editor_token_t *jsonToken  = mEditor.editor.get_token(json.c_str());
+
+    char errorBuf[512] = {};
+    pnanovdb_bool_t ok = mEditor.editor.set_custom_scene_params(
+        &mEditor.editor, sceneToken, jsonToken, errorBuf, sizeof(errorBuf));
+    if (!ok) {
+        errorBuf[sizeof(errorBuf) - 1] = '\0';
+        const std::string msg =
+            errorBuf[0] ? std::string(errorBuf) : "set_custom_scene_params failed";
+        throw std::runtime_error("Failed to load custom scene params for scene '" + scene_name +
+                                 "': " + msg);
+    }
+
+    // Restore previously-snapshotted values.
+    for (const auto &kv: snapshot) {
+        FieldInfo info{};
+        if (!findFieldInfo(scene_name, kv.first, info)) {
+            continue;
+        }
+        if (info.type != kv.second.info.type || info.size != kv.second.info.size) {
+            continue;
+        }
+        writeFieldBytes(scene_name, info, kv.second.bytes.data());
+    }
+}
+
+std::vector<std::string>
+Viewer::sceneWidgetNames(const std::string &scene_name) const {
+    std::vector<std::string> names;
+    auto it = mSceneCustomParams.find(scene_name);
+    if (it == mSceneCustomParams.end()) {
+        return names;
+    }
+    names.reserve(it->second.size());
+    for (const auto &spec: it->second) {
+        // Skip internal hidden bookkeeping fields (e.g. submit counters attached to text widgets).
+        if (spec.kind == CustomParamKind::SubmitCounter) {
+            continue;
+        }
+        names.push_back(spec.name);
+    }
+    return names;
+}
+
+float
+Viewer::readFloatField(const std::string &scene_name, const std::string &field_name) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "float") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'float'");
+    }
+    float value = 0.f;
+    if (!readFieldBytes(scene_name, info, &value)) {
+        throw std::runtime_error("Failed to read custom scene params field '" + field_name + "'");
+    }
+    return value;
+}
+
+void
+Viewer::writeFloatField(const std::string &scene_name, const std::string &field_name, float value) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "float") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'float'");
+    }
+    if (!writeFieldBytes(scene_name, info, &value)) {
+        throw std::runtime_error("Failed to write custom scene params field '" + field_name + "'");
+    }
+}
+
+std::string
+Viewer::readStringField(const std::string &scene_name, const std::string &field_name) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "char") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'char'");
+    }
+    std::vector<char> buf(static_cast<size_t>(info.size));
+    if (!readFieldBytes(scene_name, info, buf.data())) {
+        throw std::runtime_error("Failed to read custom scene params field '" + field_name + "'");
+    }
+    // Decode as a NUL-terminated string.
+    size_t len = 0;
+    while (len < buf.size() && buf[len] != '\0') {
+        ++len;
+    }
+    return std::string(buf.data(), len);
+}
+
+void
+Viewer::writeStringField(const std::string &scene_name,
+                         const std::string &field_name,
+                         const std::string &value) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "char") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'char'");
+    }
+    const size_t capacity = static_cast<size_t>(info.size);
+    if (capacity == 0) {
+        throw std::runtime_error("Custom scene params field '" + field_name +
+                                 "' has zero capacity");
+    }
+    if (value.size() > capacity - 1) {
+        throw std::runtime_error("Value for custom scene params field '" + field_name +
+                                 "' is too long: " + std::to_string(value.size()) + " bytes, max " +
+                                 std::to_string(capacity - 1) + " (excluding NUL terminator)");
+    }
+    std::vector<char> buf(capacity, '\0');
+    std::memcpy(buf.data(), value.data(), value.size());
+    if (!writeFieldBytes(scene_name, info, buf.data())) {
+        throw std::runtime_error("Failed to write custom scene params field '" + field_name + "'");
+    }
+}
+
+uint32_t
+Viewer::readUInt32Field(const std::string &scene_name, const std::string &field_name) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "uint32") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'uint32'");
+    }
+    uint32_t raw = 0;
+    if (!readFieldBytes(scene_name, info, &raw)) {
+        throw std::runtime_error("Failed to read custom scene params field '" + field_name + "'");
+    }
+    return raw;
+}
+
+bool
+Viewer::readBoolField(const std::string &scene_name, const std::string &field_name) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "bool32") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'bool32'");
+    }
+    uint32_t raw = 0;
+    if (!readFieldBytes(scene_name, info, &raw)) {
+        throw std::runtime_error("Failed to read custom scene params field '" + field_name + "'");
+    }
+    return raw != 0u;
+}
+
+void
+Viewer::writeBoolField(const std::string &scene_name, const std::string &field_name, bool value) {
+    FieldInfo info{};
+    if (!findFieldInfo(scene_name, field_name, info)) {
+        throw std::runtime_error("No custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "'");
+    }
+    if (info.type != "bool32") {
+        throw std::runtime_error("Custom scene params field '" + field_name + "' on scene '" +
+                                 scene_name + "' has type '" + info.type + "', expected 'bool32'");
+    }
+    uint32_t raw = value ? 1u : 0u;
+    if (!writeFieldBytes(scene_name, info, &raw)) {
+        throw std::runtime_error("Failed to write custom scene params field '" + field_name + "'");
+    }
+}
+
+SliderView
+Viewer::addSlider(const std::string &scene_name,
+                  const std::string &name,
+                  float min,
+                  float max,
+                  float initial,
+                  float step) {
+    if (!(min < max)) {
+        throw std::invalid_argument("Slider min must be less than max");
+    }
+    if (!(step > 0.f)) {
+        throw std::invalid_argument("Slider step must be positive");
+    }
+
+    CustomParamSpec spec;
+    spec.name         = name;
+    spec.kind         = CustomParamKind::Slider;
+    spec.hasMin       = true;
+    spec.hasMax       = true;
+    spec.hasStep      = true;
+    spec.minValue     = min;
+    spec.maxValue     = max;
+    spec.stepValue    = step;
+    spec.defaultFloat = initial;
+    replaceOrAppendSpec(scene_name, spec);
+
+    submitSchemaForScene(scene_name);
+
+    // Replace any existing view to refresh metadata.
+    mSliderViews.erase(name);
+    auto [it, inserted] = mSliderViews.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(name),
+        std::forward_as_tuple(scene_name, name, this, min, max, step, initial));
+    return it->second;
+}
+
+NumberView
+Viewer::addNumber(const std::string &scene_name,
+                  const std::string &name,
+                  float initial,
+                  bool hasMin,
+                  float min,
+                  bool hasMax,
+                  float max,
+                  float step) {
+    if (hasMin && hasMax && !(min < max)) {
+        throw std::invalid_argument("Number min must be less than max");
+    }
+    if (!(step > 0.f)) {
+        throw std::invalid_argument("Number step must be positive");
+    }
+
+    CustomParamSpec spec;
+    spec.name         = name;
+    spec.kind         = CustomParamKind::Number;
+    spec.hasMin       = hasMin;
+    spec.hasMax       = hasMax;
+    spec.hasStep      = true;
+    spec.minValue     = min;
+    spec.maxValue     = max;
+    spec.stepValue    = step;
+    spec.defaultFloat = initial;
+    replaceOrAppendSpec(scene_name, spec);
+
+    submitSchemaForScene(scene_name);
+
+    mNumberViews.erase(name);
+    auto [it, inserted] = mNumberViews.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(name),
+        std::forward_as_tuple(scene_name, name, this, hasMin, min, hasMax, max, step, initial));
+    return it->second;
+}
+
+TextView
+Viewer::addText(const std::string &scene_name,
+                const std::string &name,
+                const std::string &initial,
+                int32_t maxLength,
+                bool commitOnEnter) {
+    if (maxLength <= 1) {
+        throw std::invalid_argument("Text max_length must be at least 2 (one byte plus NUL)");
+    }
+    if (initial.size() > static_cast<size_t>(maxLength - 1)) {
+        throw std::invalid_argument(
+            "Text initial value is longer than max_length - 1 (NUL-terminated capacity)");
+    }
+
+    const std::string counterFieldName =
+        commitOnEnter ? (name + std::string(kSubmitCounterSuffix)) : std::string();
+
+    CustomParamSpec spec;
+    spec.name               = name;
+    spec.kind               = CustomParamKind::Text;
+    spec.lengthChars        = maxLength;
+    spec.defaultText        = initial;
+    spec.commitOnEnter      = commitOnEnter;
+    spec.submitCounterField = counterFieldName;
+    replaceOrAppendSpec(scene_name, spec);
+
+    if (commitOnEnter) {
+        CustomParamSpec counter;
+        counter.name = counterFieldName;
+        counter.kind = CustomParamKind::SubmitCounter;
+        replaceOrAppendSpec(scene_name, counter);
+    } else {
+        // If the user previously created this text widget with
+        // commit_on_enter=true and is now turning it off, drop any leftover
+        // counter spec for this widget.
+        auto it = mSceneCustomParams.find(scene_name);
+        if (it != mSceneCustomParams.end()) {
+            auto &specs                 = it->second;
+            const std::string staleName = name + std::string(kSubmitCounterSuffix);
+            specs.erase(std::remove_if(specs.begin(),
+                                       specs.end(),
+                                       [&staleName](const CustomParamSpec &s) {
+                                           return s.kind == CustomParamKind::SubmitCounter &&
+                                                  s.name == staleName;
+                                       }),
+                        specs.end());
+        }
+    }
+
+    submitSchemaForScene(scene_name);
+
+    mTextViews.erase(name);
+    auto [it, inserted] = mTextViews.emplace(
+        std::piecewise_construct,
+        std::forward_as_tuple(name),
+        std::forward_as_tuple(scene_name, name, this, maxLength, initial, commitOnEnter));
+    return it->second;
+}
+
+CheckboxView
+Viewer::addCheckbox(const std::string &scene_name, const std::string &name, bool initial) {
+    CustomParamSpec spec;
+    spec.name        = name;
+    spec.kind        = CustomParamKind::Checkbox;
+    spec.defaultBool = initial;
+    replaceOrAppendSpec(scene_name, spec);
+
+    submitSchemaForScene(scene_name);
+
+    mCheckboxViews.erase(name);
+    auto [it, inserted] =
+        mCheckboxViews.emplace(std::piecewise_construct,
+                               std::forward_as_tuple(name),
+                               std::forward_as_tuple(scene_name, name, this, initial));
+    return it->second;
+}
+
+// ---------------------------------------------------------------------------
+// SliderView / NumberView / TextView / CheckboxView implementations
+// ---------------------------------------------------------------------------
+
+float
+SliderView::getValue() const {
+    return mViewer->readFloatField(mSceneName, mName);
+}
+
+void
+SliderView::setValue(float value) {
+    mViewer->writeFloatField(mSceneName, mName, value);
+}
+
+float
+NumberView::getValue() const {
+    return mViewer->readFloatField(mSceneName, mName);
+}
+
+void
+NumberView::setValue(float value) {
+    mViewer->writeFloatField(mSceneName, mName, value);
+}
+
+std::string
+TextView::getValue() const {
+    return mViewer->readStringField(mSceneName, mName);
+}
+
+void
+TextView::setValue(const std::string &value) {
+    mViewer->writeStringField(mSceneName, mName, value);
+}
+
+uint32_t
+TextView::getSubmitCounter() const {
+    if (!mCommitOnEnter) {
+        return 0u;
+    }
+    const std::string counterField = mName + std::string(kSubmitCounterSuffix);
+    return mViewer->readUInt32Field(mSceneName, counterField);
+}
+
+bool
+CheckboxView::getValue() const {
+    return mViewer->readBoolField(mSceneName, mName);
+}
+
+void
+CheckboxView::setValue(bool value) {
+    mViewer->writeBoolField(mSceneName, mName, value);
 }
 
 } // namespace fvdb::detail::viewer

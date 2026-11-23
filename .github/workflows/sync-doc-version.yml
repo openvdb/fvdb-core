@@ -4,8 +4,8 @@
 name: Sync Doc Version
 
 on:
-  schedule:
-    - cron: "0 8 * * *"
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -17,7 +17,12 @@ jobs:
     if: github.repository == 'openvdb/fvdb-core'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # `release: published` checks out the tag (detached HEAD); pin to the
+          # default branch so the doc-version PR is always based on main.
+          ref: main
+          persist-credentials: false
 
       - name: Get latest release version
         id: release
@@ -32,7 +37,18 @@ jobs:
           fi
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Latest release: $TAG (version $VERSION)"
+
+      - name: Extract versions.json from the release tag
+        if: steps.release.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          # Read the released torch/cuda/python versions from the tag itself
+          # (not from main, which may already target the next release).
+          git fetch --depth 1 origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          git show "${TAG}:.github/versions.json" > "${RUNNER_TEMP}/release-versions.json"
 
       - name: Get current doc version
         if: steps.release.outputs.skip != 'true'
@@ -48,23 +64,34 @@ jobs:
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
         run: |
-          echo "Updating doc version from ${{ steps.current.outputs.version }} to ${{ steps.release.outputs.version }}"
-          ./devtools/update-doc-versions.sh "${{ steps.release.outputs.version }}"
+          echo "Updating doc version from ${STEPS_CURRENT_OUTPUTS_VERSION} to ${STEPS_RELEASE_OUTPUTS_VERSION}"
+          ./devtools/update-doc-versions.sh "${STEPS_RELEASE_OUTPUTS_VERSION}" \
+            --versions-json "${RUNNER_TEMP}/release-versions.json"
+        env:
+          STEPS_CURRENT_OUTPUTS_VERSION: ${{ steps.current.outputs.version }}
+          STEPS_RELEASE_OUTPUTS_VERSION: ${{ steps.release.outputs.version }}
 
       - name: Create pull request
         if: >-
           steps.release.outputs.skip != 'true' &&
           steps.release.outputs.version != steps.current.outputs.version
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
         with:
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
           commit-message: "Update doc stable version to ${{ steps.release.outputs.version }}"
           signoff: true
           branch: auto/sync-doc-version
           title: "Update doc stable version to ${{ steps.release.outputs.version }}"
           body: |
-            Automated PR to update `fvdb_core_stable_version` in `docs/conf.py`
-            to match the latest GitHub Release (`v${{ steps.release.outputs.version }}`).
+            Automated PR to update the stable release metadata in `docs/conf.py`
+            (`fvdb_core_stable_version` plus the released PyTorch/CUDA/Python
+            versions) to match the latest GitHub Release
+            (`v${{ steps.release.outputs.version }}`), and to remove the
+            pre-release marker for this minor version from
+            `docs/installation.rst` if present.
+
+            If the set of supported CUDA versions changed in this release,
+            check that `docs/installation.rst` has a wheel-install example for
+            each entry in `fvdb_core_stable_cuda_versions`.
 
             When merged, a docs rebuild will be triggered automatically.
           labels: automation

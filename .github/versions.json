@@ -1,21 +1,29 @@
 {
   "cuda": {
     "versions": {
-      "12.8": { "patch": "12.8.1" },
-      "13.0": { "patch": "13.0.2" }
+      "13.0": { "patch": "13.0.2" },
+      "13.2": { "patch": "13.2.1" }
     },
     "default": "13.0",
-    "conda_override": "13.0",
-    "arch_list_pr": "8.9+PTX",
+    "conda_override": "13.4",
+    "arch_list_pr": "8.6+PTX",
     "arch_list_publish": "7.5;8.0;8.6;9.0;10.0;12.0+PTX"
   },
   "python": {
-    "matrix": ["3.10", "3.11", "3.12", "3.13", "3.14"],
+    "matrix": ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
     "default": "3.12"
   },
   "torch": {
-    "version": "2.11",
-    "full_version": "2.11.0"
+    "version": "2.14",
+    "full_version": "2.14.1"
+  },
+  "weekly_compat": {
+    "comment": "Hand-maintained pins exercised by the weekly-compat workflow per the compatibility policy in docs/installation.rst: cuda must equal the lowest key in cuda.versions (enforced by load-versions.yml), and torch is the oldest PyTorch release that publishes wheels for that CUDA version (check download.pytorch.org/whl/<cuda-tag> when bumping cuda.versions).",
+    "torch": {
+      "version": "2.9",
+      "full_version": "2.9.1"
+    },
+    "cuda": "13.0"
   },
   "gcc": {
     "toolset": "14",
@@ -23,8 +31,8 @@
   },
   "cmake_version": "4.0.3",
   "uv": {
-    "version": "0.7.5",
-    "action_sha": "d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86"
+    "version": "0.13.0",
+    "action_sha": "68559e99cc807c1eb7e9238fd43a15bba460eec2"
   },
   "docker_os": {
     "rocky": "rockylinux8",
@@ -32,20 +40,25 @@
   },
   "aws": {
     "role": "arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-role",
+    "runner_role": "arn:aws:iam::420032683002:role/openvdb-fvdb-github-actions-ec2-runners",
     "region": "us-east-2",
     "cpu_ami": "ami-0e14a711dad782a70",
     "gpu_ami": "ami-0f5c0b65fde08ae43",
-    "subnet": "subnet-03f2320d6e6e0005b",
+    "subnets": [
+      { "az": "us-east-2a", "id": "subnet-0b75bb13b6048a2f1" },
+      { "az": "us-east-2b", "id": "subnet-03f2320d6e6e0005b" },
+      { "az": "us-east-2c", "id": "subnet-0c551606873c36095" }
+    ],
     "security_group": "sg-0cd08bd89d6212223",
     "cloudfront_distribution_domain": "d36m13axqqhiit.cloudfront.net"
   },
   "publish_matrix": {
-    "python-version": ["3.10", "3.11", "3.12", "3.13", "3.14"],
-    "torch-version": ["2.11"],
-    "cuda-version": ["12.8", "13.0"],
+    "python-version": ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"],
+    "torch-version": ["2.14"],
+    "cuda-version": ["13.0", "13.2"],
     "include": [
-      { "cuda-version": "12.8", "cuda-image-tag": "12.8.1" },
-      { "cuda-version": "13.0", "cuda-image-tag": "13.0.2" }
+      { "cuda-version": "13.0", "cuda-image-tag": "13.0.2" },
+      { "cuda-version": "13.2", "cuda-image-tag": "13.2.1" }
     ]
   },
   "auditwheel_excludes": [

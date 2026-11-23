@@ -233,9 +233,8 @@ runBenchmark(const BenchConfig &cfg, torch::Device device) {
         ops::gatherScatterDefaultSparseConv(features, fvdb_weights, topo);
     float gs_no_topo_ms = timer.recordStopMs() / kIters;
 
-    std::cout << "    PredGatherIGemm: " << igemm_ms << " ms"
-              << "  |  GS+topo: " << gs_with_topo_ms << " ms"
-              << "  |  GS only: " << gs_no_topo_ms << " ms" << std::endl;
+    std::cout << "    PredGatherIGemm: " << igemm_ms << " ms" << "  |  GS+topo: " << gs_with_topo_ms
+              << " ms" << "  |  GS only: " << gs_no_topo_ms << " ms" << std::endl;
 
     // -- Correctness sanity check --
     auto igemm_output =
@@ -254,6 +253,21 @@ runBenchmark(const BenchConfig &cfg, torch::Device device) {
 // =============================================================================
 // Tests
 // =============================================================================
+
+TEST(PredGatherIGemmGeometry, PinsAdmittedCanonicalSubset) {
+    for (int kernelSize: {3, 5, 7}) {
+        for (int stride: {1, 2}) {
+            EXPECT_NO_THROW(ops::checkPredGatherIGemmGeometry(kernelSize, stride));
+        }
+    }
+
+    for (int kernelSize: {-1, 0, 1, 2, 4, 6, 8, 9}) {
+        EXPECT_THROW(ops::checkPredGatherIGemmGeometry(kernelSize, 1), c10::Error);
+    }
+    for (int stride: {-1, 0, 3, 4}) {
+        EXPECT_THROW(ops::checkPredGatherIGemmGeometry(3, stride), c10::Error);
+    }
+}
 
 TEST(PredGatherIGemm, MatchesGatherScatterDefault) {
     if (!deviceSupportsSm80()) {

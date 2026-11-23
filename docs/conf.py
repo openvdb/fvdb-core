@@ -13,6 +13,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.abspath(".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_ext"))
 
 _versions_path = os.path.join(os.path.dirname(__file__), "..", ".github", "versions.json")
 try:
@@ -53,19 +54,37 @@ project = "ƒVDB"
 copyright = "Contributors to the OpenVDB Project"
 author = "Contributors to the OpenVDB Project"
 
-# Stable fvdb-core version shown in installation examples.
-# Updated automatically by devtools/update-doc-versions.sh during release.
-fvdb_core_stable_version = "0.4.2"
+# -- Stable release metadata ---------------------------------------------------
+# The values below describe the most recent fvdb-core release and drive the
+# "Installation from pre-built wheels" examples. They intentionally lag the
+# in-development versions in .github/versions.json (which drive the nightly
+# install examples) while main targets the next release.
+# Updated automatically by devtools/update-doc-versions.sh when a release is
+# published (see .github/workflows/sync-doc-version.yml).
+fvdb_core_stable_version = "0.6.0"
+fvdb_core_stable_torch_version = "2.13.0"
+fvdb_core_stable_cuda_versions = ["13.0", "13.2"]
+fvdb_core_stable_python_range = "3.10 - 3.15"
 
 version = fvdb_core_stable_version
 release = fvdb_core_stable_version
 
+_stable_torch_short = "".join(fvdb_core_stable_torch_version.split(".")[:2])
+
 _subs = []
-for _cv in _cuda_versions:
+# Substitutions for the stable (released) install examples.
+_subs.append(f".. |fvdb_core_stable_version| replace:: {fvdb_core_stable_version}")
+_subs.append(f".. |stable_torch_full_version| replace:: {fvdb_core_stable_torch_version}")
+_subs.append(f".. |stable_python_range| replace:: {fvdb_core_stable_python_range}")
+_subs.append(f".. |stable_cuda_versions| replace:: {', '.join(fvdb_core_stable_cuda_versions)}")
+for _cv in fvdb_core_stable_cuda_versions:
     _tag = f"cu{_cv.replace('.', '')}"
+    _subs.append(f".. |stable_{_tag}_ver| replace:: {_cv}")
     _subs.append(
-        f".. |fvdb_core_version_pt{_torch_short}_{_tag}| replace:: {fvdb_core_stable_version}+pt{_torch_short}.{_tag}"
+        f".. |fvdb_core_stable_version_{_tag}| replace:: {fvdb_core_stable_version}+pt{_stable_torch_short}.{_tag}"
     )
+# Substitutions for the in-development (nightly) install examples, sourced
+# from .github/versions.json on this branch.
 _subs.append(f".. |torch_full_version| replace:: {_torch_full}")
 _subs.append(f".. |torch_short| replace:: {_torch_short}")
 _subs.append(f".. |fvdb_core_nightly_base| replace:: {_fvdb_core_nightly_base}")
@@ -87,6 +106,8 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
+    "sphinx.ext.coverage",
+    "public_api_coverage",
     "myst_parser",
 ]
 
@@ -127,6 +148,18 @@ autodoc_default_options = {"undoc-members": "forward, extra_repr"}
 # Mock the compiled C++ extension so Sphinx can introspect the Python API
 # on build hosts that lack CUDA (e.g. Read the Docs).
 autodoc_mock_imports = ["_fvdb_cpp", "fvdb._fvdb_cpp"]
+
+# Public aliases must be counted even when implemented in private modules.
+# The extension retains Sphinx's python.txt report and also writes coverage.json.
+coverage_public_modules = ["fvdb", "fvdb.functional", "fvdb.nn", "fvdb.viz", "fvdb.utils", "fvdb.utils.metrics"]
+coverage_min_percentage = 100.0
+coverage_show_missing_items = True
+coverage_statistics_to_stdout = True
+coverage_skip_undoc_in_source = False
+coverage_ignore_pyobjects = [
+    r"^fvdb\.config$",  # Native runtime configuration; no Python API reference contract yet.
+    r"^fvdb\.nn\.[^.]+\.extra_repr$",  # PyTorch's representation hook, not an operation.
+]
 
 # -- Options for HTML output -------------------------------------------------
 

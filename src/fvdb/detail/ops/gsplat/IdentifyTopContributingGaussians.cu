@@ -145,8 +145,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
     volumeRenderTileForward(const uint32_t cameraId,
                             const uint32_t row,
                             const uint32_t col,
-                            const uint32_t firstGaussianIdInBlock,
-                            const uint32_t lastGaussianIdInBlock,
+                            const int64_t firstGaussianIdInBlock,
+                            const int64_t lastGaussianIdInBlock,
                             const uint32_t blockSize,
                             const bool pixelIsActive,
                             const uint32_t activePixelIndex) {
@@ -186,7 +186,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
         // this thread to load gaussians into shared memory
         bool done = !pixelIsActive;
 
-        const uint32_t numBatches =
+        const int64_t numBatches =
             (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
 
         // TODO: This condition seems to be met when batch size is >1.  Kept here for debugging.
@@ -204,7 +204,7 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
         // designated pixel
-        for (uint32_t b = 0; b < numBatches; ++b) {
+        for (int64_t b = 0; b < numBatches; ++b) {
             // Sync threads before we start integrating the next batch
             // If all threads are done, we can break early
             if (__syncthreads_count(done) == blockSize) {
@@ -213,8 +213,8 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
             // Each thread fetches one gaussian from front to back (tile_gaussian_ids is depth
             // sorted)
-            const uint32_t batchStart = firstGaussianIdInBlock + blockSize * b;
-            const uint32_t idx        = batchStart + tidx;
+            const int64_t batchStart = firstGaussianIdInBlock + blockSize * b;
+            const int64_t idx        = batchStart + tidx;
             if (idx < lastGaussianIdInBlock) {
                 const int32_t g =
                     commonArgs.mTileGaussianIds[idx]; // which gaussian we're rendering
@@ -226,7 +226,9 @@ template <typename ScalarType, bool IS_PACKED> struct RasterizeTopContributingGa
 
             // Volume render Gaussians in this batch
             if (pixelIsActive) { // skip inactive sparse pixels
-                const uint32_t batchSize = min(blockSize, lastGaussianIdInBlock - batchStart);
+                const int64_t remaining = lastGaussianIdInBlock - batchStart;
+                const uint32_t batchSize =
+                    static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
                 for (uint32_t t = 0; (t < batchSize) && !done; ++t) {
                     const Gaussian2D<ScalarType> gaussian = sharedGaussians[t];
 
@@ -331,8 +333,8 @@ rasterizeTopContributingGaussianIdsForward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
@@ -441,9 +443,11 @@ launchRasterizeTopContributingGaussianIdsForwardKernel(
     auto listIds = torch::empty(
         {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(means2d.device()));
 
-    auto outIds = JaggedTensor::from_data_offsets_and_list_ids(outIdsData, offsets, listIds);
-    auto outWeights =
-        JaggedTensor::from_data_offsets_and_list_ids(outWeightsData, offsets, listIds);
+    const int64_t numTensors = offsets.size(0) - 1;
+    auto outIds              = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIdsData, offsets, listIds, numTensors);
+    auto outWeights = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outWeightsData, offsets, listIds, numTensors);
 
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
@@ -584,9 +588,12 @@ dispatchIdentifyTopContributingGaussians<torch::kCUDA>(
                                numDepthSamples);
             // Get C from tileOffsets for dense mode
             const auto C = tileOffsets.size(0);
+            // Use view() rather than reshape() here: these tensors are allocated contiguous by
+            // the kernel launch above, so view() cannot copy. If that ever stops being true,
+            // view() throws instead of silently making a copy.
             return std::make_tuple(
-                ids.jdata().reshape({C, imageHeight, imageWidth, numDepthSamples}),
-                weights.jdata().reshape({C, imageHeight, imageWidth, numDepthSamples}));
+                ids.jdata().view({C, imageHeight, imageWidth, numDepthSamples}),
+                weights.jdata().view({C, imageHeight, imageWidth, numDepthSamples}));
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);

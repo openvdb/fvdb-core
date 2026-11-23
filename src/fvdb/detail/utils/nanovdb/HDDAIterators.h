@@ -11,6 +11,7 @@
 #include <c10/util/Half.h>
 
 #include <iostream>
+#include <type_traits>
 
 namespace nanovdb {
 
@@ -94,16 +95,27 @@ template <typename AccT, typename ScalarT> struct HDDASegmentIterator {
         mTimespan.t0 = mRay.t1() + static_cast<ScalarT>(5.0);
         mTimespan.t1 = mRay.t1();
         do {
-            // Re-align the HDDA to the correct level if mHdda's current dim disagrees with the
-            // tree's dim at the current voxel. After HDDA::update snaps mVoxel to the new grid
-            // level we have to query isActive at the snapped voxel, so we always do the isActive
-            // lookup *after* the dim check.
-            const int dim = mAcc.getDim(mHdda.voxel(), mRay);
-            if (mHdda.dim() != dim) {
+            // Fused getDim + isActive: a single Root->Internal->Leaf descent (or single
+            // accessor-cache lookup) produces both the HDDA step size and the active state of the
+            // current voxel — see ReadAccessor::getDimAndActive in NanoVDB.h. In the common case
+            // where mHdda is already at the right level this saves one full tree walk per
+            // iteration. The default ActiveExact policy is required here: this iterator reads
+            // `active` unconditionally, including at coarse-tile levels, so a skip-flag
+            // short-circuit that leaves `active` unspecified (ActiveOnLeafOnly) would be wrong.
+            //
+            // If we do need to re-align the HDDA to a different level, HDDA::update snaps mVoxel
+            // to the new grid (mVoxel = RoundDown & ~(dim-1)), so the pre-update active bit may no
+            // longer refer to the current voxel. Re-query after update so `active` is always
+            // consistent with the voxel we'll read in the TimeSpan logic below. This restores the
+            // two-descent cost only on level-change iterations (which are rare compared to
+            // same-level stepping).
+            auto dimActive = mAcc.getDimAndActive(mHdda.voxel(), mRay);
+            if (mHdda.dim() != static_cast<int>(dimActive.dim())) {
                 mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
+                mHdda.update(mRay, static_cast<int>(dimActive.dim()));
+                dimActive = mAcc.getDimAndActive(mHdda.voxel(), mRay);
             }
-            const bool active = mAcc.isActive(mHdda.voxel());
+            const bool active = dimActive.active();
 
             // Predicated TimeSpan writes: only the `leaving` break is a real branch. The entering
             // and leaving t0/t1 updates are expressed as selects so rays in the same warp whose
@@ -208,31 +220,49 @@ template <typename AccT, typename ScalarT, bool LeafOnly> struct HDDAValueIterat
     __hostdev__ bool
     nextVoxel() {
         do {
+            // Fused getDim + isActive convergence: ReadAccessor::getDimAndActive collapses the
+            // per-pass getDim and the post-convergence isActive into a single
+            // Root->Internal->Leaf descent per iteration — `active` comes "for free" along with
+            // the dim that drives the convergence check.
+            //
+            // Policy choice: when LeafOnly the gate below only consults `active` after checking
+            // dim == 1, which is exactly the ActiveOnLeafOnly contract — on a skip-flag
+            // short-circuit the returned dim exceeds 1, the gate rejects on dim alone, and the
+            // (unspecified) active bit is never read. That preserves getDim's skip-flag fast path.
+            // When !LeafOnly the gate reads `active` at every level (active coarse tiles must be
+            // yielded), so ActiveExact is required — it matches separate getDim + isActive
+            // byte-for-byte.
+            using PolicyT =
+                std::conditional_t<LeafOnly, nanovdb::ActiveOnLeafOnly, nanovdb::ActiveExact>;
+
             // Re-align the HDDA to the tree level at the current voxel. A single update can leave
             // the HDDA one level short when a step crosses several node levels at once, so we retry
-            // up to three passes (root -> upper -> lower -> leaf is the deepest transition). The
-            // `#pragma unroll` is load-bearing: without it ptxas keeps this bounded loop rolled
-            // (the body is two getDim tree-walks plus an update, too big to auto-unroll) and emits
-            // a data-dependent backedge that adds warp divergence at level transitions. Forcing the
-            // unroll turns the <=3 passes into predicated straight-line code with no backedge.
-            int dim = mAcc.getDim(mHdda.voxel(), mRay);
+            // up to three passes (root -> upper -> lower -> leaf is the deepest transition). Each
+            // re-query runs at the voxel HDDA::update just snapped to, so on loop exit `dimActive`
+            // always describes the current mHdda.voxel(). The `#pragma unroll` is load-bearing:
+            // without it ptxas keeps this bounded loop rolled (the body is a fused tree-walk plus
+            // an update, too big to auto-unroll) and emits a data-dependent backedge that adds
+            // warp divergence at level transitions. Forcing the unroll turns the <=3 passes into
+            // predicated straight-line code with no backedge.
+            auto dimActive = mAcc.template getDimAndActive<PolicyT>(mHdda.voxel(), mRay);
             // Emit the pragma only in the CUDA device pass: it's meaningless on the host and the
             // host compiler treats unknown pragmas as errors (-Werror=unknown-pragmas).
 #if defined(__CUDA_ARCH__)
 #pragma unroll
 #endif
-            for (int pass = 0; pass < 3 && mHdda.dim() != dim; ++pass) {
+            for (int pass = 0; pass < 3 && mHdda.dim() != static_cast<int>(dimActive.dim());
+                 ++pass) {
                 mRay.setMinTime(mHdda.time());
-                mHdda.update(mRay, dim);
-                dim = mAcc.getDim(mHdda.voxel(), mRay);
+                mHdda.update(mRay, static_cast<int>(dimActive.dim()));
+                dimActive = mAcc.template getDimAndActive<PolicyT>(mHdda.voxel(), mRay);
             }
 
-            // dim == 1 is a leaf voxel, dim > 1 a coarse tile; isActive is true for both. When
-            // LeafOnly, skip tiles so we yield only leaf voxels (the trailing mHdda.step() jumps
-            // the whole tile in one coarse step); when !LeafOnly the gate collapses to the original
-            // isActive check.
-            const bool isLeaf = (dim == 1);
-            if ((!LeafOnly || isLeaf) && mAcc.isActive(mHdda.voxel())) {
+            // dim == 1 is a leaf voxel, dim > 1 a coarse tile; active is true for both under
+            // ActiveExact. When LeafOnly, skip tiles so we yield only leaf voxels (the trailing
+            // mHdda.step() jumps the whole tile in one coarse step); when !LeafOnly the gate
+            // collapses to the original isActive check.
+            const bool isLeaf = (static_cast<int>(dimActive.dim()) == 1);
+            if ((!LeafOnly || isLeaf) && dimActive.active()) {
                 mData = {mHdda.voxel(), TimespanT(mHdda.time(), mHdda.next())};
                 mHdda.step();
                 return true;

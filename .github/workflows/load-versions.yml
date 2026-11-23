@@ -24,12 +24,22 @@ on:
         value: ${{ jobs.load.outputs.torch-version }}
       torch-full-version:
         value: ${{ jobs.load.outputs.torch-full-version }}
+      compat-torch-version:
+        value: ${{ jobs.load.outputs.compat-torch-version }}
+      compat-torch-full-version:
+        value: ${{ jobs.load.outputs.compat-torch-full-version }}
+      compat-cuda-version:
+        value: ${{ jobs.load.outputs.compat-cuda-version }}
+      compat-cuda-tag:
+        value: ${{ jobs.load.outputs.compat-cuda-tag }}
+      compat-cuda-patch:
+        value: ${{ jobs.load.outputs.compat-cuda-patch }}
       cuda-default:
         value: ${{ jobs.load.outputs.cuda-default }}
-      cuda-128-patch:
-        value: ${{ jobs.load.outputs.cuda-128-patch }}
       cuda-130-patch:
         value: ${{ jobs.load.outputs.cuda-130-patch }}
+      cuda-132-patch:
+        value: ${{ jobs.load.outputs.cuda-132-patch }}
       cuda-conda-override:
         value: ${{ jobs.load.outputs.cuda-conda-override }}
       cuda-arch-pr:
@@ -44,24 +54,35 @@ on:
         value: ${{ jobs.load.outputs.docker-os-ubuntu }}
       aws-role:
         value: ${{ jobs.load.outputs.aws-role }}
+      aws-runner-role:
+        value: ${{ jobs.load.outputs.aws-runner-role }}
       aws-region:
         value: ${{ jobs.load.outputs.aws-region }}
       aws-cpu-ami:
         value: ${{ jobs.load.outputs.aws-cpu-ami }}
       aws-gpu-ami:
         value: ${{ jobs.load.outputs.aws-gpu-ami }}
-      aws-subnet:
-        value: ${{ jobs.load.outputs.aws-subnet }}
+      aws-cpu-az-config:
+        value: ${{ jobs.load.outputs.aws-cpu-az-config }}
+      aws-gpu-az-config:
+        value: ${{ jobs.load.outputs.aws-gpu-az-config }}
       aws-security-group:
         value: ${{ jobs.load.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain:
         value: ${{ jobs.load.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix:
         value: ${{ jobs.load.outputs.publish-matrix }}
+      publish-build-matrix:
+        value: ${{ jobs.load.outputs.publish-build-matrix }}
+      publish-python-versions:
+        value: ${{ jobs.load.outputs.publish-python-versions }}
       auditwheel-excludes:
         value: ${{ jobs.load.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major:
         value: ${{ jobs.load.outputs.auditwheel-excludes-cuda-major }}
+
+permissions:
+  contents: read # sparse checkout of .github/versions.json
 
 jobs:
   load:
@@ -74,9 +95,14 @@ jobs:
       python-default: ${{ steps.parse.outputs.python-default }}
       torch-version: ${{ steps.parse.outputs.torch-version }}
       torch-full-version: ${{ steps.parse.outputs.torch-full-version }}
+      compat-torch-version: ${{ steps.parse.outputs.compat-torch-version }}
+      compat-torch-full-version: ${{ steps.parse.outputs.compat-torch-full-version }}
+      compat-cuda-version: ${{ steps.parse.outputs.compat-cuda-version }}
+      compat-cuda-tag: ${{ steps.parse.outputs.compat-cuda-tag }}
+      compat-cuda-patch: ${{ steps.parse.outputs.compat-cuda-patch }}
       cuda-default: ${{ steps.parse.outputs.cuda-default }}
-      cuda-128-patch: ${{ steps.parse.outputs.cuda-128-patch }}
       cuda-130-patch: ${{ steps.parse.outputs.cuda-130-patch }}
+      cuda-132-patch: ${{ steps.parse.outputs.cuda-132-patch }}
       cuda-conda-override: ${{ steps.parse.outputs.cuda-conda-override }}
       cuda-arch-pr: ${{ steps.parse.outputs.cuda-arch-pr }}
       cuda-arch-publish: ${{ steps.parse.outputs.cuda-arch-publish }}
@@ -84,25 +110,40 @@ jobs:
       docker-os-rocky: ${{ steps.parse.outputs.docker-os-rocky }}
       docker-os-ubuntu: ${{ steps.parse.outputs.docker-os-ubuntu }}
       aws-role: ${{ steps.parse.outputs.aws-role }}
+      aws-runner-role: ${{ steps.parse.outputs.aws-runner-role }}
       aws-region: ${{ steps.parse.outputs.aws-region }}
       aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
-      aws-subnet: ${{ steps.parse.outputs.aws-subnet }}
+      aws-cpu-az-config: ${{ steps.parse.outputs.aws-cpu-az-config }}
+      aws-gpu-az-config: ${{ steps.parse.outputs.aws-gpu-az-config }}
       aws-security-group: ${{ steps.parse.outputs.aws-security-group }}
       aws-cloudfront-distribution-domain: ${{ steps.parse.outputs.aws-cloudfront-distribution-domain }}
       publish-matrix: ${{ steps.parse.outputs.publish-matrix }}
+      publish-build-matrix: ${{ steps.parse.outputs.publish-build-matrix }}
+      publish-python-versions: ${{ steps.parse.outputs.publish-python-versions }}
       auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/versions.json
           sparse-checkout-cone-mode: false
           ref: ${{ inputs.ref || '' }}
+          persist-credentials: false
       - name: Parse versions.json
         id: parse
         run: |
           CFG=".github/versions.json"
+          # weekly_compat.cuda is a hand-maintained pin that must track the
+          # lowest supported CUDA version. Fail loudly if cuda.versions moved
+          # and the compat pin did not, so the weekly job cannot drift into
+          # testing an obsolete combination while reporting green.
+          COMPAT_CUDA=$(jq -r '.weekly_compat.cuda // empty' $CFG)
+          MIN_CUDA=$(jq -r '.cuda.versions | keys_unsorted | sort_by(split(".") | map(tonumber)) | .[0]' $CFG)
+          if [ -n "$COMPAT_CUDA" ] && [ "$COMPAT_CUDA" != "$MIN_CUDA" ]; then
+            echo "::error file=$CFG::weekly_compat.cuda is $COMPAT_CUDA but the lowest cuda.versions entry is $MIN_CUDA; update weekly_compat (cuda and torch) per docs/installation.rst"
+            exit 1
+          fi
           {
             echo "cmake-version=$(jq -r '.cmake_version' $CFG)"
             echo "uv-version=$(jq -r '.uv.version' $CFG)"
@@ -111,9 +152,14 @@ jobs:
             echo "python-default=$(jq -r '.python.default' $CFG)"
             echo "torch-version=$(jq -r '.torch.version' $CFG)"
             echo "torch-full-version=$(jq -r '.torch.full_version' $CFG)"
+            echo "compat-torch-version=$(jq -r '.weekly_compat.torch.version' $CFG)"
+            echo "compat-torch-full-version=$(jq -r '.weekly_compat.torch.full_version' $CFG)"
+            echo "compat-cuda-version=$(jq -r '.weekly_compat.cuda' $CFG)"
+            echo "compat-cuda-tag=cu$(jq -r '.weekly_compat.cuda' $CFG | tr -d '.')"
+            echo "compat-cuda-patch=$(jq -r '(.weekly_compat.cuda // empty) as $c | .cuda.versions[$c].patch // empty' $CFG)"
             echo "cuda-default=$(jq -r '.cuda.default' $CFG)"
-            echo "cuda-128-patch=$(jq -r '.cuda.versions["12.8"].patch' $CFG)"
             echo "cuda-130-patch=$(jq -r '.cuda.versions["13.0"].patch' $CFG)"
+            echo "cuda-132-patch=$(jq -r '.cuda.versions["13.2"].patch' $CFG)"
             echo "cuda-conda-override=$(jq -r '.cuda.conda_override' $CFG)"
             echo "cuda-arch-pr=$(jq -r '.cuda.arch_list_pr' $CFG)"
             echo "cuda-arch-publish=$(jq -r '.cuda.arch_list_publish' $CFG)"
@@ -121,13 +167,18 @@ jobs:
             echo "docker-os-rocky=$(jq -r '.docker_os.rocky' $CFG)"
             echo "docker-os-ubuntu=$(jq -r '.docker_os.ubuntu' $CFG)"
             echo "aws-role=$(jq -r '.aws.role' $CFG)"
+            echo "aws-runner-role=$(jq -r '.aws.runner_role' $CFG)"
             echo "aws-region=$(jq -r '.aws.region' $CFG)"
             echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"
-            echo "aws-subnet=$(jq -r '.aws.subnet' $CFG)"
+            echo "aws-cpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.cpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
+            echo "aws-gpu-az-config=$(jq -c '.aws as $a | [$a.subnets[] | {imageId: $a.gpu_ami, subnetId: .id, securityGroupId: $a.security_group}]' $CFG)"
             echo "aws-security-group=$(jq -r '.aws.security_group' $CFG)"
             echo "aws-cloudfront-distribution-domain=$(jq -r '.aws.cloudfront_distribution_domain // ""' $CFG)"
             echo "publish-matrix=$(jq -c '.publish_matrix' $CFG)"
+            # One build job per torch/CUDA combination builds every Python version
+            echo "publish-build-matrix=$(jq -c '.publish_matrix | del(."python-version")' $CFG)"
+            echo "publish-python-versions=$(jq -r '.publish_matrix."python-version" | join(",")' $CFG)"
             echo "auditwheel-excludes=$(jq -c '.auditwheel_excludes' $CFG)"
             echo "auditwheel-excludes-cuda-major=$(jq -c '.auditwheel_excludes_cuda_major' $CFG)"
           } >> "$GITHUB_OUTPUT"

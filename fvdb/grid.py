@@ -702,7 +702,10 @@ class Grid:
     # ============================================================
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> Grid:
-        """Return a coarsened version of this :class:`Grid`.
+        """Return a block-coarsened cell grid for pooling and aggregation.
+
+        It has a block-centroid transform and is not a convolution lattice; use :meth:`conv_grid`
+        for generated convolution support.
 
         Args:
             coarsening_factor (NumericMaxRank1): Factor by which to coarsen,
@@ -845,7 +848,10 @@ class Grid:
         return functional.contiguous_single(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid:
-        """Return the output :class:`Grid` for a convolution with the given kernel.
+        """Return the complete structural-support grid for a convolution.
+
+        The result uses the canonical Torch-phase relation and convolution-lattice transform;
+        it is not a block-coarsened cell grid. ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel,
@@ -862,7 +868,11 @@ class Grid:
         return functional.conv_grid_single(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> Grid:
-        """Return the output :class:`Grid` for a transposed convolution.
+        """Return the complete structural-support grid for transposed convolution.
+
+        Each active coarse coordinate spreads through all canonical taps. This generated support
+        is adjoint connectivity, not a value inverse of a forward convolution.
+        ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Size of the convolution kernel,
@@ -871,8 +881,7 @@ class Grid:
                 shape ``(3,)``, integer dtype.
 
         Returns:
-            conv_transpose_grid (Grid): A new :class:`Grid` representing the
-                transposed convolution output topology.
+            conv_transpose_grid (Grid): The transposed-convolution output topology.
         """
         from . import functional
 
@@ -1476,8 +1485,15 @@ class Grid:
                 ``(num_vertices, 3)``.
             faces (torch.Tensor): Triangle face indices of shape
                 ``(num_faces, 3)``.
-            normals (torch.Tensor): Vertex normals of shape
-                ``(num_vertices, 3)``.
+            vertex_edge_keys (torch.Tensor): Edge keys used to deduplicate
+                mesh vertices, dtype ``torch.int64``, shape
+                ``(num_vertices, 3)``. Each row ``[batch_idx, voxel_a,
+                voxel_b]`` identifies the grid edge on which the vertex was
+                interpolated, where ``voxel_a`` and ``voxel_b`` are flat
+                voxel indices of the two endpoint voxels (``voxel_a >=
+                voxel_b``). This can be used to map mesh vertices back to the
+                grid edges and voxels they originated from. ``batch_idx`` is
+                always ``0`` for a single grid.
         """
         from . import functional
 
@@ -1494,7 +1510,7 @@ class Grid:
 
         Places one vertex per surface cell via quadratic-error-function minimization (sharp-feature
         preserving), with optional cluster-collapse decimation. Needs a narrow-band SDF with a
-        >= ~3-voxel band for a watertight result (e.g. from :meth:`retopologize_sdf`).
+        >= ~3-voxel band for a watertight result (e.g. from :meth:`rebuild_narrow_band`).
 
         Args:
             field (torch.Tensor): Per-voxel signed distance values, shape ``(num_voxels,)``.
@@ -1526,23 +1542,48 @@ class Grid:
         Peng sign), then optionally de-staircases it with curvature-based smoothing.
 
         Args:
-            field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)``.
+            field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels (clamps the field to ``[-band*vx, band*vx]``).
             smooth (int): Number of smoothing passes (``0`` disables smoothing).
             order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
             smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
-            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
+            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
+                ``max(6, round(2.5*band) + 2)``.
 
         Returns:
             sdf (torch.Tensor): The re-initialized SDF, shape ``(num_voxels,)``.
+
+        Note:
+            * ``field`` must represent the intended inside/outside regions and zero crossings. Its
+              magnitudes need not be accurate distances, but affect convergence, accuracy, and
+              sub-voxel surface location. With ``smooth=0`` redistancing aims to preserve the input
+              surface, subject to discretization error; smoothing moves it and then re-redistances.
+            * Values must be finite, with shape ``(N,)`` or ``(N, 1)``. Invalid shapes and NaN/Inf
+              values raise ``ValueError``.
+            * The surface is where the field changes sign between *active* voxels; one active voxel
+              of each sign across the crossing is sufficient (two or more per side gives the best
+              sub-voxel accuracy). A grid whose active values are all one sign has no surface: the
+              result is the constant ``-/+band*vx`` and :meth:`rebuild_narrow_band` returns an empty
+              band, which is correct for e.g. a tile that lies entirely inside an object.
+            * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign during
+              redistancing and its current sign during smoothing. Both filled solids (interior active)
+              and narrow bands whose interior is inactive are valid inputs. Leave no-data voxels
+              *inactive* rather than assigning them NaN/Inf values.
+            * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
+              redistance (a no-data pass-through; :meth:`ray_implicit_intersection` treats exact
+              ``0`` as a gap). Their signed neighbours, however, see them as an interface and are
+              redistanced toward them, and smoothing blends them -- prune such voxels first when you
+              can.
+            * Voxels must be isotropic (``ValueError`` otherwise). CUDA only; ``float32`` or
+              ``float64``.
         """
         from . import functional
 
         return functional.reinitialize_sdf_single(self, field, band, smooth, order, smoothing, redistance_iters)
 
-    def retopologize_sdf(
+    def rebuild_narrow_band(
         self,
         field: torch.Tensor,
         band: int = 3,
@@ -1553,7 +1594,7 @@ class Grid:
         pad: bool = True,
         prune: bool = True,
     ) -> tuple[Grid, torch.Tensor]:
-        """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) grid.
+        """Rebuild a signed field into a clean narrow-band SDF on a (possibly pruned) grid.
 
         If ``pad`` is ``True`` this grid is first dilated by ``band`` voxels so the redistance has
         room to fill the full ``±band*vx`` band, then :meth:`reinitialize_sdf` is run, and finally, if
@@ -1561,7 +1602,7 @@ class Grid:
         (``|phi| < band*vx*0.999``).
 
         Args:
-            field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)``.
+            field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels.
             smooth (int): Number of smoothing passes (``0`` disables smoothing).
             order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
@@ -1569,20 +1610,25 @@ class Grid:
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
-            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band reaches the
-                full ``band`` voxels on each side of the surface (``±band*vx``) even if the input grid
-                was thinner. New voxels are seeded as exterior (``+band*vx``), which is correct when the
-                interior (``phi < 0``) is already represented; for a hollow thin shell, pass
-                ``pad=False`` with a pre-banded grid.
+            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band is a full
+                ``band`` voxels wide even if the input grid was thinner. The dilation grows one layer
+                at a time and seeds each new voxel with ``+/-band*vx`` according to the sign of its
+                existing neighbours, so it continues the band inward (interior) as well as outward and
+                works for filled solids and for narrow bands whose interior is inactive.
             prune (bool): If ``True`` prune to the narrow band, else return the (padded) grid.
 
         Returns:
             out_grid (Grid): The pruned (or padded/original) grid.
             sdf (torch.Tensor): The narrow-band SDF, aligned with ``out_grid``.
+
+        Note:
+            Applying this to its own output reproduces it (up to a voxel layer at the band edge).
+            See :meth:`reinitialize_sdf` for the input contract (sign trusted, inactive neighbours
+            continue the adjacent sign, exact-``0`` voxels are no-data pass-through).
         """
         from . import functional
 
-        return functional.retopologize_sdf_single(
+        return functional.rebuild_narrow_band_single(
             self, field, band, smooth, order, smoothing, redistance_iters, pad, prune
         )
 

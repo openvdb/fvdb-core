@@ -17,9 +17,18 @@ from . import nn, utils, viz
 from ._fvdb_cpp import NanoVDBGridMetadata, config, hilbert, morton
 from ._volume_render import volume_render
 from .attention import scaled_dot_product_attention
-from .convolution_plan import ConvolutionPlan
-from .enums import CameraModel, ProjectionMethod, RollingShutterType, ShOrderingMode
-from .gaussian_splatting import GaussianSplat3d, ProjectedGaussianSplats
+from .convolution_plan import (
+    ConvolutionCoverageReport,
+    ConvolutionCoverageWarning,
+    ConvolutionPlan,
+    ConvolutionTransformCompatibility,
+)
+from .enums import (
+    ConvolutionPhasePolicy,
+    ConvolutionTopologyPolicy,
+    ConvolutionTopologyProvenance,
+    SmoothingMode,
+)
 from .grid import Grid
 from .grid_batch import GridBatch, gcat
 from .jagged_tensor import JaggedTensor, jcat
@@ -65,42 +74,19 @@ from .torch_jagged import (
     where,
 )
 
-def gaussian_render_jagged(
-    means: JaggedTensor,
-    quats: JaggedTensor,
-    scales: JaggedTensor,
-    opacities: JaggedTensor,
-    sh_coeffs: JaggedTensor,
-    viewmats: JaggedTensor,
-    Ks: JaggedTensor,
-    image_width: int,
-    image_height: int,
-    near_plane: float = 0.01,
-    far_plane: float = 1e10,
-    sh_degree_to_use: int = -1,
-    tile_size: int = 16,
-    radius_clip: float = 0.0,
-    eps2d: float = 0.3,
-    antialias: bool = False,
-    render_depth_channel: bool = False,
-    return_debug_info: bool = False,
-    render_depth_only: bool = False,
-    ortho: bool = False,
-    backgrounds: torch.Tensor | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]: ...
-
 __all__ = [
     # Core classes
     "GridBatch",
     "Grid",
     "JaggedTensor",
-    "GaussianSplat3d",
-    "ProjectedGaussianSplats",
     "ConvolutionPlan",
-    "CameraModel",
-    "ProjectionMethod",
-    "RollingShutterType",
-    "ShOrderingMode",
+    "ConvolutionCoverageReport",
+    "ConvolutionCoverageWarning",
+    "ConvolutionTransformCompatibility",
+    "ConvolutionPhasePolicy",
+    "ConvolutionTopologyPolicy",
+    "ConvolutionTopologyProvenance",
+    "SmoothingMode",
     "Grid",
     "NanoVDBGridMetadata",
     # JaggedTensor operations
@@ -113,7 +99,6 @@ __all__ = [
     # Specialized operations
     "scaled_dot_product_attention",
     "volume_render",
-    "gaussian_render_jagged",
     # Torch-compatible functions (work with both Tensor and JaggedTensor)
     "relu",
     "relu_",

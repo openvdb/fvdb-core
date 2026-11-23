@@ -48,8 +48,12 @@ struct SphericalHarmonicsForwardTestFixture : public ::testing::TestWithParam<Te
         const auto sinElevation =
             torch::sin(torch::full({numCameras, numGaussians, 1}, elevation, floatOptsCUDA));
 
-        viewDirs = torch::cat({cosAzimuth * cosElevation, sinAzimuth * cosElevation, sinElevation},
-                              2); // [C, N, 3]
+        const auto viewDirs = torch::cat(
+            {cosAzimuth * cosElevation, sinAzimuth * cosElevation, sinElevation}, 2); // [C, N, 3]
+        means              = viewDirs.select(0, 0).contiguous();
+        worldToCamMatrices = torch::eye(4, floatOptsCUDA).unsqueeze(0).repeat({numCameras, 1, 1});
+        cameraIds          = torch::empty({0}, intOptsCUDA);
+        gaussianIds        = torch::empty({0}, intOptsCUDA);
 
         sh0Coeffs = torch::full({numGaussians, 1, numChannels}, 1.0f, floatOptsCUDA);
 
@@ -92,7 +96,10 @@ struct SphericalHarmonicsForwardTestFixture : public ::testing::TestWithParam<Te
     torch::Tensor expectedResult;
     torch::Tensor sh0Coeffs;
     torch::Tensor shNCoeffs;
-    torch::Tensor viewDirs;
+    torch::Tensor means;
+    torch::Tensor worldToCamMatrices;
+    torch::Tensor cameraIds;
+    torch::Tensor gaussianIds;
     torch::Tensor radii;
 
     int64_t numCameras;
@@ -106,8 +113,15 @@ struct SphericalHarmonicsForwardTestFixture : public ::testing::TestWithParam<Te
 TEST_P(SphericalHarmonicsForwardTestFixture, TestShForward) {
     if (shDegreeToUse == 0) {
         {
-            auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-                shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+            auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                           numCameras,
+                                                                           means,
+                                                                           worldToCamMatrices,
+                                                                           cameraIds,
+                                                                           gaussianIds,
+                                                                           sh0Coeffs,
+                                                                           shNCoeffs,
+                                                                           radii);
             EXPECT_TRUE(result.sizes() ==
                         torch::IntArrayRef({numCameras, numGaussians, numChannels}));
             EXPECT_TRUE(torch::allclose(result, expectedResult));
@@ -115,24 +129,46 @@ TEST_P(SphericalHarmonicsForwardTestFixture, TestShForward) {
 
         {
             shNCoeffs   = torch::Tensor();
-            auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-                shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+            auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                           numCameras,
+                                                                           means,
+                                                                           worldToCamMatrices,
+                                                                           cameraIds,
+                                                                           gaussianIds,
+                                                                           sh0Coeffs,
+                                                                           shNCoeffs,
+                                                                           radii);
             EXPECT_TRUE(result.sizes() ==
                         torch::IntArrayRef({numCameras, numGaussians, numChannels}));
             EXPECT_TRUE(torch::allclose(result, expectedResult));
         }
 
         {
-            viewDirs    = torch::Tensor();
-            auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-                shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+            means              = torch::Tensor();
+            worldToCamMatrices = torch::Tensor();
+            auto result        = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                           numCameras,
+                                                                           means,
+                                                                           worldToCamMatrices,
+                                                                           cameraIds,
+                                                                           gaussianIds,
+                                                                           sh0Coeffs,
+                                                                           shNCoeffs,
+                                                                           radii);
             EXPECT_TRUE(result.sizes() ==
                         torch::IntArrayRef({numCameras, numGaussians, numChannels}));
             EXPECT_TRUE(torch::allclose(result, expectedResult));
         }
     } else {
-        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                       numCameras,
+                                                                       means,
+                                                                       worldToCamMatrices,
+                                                                       cameraIds,
+                                                                       gaussianIds,
+                                                                       sh0Coeffs,
+                                                                       shNCoeffs,
+                                                                       radii);
         EXPECT_TRUE(result.sizes() == torch::IntArrayRef({numCameras, numGaussians, numChannels}));
         EXPECT_TRUE(torch::allclose(result, expectedResult));
     }
@@ -156,8 +192,15 @@ TEST_F(SphericalHarmonicsTestFixture, TestSh0Benchmark) {
     // Warm up
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                       numCameras,
+                                                                       means,
+                                                                       worldToCamMatrices,
+                                                                       cameraIds,
+                                                                       gaussianIds,
+                                                                       sh0Coeffs,
+                                                                       shNCoeffs,
+                                                                       radii);
         torch::cuda::synchronize();
     }
 
@@ -166,8 +209,15 @@ TEST_F(SphericalHarmonicsTestFixture, TestSh0Benchmark) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start  = std::chrono::high_resolution_clock::now();
-        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                       numCameras,
+                                                                       means,
+                                                                       worldToCamMatrices,
+                                                                       cameraIds,
+                                                                       gaussianIds,
+                                                                       sh0Coeffs,
+                                                                       shNCoeffs,
+                                                                       radii);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -193,8 +243,15 @@ TEST_F(SphericalHarmonicsTestFixture, TestShNNBenchmark) {
     // Warm up
     for (int i = 0; i < 10; i += 1) {
         torch::cuda::synchronize();
-        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                       numCameras,
+                                                                       means,
+                                                                       worldToCamMatrices,
+                                                                       cameraIds,
+                                                                       gaussianIds,
+                                                                       sh0Coeffs,
+                                                                       shNCoeffs,
+                                                                       radii);
         torch::cuda::synchronize();
     }
 
@@ -203,8 +260,15 @@ TEST_F(SphericalHarmonicsTestFixture, TestShNNBenchmark) {
     for (int i = 0; i < totalIters; i += 1) {
         torch::cuda::synchronize();
         auto start  = std::chrono::high_resolution_clock::now();
-        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(
-            shDegreeToUse, numCameras, viewDirs, sh0Coeffs, shNCoeffs, radii);
+        auto result = fvdb::detail::ops::evaluateSphericalHarmonicsFwd(shDegreeToUse,
+                                                                       numCameras,
+                                                                       means,
+                                                                       worldToCamMatrices,
+                                                                       cameraIds,
+                                                                       gaussianIds,
+                                                                       sh0Coeffs,
+                                                                       shNCoeffs,
+                                                                       radii);
         torch::cuda::synchronize();
         auto end      = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);

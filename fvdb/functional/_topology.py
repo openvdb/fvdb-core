@@ -2,19 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for grid topology operations (coarsen, refine, dual, dilate, etc.)."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import torch
 
-from ..jagged_tensor import JaggedTensor
 from .. import _fvdb_cpp
+from ..jagged_tensor import JaggedTensor
 from ..types import NumericMaxRank1, NumericMaxRank2, ValueConstraint, to_Vec3i, to_Vec3iBatchBroadcastable
 
 if TYPE_CHECKING:
-    from ..grid_batch import GridBatch
     from ..grid import Grid
+    from ..grid_batch import GridBatch
 
 
 def _wrap_grid(cpp_impl):
@@ -428,7 +429,14 @@ def conv_grid_batch(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> GridBatch:
-    """Return the output grid for a convolution on a grid batch.
+    """Return the complete structural-support grid for a convolution on a grid batch.
+
+    It uses the canonical componentwise Torch phase
+    ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``, where ``fine_ijk`` and
+    ``coarse_ijk`` are integer coordinates on the fine and strided lattices,
+    ``padding_before = floor((kernel_size - 1) / 2)``, and the zero-based kernel tap satisfies
+    ``0 <= tap_ijk[axis] < kernel_size[axis]``. The result is a convolution lattice (voxel size scaled by
+    ``stride``, canonical origin), not a block-coarsened grid. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (GridBatch): The input grid batch.
@@ -442,6 +450,8 @@ def conv_grid_batch(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_grid(_fvdb_cpp.conv_grid(grid.data, ks, st))
 
 
@@ -450,7 +460,10 @@ def conv_grid_single(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> Grid:
-    """Return the output grid for a convolution on a single grid.
+    """Return the complete structural-support grid for a convolution on a single grid.
+
+    This is the canonical convolution lattice, not a cell-coarsening operation. ``K=S=1`` returns
+    ``grid`` itself.
 
     Args:
         grid (Grid): The input single grid.
@@ -464,6 +477,8 @@ def conv_grid_single(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_single_grid(_fvdb_cpp.conv_grid(grid.data, ks, st))
 
 
@@ -472,7 +487,10 @@ def conv_transpose_grid_batch(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> GridBatch:
-    """Return the output grid for a transposed convolution on a grid batch.
+    """Return the complete structural-support grid for a transposed convolution on a grid batch.
+
+    Each active input coordinate spreads through all canonical Torch-phase taps. This generated
+    support is not a value inverse of a forward convolution. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (GridBatch): The input grid batch.
@@ -486,6 +504,8 @@ def conv_transpose_grid_batch(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_grid(_fvdb_cpp.conv_transpose_grid(grid.data, ks, st))
 
 
@@ -494,7 +514,10 @@ def conv_transpose_grid_single(
     kernel_size: NumericMaxRank1,
     stride: NumericMaxRank1 = 1,
 ) -> Grid:
-    """Return the output grid for a transposed convolution on a single grid.
+    """Return the complete structural-support grid for a transposed convolution on a single grid.
+
+    Each active input coordinate spreads through all canonical Torch-phase taps; this does not
+    imply value inversion. ``K=S=1`` returns ``grid`` itself.
 
     Args:
         grid (Grid): The input single grid.
@@ -508,6 +531,8 @@ def conv_transpose_grid_single(
     """
     ks = to_Vec3i(kernel_size, value_constraint=ValueConstraint.POSITIVE).tolist()
     st = to_Vec3i(stride, value_constraint=ValueConstraint.POSITIVE).tolist()
+    if ks == [1, 1, 1] and st == [1, 1, 1]:
+        return grid
     return _wrap_single_grid(_fvdb_cpp.conv_transpose_grid(grid.data, ks, st))
 
 
@@ -530,7 +555,8 @@ def morton_batch(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None 
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton", offset.tolist()))
@@ -550,7 +576,8 @@ def morton_single(grid: Grid, offset: torch.Tensor | NumericMaxRank1 | None = No
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton", offset.tolist())).jdata
@@ -570,7 +597,8 @@ def morton_zyx_batch(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | N
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton_zyx", offset.tolist()))
@@ -590,7 +618,8 @@ def morton_zyx_single(grid: Grid, offset: torch.Tensor | NumericMaxRank1 | None 
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "morton_zyx", offset.tolist())).jdata
@@ -610,7 +639,8 @@ def hilbert_batch(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | None
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert", offset.tolist()))
@@ -630,7 +660,8 @@ def hilbert_single(grid: Grid, offset: torch.Tensor | NumericMaxRank1 | None = N
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert", offset.tolist())).jdata
@@ -650,7 +681,8 @@ def hilbert_zyx_batch(grid: GridBatch, offset: torch.Tensor | NumericMaxRank1 | 
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert_zyx", offset.tolist()))
@@ -670,7 +702,8 @@ def hilbert_zyx_single(grid: Grid, offset: torch.Tensor | NumericMaxRank1 | None
     """
     grid_data = grid.data
     if offset is None:
-        offset = -torch.min(_fvdb_cpp.active_grid_coords(grid_data).jdata, dim=0).values
+        # bbox min == componentwise min over active voxel coords; host metadata, no kernel/sync
+        offset = -grid_data.total_bbox[0]
     elif not isinstance(offset, torch.Tensor):
         offset = to_Vec3i(offset)
     return JaggedTensor(impl=_fvdb_cpp.serialize_encode(grid_data, "hilbert_zyx", offset.tolist())).jdata

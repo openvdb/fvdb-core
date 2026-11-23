@@ -10,6 +10,11 @@ dense PyTorch ground truth to verify correctness of:
   - Forward pass values
   - Backward pass gradients
 
+This legacy suite deliberately uses only odd kernel extents, for which
+``K // 2 == P_before = floor((K - 1) / 2)``. General even and mixed-axis
+phase coverage lives in ``test_conv_semantics.py`` and
+``test_conv_semantics_integration.py``.
+
 =============================================================================
 TOPOLOGY FOR TRANSPOSED CONVOLUTION
 =============================================================================
@@ -24,12 +29,13 @@ For TRANSPOSED convolution with stride S:
     - Each input scatters to multiple outputs
     - Output coordinates are "expanded" (multiplied by stride)
 
-CRITICAL INSIGHT:
-    For stride=1, both topologies are IDENTICAL!
+ODD-KERNEL INSIGHT:
+    For stride=1, both generated topologies are identical for the symmetric
+    odd footprints exercised in this file.
     - Regular conv: output at c + offset for each input c
     - Transpose conv: output at c + offset for each input c
 
-    For stride > 1, they DIFFER:
+    For stride > 1, they differ:
     - Regular conv: outputs at {o : exists c with o*S in [c-K//2, c+K//2]}
     - Transpose conv: outputs at {c*S + offset : for each input c}
 
@@ -44,19 +50,22 @@ For REGULAR convolution:
 For TRANSPOSED convolution:
     - Each input at c SCATTERS to outputs: output[c + k - K//2] += input[c] * kernel[k]
     - Equivalently: output at o = sum over k of: input[o - k + K//2] * kernel[k]
-    - This is convolution with a FLIPPED kernel
+    - This is the adjoint action of the same finite edges; the sparse rulebook
+      does not add a spatial kernel flip. Any flipped-kernel identity depends
+      on how a separate dense convolution convention is written.
 
-The mathematical relationship: conv_transpose(x, W) = conv(x, flip(W))
-where flip reverses all spatial dimensions of the kernel.
-
-For stride=1, PyTorch's conv_transpose3d with padding=K//2 gives the same
-output shape as conv3d with padding="same", making comparison straightforward.
+For this odd-kernel suite, PyTorch's conv_transpose3d with
+padding=K//2=P_before gives the same output shape as conv3d with
+padding="same", making comparison straightforward.
 """
 
 import math
 import unittest
 
 import torch
+from parameterized import parameterized
+
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -79,9 +88,8 @@ from fvdb.utils.tests.convolution_utils import (
     get_tolerances,
     sort_coords_by_ijk,
 )
-from parameterized import parameterized
 
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from . import expand_tests
 
 # =============================================================================
 # Test Classes
@@ -317,7 +325,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
                     )
                     self.assertEqual(got_coord, expected_coord)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward transposed convolution of a single impulse against dense ground truth.
@@ -389,7 +397,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
         )
         torch.testing.assert_close(gt_convolved, dense_output, rtol=tols["forward"][0], atol=tols["forward"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward transposed convolution of multiple isolated impulses.
@@ -457,7 +465,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
             sparse_values_sorted, dense_values_sorted, rtol=tols["forward"][0], atol=tols["forward"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_conv_vs_conv_transpose_flipped_kernel(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Verify that conv_transpose(x, W) == conv(x, flip(W)) for stride=1.
@@ -667,7 +675,7 @@ class TestConvTransposeValues(DisableTF32Mixin, unittest.TestCase):
             device, dtype, stride=(1, 2, 3), cluster_coords=cluster_coords
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_strided_conv_transpose_large_stride(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Strided transposed convolution forward+backward, stride (3,3,3), full device/dtype coverage."""
         device_resolved = resolve_device(device)
@@ -702,7 +710,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
     SINGLE_VOLUME_SHAPE = (5, 7, 9)
     SINGLE_COORD = (2, 3, 4)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass of sparse transposed convolution against dense ground truth.
@@ -796,7 +804,7 @@ class TestConvTransposeBackward(DisableTF32Mixin, unittest.TestCase):
             sparse_kernel_grad, dense_kernel_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_multiple_inputs_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass with multiple input voxels and random gradients.

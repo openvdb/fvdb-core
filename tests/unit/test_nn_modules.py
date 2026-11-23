@@ -6,15 +6,16 @@ import unittest
 from collections.abc import MutableMapping
 from typing import NamedTuple
 
-import fvdb.nn as fvnn
 import torch
 import torch.distributed
 import torch.multiprocessing
 import torch.nn as nn
-from parameterized import parameterized
 
 import fvdb
+import fvdb.nn as fvnn
 from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cpu", torch.float32],
@@ -25,7 +26,6 @@ all_device_dtype_combos = [
 
 
 class TestNNModules(unittest.TestCase):
-
     def _make_dense_grid(self, device, batch_size=1, shape=(10, 10, 10)):
         return GridBatch.from_dense(batch_size, list(shape), voxel_sizes=0.1, origins=(0.0, 0.0, 0.0), device=device)
 
@@ -49,7 +49,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIn("kernel_size", pool.extra_repr())
         self.assertIn("stride", pool.extra_repr())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_avg_pool_forward(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -64,7 +64,7 @@ class TestNNModules(unittest.TestCase):
             self.assertTrue(torch.equal(pooled_data.jdata, expected_data.jdata))
             self.assertEqual(coarse_grid.total_voxels, expected_grid.total_voxels)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_avg_pool_with_coarse_grid(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -92,7 +92,7 @@ class TestNNModules(unittest.TestCase):
 
         self.assertIn("kernel_size", pool.extra_repr())
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_max_pool_forward(self, device, dtype):
         grid = self._make_dense_grid(device)
         features = self._make_features(grid, 4, device, dtype)
@@ -106,7 +106,7 @@ class TestNNModules(unittest.TestCase):
             self.assertGreater(coarse_grid.total_voxels, 0)
             self.assertFalse(torch.any(torch.isinf(pooled_data.jdata)), "MaxPool output should not contain inf values")
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_max_pool_inf_zeroing(self, device, dtype):
         """Verify MaxPool zeros out inf values that grid.max_pool produces for uncovered voxels."""
         fine_ijk = torch.tensor([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=torch.int32, device=device)
@@ -139,7 +139,7 @@ class TestNNModules(unittest.TestCase):
         up = fvnn.UpsamplingNearest(scale_factor=(2, 3, 4))
         self.assertTrue(torch.equal(up.scale_factor, torch.tensor([2, 3, 4])))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_upsampling_forward(self, device, dtype):
         coarse_grid = self._make_dense_grid(device, shape=(5, 5, 5))
         coarse_features = self._make_features(coarse_grid, 4, device, dtype)
@@ -152,6 +152,110 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(fine_data.jdata.shape, expected_data.jdata.shape)
         self.assertTrue(torch.equal(fine_data.jdata, expected_data.jdata))
         self.assertEqual(fine_grid.total_voxels, expected_grid.total_voxels)
+
+    # =========================================================================
+    # Prune
+    # =========================================================================
+
+    def test_prune_construction(self):
+        prune = fvnn.Prune()
+        self.assertEqual(len(list(prune.parameters())), 0)
+        self.assertIn("Prune", repr(prune))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_forward(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(6, 6, 6))
+        features = self._make_features(grid, 4, device, dtype)
+        mask = torch.rand(grid.total_voxels, device=device) > 0.5
+        jmask = grid.jagged_like(mask)
+
+        prune = fvnn.Prune()
+        pruned_data, pruned_grid = prune(features, grid, jmask)
+
+        # Topology matches the underlying pruned_grid op and preserves canonical voxel order.
+        self.assertEqual(pruned_grid.total_voxels, int(mask.sum().item()))
+        self.assertTrue(torch.equal(pruned_grid.ijk.jdata, grid.ijk.jdata[mask]))
+
+        # Features are the kept rows, aligned with the pruned grid.
+        self.assertTrue(torch.equal(pruned_data.jdata, features.jdata[mask]))
+
+        # Per-batch row counts are consistent with per-batch mask sums.
+        for b in range(grid.grid_count):
+            kept_b = int(mask[grid.ijk.jidx == b].sum().item())
+            self.assertEqual(pruned_grid.num_voxels_at(b), kept_b)
+            self.assertEqual(pruned_data[b].jdata.shape[0], kept_b)
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_forward_all_false_all_true(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        features = self._make_features(grid, 3, device, dtype)
+        prune = fvnn.Prune()
+
+        all_false = grid.jagged_like(torch.zeros(grid.total_voxels, dtype=torch.bool, device=device))
+        pruned_data, pruned_grid = prune(features, grid, all_false)
+        self.assertEqual(pruned_grid.total_voxels, 0)
+        # The batch still contains grid_count grids; they just have no active voxels.
+        self.assertEqual(pruned_grid.grid_count, grid.grid_count)
+        for b in range(pruned_grid.grid_count):
+            self.assertEqual(pruned_grid.num_voxels_at(b), 0)
+        self.assertEqual(pruned_data.jdata.shape[0], 0)
+
+        all_true = grid.jagged_like(torch.ones(grid.total_voxels, dtype=torch.bool, device=device))
+        pruned_data, pruned_grid = prune(features, grid, all_true)
+        self.assertTrue(torch.equal(pruned_grid.ijk.jdata, grid.ijk.jdata))
+        self.assertTrue(torch.equal(pruned_data.jdata, features.jdata))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_gradient(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        data = torch.randn(grid.total_voxels, 3, device=device, dtype=dtype, requires_grad=True)
+        features = grid.jagged_like(data)
+        mask = torch.rand(grid.total_voxels, device=device) > 0.5
+
+        pruned_data, _ = fvnn.Prune()(features, grid, grid.jagged_like(mask))
+        pruned_data.jdata.sum().backward()
+
+        assert data.grad is not None
+        expected_grad = torch.zeros_like(data)
+        expected_grad[mask] = 1.0
+        self.assertTrue(torch.equal(data.grad, expected_grad))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_prune_rejects_mismatched_partitioning(self, device, dtype):
+        grid = self._make_dense_grid(device, batch_size=2, shape=(4, 4, 4))
+        features = self._make_features(grid, 3, device, dtype)
+        mask = grid.jagged_like(torch.ones(grid.total_voxels, dtype=torch.bool, device=device))
+        prune = fvnn.Prune()
+        n0, n1 = grid.num_voxels_at(0), grid.num_voxels_at(1)
+
+        # Same total row count as the grid, but split differently across the batch.
+        shifted = fvdb.JaggedTensor([features.jdata[: n0 - 1], features.jdata[n0 - 1 :]])
+        with self.assertRaisesRegex(ValueError, "same per-grid partitioning"):
+            prune(shifted, grid, mask)
+
+        shifted_mask = fvdb.JaggedTensor([mask.jdata[: n0 + 1], mask.jdata[n0 + 1 :]])
+        with self.assertRaisesRegex(ValueError, "same per-grid partitioning"):
+            prune(features, grid, shifted_mask)
+
+        # Wrong number of rows.
+        with self.assertRaisesRegex(ValueError, "rows"):
+            prune(fvdb.JaggedTensor([features.jdata[:n0], features.jdata[n0 : n0 + n1 - 1]]), grid, mask)
+
+        # Wrong number of tensors in the batch.
+        with self.assertRaisesRegex(ValueError, "grids"):
+            prune(fvdb.JaggedTensor([features.jdata]), grid, mask)
+
+        # Nested list structure. Leaf count and flat offsets both match the grid, so only
+        # an explicit ldim check catches this.
+        nested = fvdb.JaggedTensor([[features.jdata[:n0], features.jdata[n0:]]])
+        with self.assertRaisesRegex(ValueError, "ldim"):
+            prune(nested, grid, mask)
+
+    def test_prune_forward_keeps_docstring(self):
+        # The profiler decorator on fvdb.nn modules must not strip forward's docs or name.
+        self.assertEqual(fvnn.Prune.forward.__name__, "forward")
+        self.assertIsNotNone(fvnn.Prune.forward.__doc__)
+        self.assertIsNotNone(fvnn.MaxPool.forward.__doc__)
 
     # =========================================================================
     # SparseConv3d
@@ -178,7 +282,7 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(conv.kernel_volume, 1)
         self.assertEqual(conv.weight.shape, (16, 8))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv3d_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 16, device, dtype)
@@ -190,7 +294,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape[1], 32)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv3d_kernel_size_1_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 8, device, dtype)
@@ -225,7 +329,7 @@ class TestNNModules(unittest.TestCase):
         self.assertEqual(conv.weight.shape, (16, 32, 3, 3, 3))
         self.assertIsNotNone(conv.bias)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sparse_conv_transpose3d_forward(self, device, dtype):
         grid = self._make_dense_grid(device, shape=(8, 8, 8))
         features = self._make_features(grid, 32, device, dtype)
@@ -256,7 +360,7 @@ class TestNNModules(unittest.TestCase):
     # GroupNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_group_norm_forward(self, device, dtype):
         num_channels, num_groups = 16, 4
         grid = self._make_dense_grid(device, batch_size=2, shape=(8, 8, 8))
@@ -268,7 +372,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape, features.jdata.shape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_group_norm_against_pytorch(self, device, dtype):
         num_channels, num_groups = 16, 4
         grid = self._make_dense_grid(device, batch_size=1, shape=(8, 8, 8))
@@ -313,7 +417,7 @@ class TestNNModules(unittest.TestCase):
     # BatchNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_batch_norm_forward(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)
@@ -326,7 +430,7 @@ class TestNNModules(unittest.TestCase):
         self.assertIsInstance(output, JaggedTensor)
         self.assertEqual(output.jdata.shape, features.jdata.shape)
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_batch_norm_against_pytorch(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)
@@ -369,7 +473,7 @@ class TestNNModules(unittest.TestCase):
     # SyncBatchNorm
     # =========================================================================
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sync_batch_norm_forward(self, device, dtype):
         num_features = 16
         grid = self._make_dense_grid(device)

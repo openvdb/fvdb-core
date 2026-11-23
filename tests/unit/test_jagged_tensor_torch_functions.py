@@ -12,9 +12,10 @@ from typing import cast
 
 import numpy as np
 import torch
-from parameterized import parameterized
 
 import fvdb
+
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -48,14 +49,14 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
 
     # -------------- unary pointwise --------------
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_relu(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out = fvdb.relu(jt)
         self._assert_preserved_layout(out, jt)
         self.assertTrue(torch.allclose(out.jdata, torch.relu(jt.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_relu_inplace(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         before = jt.jdata.clone()
@@ -63,21 +64,21 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertIs(ret, jt)
         self.assertTrue(torch.allclose(jt.jdata, torch.relu(before)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sigmoid(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out = fvdb.sigmoid(jt)
         self._assert_preserved_layout(out, jt)
         self.assertTrue(torch.allclose(out.jdata, torch.sigmoid(jt.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_tanh(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out = fvdb.tanh(jt)
         self._assert_preserved_layout(out, jt)
         self.assertTrue(torch.allclose(out.jdata, torch.tanh(jt.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_exp_log(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out_exp = fvdb.exp(jt)
@@ -89,7 +90,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self._assert_preserved_layout(out_log, pos)
         self.assertTrue(torch.allclose(out_log.jdata, torch.log(pos.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sqrt(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -98,7 +99,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self._assert_preserved_layout(out, jt_pos)
         self.assertTrue(torch.allclose(out.jdata, torch.sqrt(jt_pos.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_floor_and_ceil_and_round(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out_f = fvdb.floor(jt)
@@ -111,7 +112,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(out_c.jdata, torch.ceil(jt.jdata)))
         self.assertTrue(torch.allclose(out_r.jdata, torch.round(jt.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_nan_to_num_and_clamp(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -129,7 +130,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
 
     # -------------- binary/ternary elementwise --------------
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_add_sub_mul_div_with_scalar(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         self.assertTrue(torch.allclose(fvdb.add(jt, 2.0).jdata, torch.add(jt.jdata, 2.0)))
@@ -137,7 +138,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(fvdb.mul(jt, 4).jdata, torch.mul(jt.jdata, 4)))
         self.assertTrue(torch.allclose(fvdb.true_divide(jt, 5).jdata, torch.true_divide(jt.jdata, 5)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_add_sub_mul_div_with_jagged(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -148,7 +149,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(fvdb.mul(jt, jt_b).jdata, torch.mul(jt.jdata, jt_b.jdata)))
         self.assertTrue(torch.allclose(fvdb.true_divide(jt, jt_b).jdata, torch.true_divide(jt.jdata, jt_b.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_floor_div_remainder_pow(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -163,7 +164,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(out2.jdata, torch.remainder(jt.jdata, 3)))
         self.assertTrue(torch.allclose(out3.jdata, torch.pow(jt_b.jdata, 2.0)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_minimum_maximum(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -175,7 +176,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(out_min.jdata, torch.minimum(jt.jdata, jt_b.jdata)))
         self.assertTrue(torch.allclose(out_max.jdata, torch.maximum(jt.jdata, jt_b.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_comparisons(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -192,7 +193,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
             self._assert_preserved_layout(out, jt)
             self.assertTrue(torch.all(out.jdata == fn(jt.jdata, jt_b.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_where(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         tensors = cast(list[torch.Tensor], jt.unbind())  # resolving unbind ambiguity
@@ -203,7 +204,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self._assert_preserved_layout(out, jt)
         self.assertTrue(torch.equal(out.jdata, torch.where(cond.jdata, jt.jdata, jt_b.jdata)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_out_argument(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         expected = torch.add(jt.jdata, 1.0)
@@ -215,7 +216,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
 
     # -------------- reductions over non-leading dims --------------
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sum_mean_keep_primary_dim(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out_sum = fvdb.sum(jt, dim=-1)
@@ -225,7 +226,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(out_sum.jdata, torch.sum(jt.jdata, dim=-1)))
         self.assertTrue(torch.allclose(out_mean.jdata, torch.mean(jt.jdata, dim=-1)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_amin_amax_argmin_argmax(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         amax = fvdb.amax(jt, dim=-1)
@@ -239,7 +240,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.equal(argmax.jdata, torch.argmax(jt.jdata, dim=-1)))
         self.assertTrue(torch.equal(argmin.jdata, torch.argmin(jt.jdata, dim=-1)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_all_any(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         # make boolean data
@@ -252,7 +253,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.equal(out_all.jdata, torch.all(cond.jdata, dim=-1)))
         self.assertTrue(torch.equal(out_any.jdata, torch.any(cond.jdata, dim=-1)))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_var_std_norm(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         out_var = fvdb.var(jt, dim=-1, unbiased=False)
@@ -267,7 +268,7 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
 
     # -------------- disallowed cases --------------
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_sum_over_all_dims_disallowed(self, device, dtype):
         jt, _ = self._mk_jt(device, dtype)
         with self.assertRaises(RuntimeError):

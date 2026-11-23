@@ -3,36 +3,73 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
 
+std::shared_ptr<detail::VbmCache>
+GridBatchData::makeVbmCache() {
+    return std::make_shared<detail::VbmCache>();
+}
+
+const detail::BatchVbm &
+GridBatchData::vbm() const {
+    return mVbmCache->acquire(*this);
+}
+
+detail::GridVbm
+GridBatchData::vbmAt(int64_t bi) const {
+    bi = negativeToPositiveIndexWithRangecheck(bi);
+    mVbmCache->acquire(*this);
+    return mVbmCache->gridVbm(bi);
+}
+
 // -----------------------------------------------------------------------
-// Methods that dereference mGridHdl (require complete TorchDeviceBuffer)
+// Methods that dereference mStorage
 // -----------------------------------------------------------------------
 
-const nanovdb::GridHandle<TorchDeviceBuffer> &
-GridBatchData::nanoGridHandle() const {
-    return *mGridHdl;
+GridStorage
+GridBatchData::copyStorage(const torch::Device &device, cudaStream_t stream) const {
+    return mStorage->to(device, stream);
+}
+
+cudaStream_t
+GridBatchData::storageStream() const {
+    return mStorage->stream();
 }
 
 const c10::Device
 GridBatchData::device() const {
-    return mGridHdl->buffer().device();
+    return mStorage->device();
+}
+
+// Both return nullptr when the storage is not accessible from that side, so the callers'
+// null checks stay meaningful; the byte offset is only applied to a real base pointer.
+nanovdb::OnIndexGrid *
+GridBatchData::deviceGridPtrAt(int64_t bi) const {
+    auto *base = static_cast<uint8_t *>(mStorage->deviceBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
+}
+
+nanovdb::OnIndexGrid *
+GridBatchData::hostGridPtrAt(int64_t bi) const {
+    auto *base = static_cast<uint8_t *>(mStorage->hostBytes());
+    return base ? reinterpret_cast<nanovdb::OnIndexGrid *>(base + cumBytesAt(bi)) : nullptr;
 }
 
 bool
 GridBatchData::isEmpty() const {
-    return mGridHdl->buffer().isEmpty();
+    return mStorage->isEmpty();
 }
 
 GridBatchData::Accessor
 GridBatchData::hostAccessor() const {
     TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
-    TORCH_CHECK(mGridHdl->template grid<nanovdb::ValueOnIndex>(),
-                "Failed to get host grid pointer");
+    const auto *grids = mStorage->hostGridAt<nanovdb::ValueOnIndex>(0);
+    TORCH_CHECK(grids, "Failed to get host grid pointer");
     return Accessor(mHostGridMetadata,
-                    mGridHdl->template grid<nanovdb::ValueOnIndex>(),
+                    grids,
                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
                     mBatchMetadata.mTotalVoxels,
                     mBatchMetadata.mTotalLeaves,
@@ -46,10 +83,10 @@ GridBatchData::deviceAccessor() const {
     TORCH_CHECK(!isEmpty(), "Cannot access empty grid");
     TORCH_CHECK(device().is_cuda() || device().is_privateuseone(),
                 "Cannot access device accessor without a CUDA or PrivateUse1 device");
-    TORCH_CHECK(mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
-                "Failed to get device grid pointer");
+    const auto *grids = mStorage->deviceGridAt<nanovdb::ValueOnIndex>(0);
+    TORCH_CHECK(grids, "Failed to get device grid pointer");
     return Accessor(mDeviceGridMetadata,
-                    mGridHdl->template deviceGrid<nanovdb::ValueOnIndex>(),
+                    grids,
                     mLeafBatchIndices.data_ptr<fvdb::JIdxType>(),
                     mBatchMetadata.mTotalVoxels,
                     mBatchMetadata.mTotalLeaves,
@@ -60,7 +97,7 @@ GridBatchData::deviceAccessor() const {
 
 void
 GridBatchData::checkDevice(const torch::Tensor &t) const {
-    torch::Device hdlDevice = mGridHdl->buffer().device();
+    torch::Device hdlDevice = mStorage->device();
     TORCH_CHECK(hdlDevice == t.device(),
                 "All tensors must be on the same device (" + hdlDevice.str() +
                     ") as index grid but got " + t.device().str());
@@ -68,22 +105,22 @@ GridBatchData::checkDevice(const torch::Tensor &t) const {
 
 void
 GridBatchData::checkDevice(const JaggedTensor &t) const {
-    torch::Device hdlDevice = mGridHdl->buffer().device();
+    torch::Device hdlDevice = mStorage->device();
     TORCH_CHECK(hdlDevice == t.device(),
                 "All tensors must be on the same device (" + hdlDevice.str() +
                     ") as index grid but got " + t.device().str());
 }
 
 GridBatchData::~GridBatchData() {
-    if (!mGridHdl) {
+    if (!mStorage) {
         return;
     }
-    const torch::Device dev = mGridHdl->buffer().device();
+    const torch::Device dev = mStorage->device();
     if (dev.is_cpu() || dev.is_cuda()) {
         fvdb::detail::freeHostGridMetadata(mHostGridMetadata);
         mHostGridMetadata = nullptr;
         if (dev.is_cuda()) {
-            fvdb::detail::freeDeviceGridMetadata(dev, mDeviceGridMetadata);
+            fvdb::detail::freeDeviceGridMetadata(mDeviceGridMetadata);
             mDeviceGridMetadata = nullptr;
         }
     } else if (dev.is_privateuseone()) {
@@ -165,11 +202,14 @@ const torch::Tensor
 GridBatchData::voxelSizesTensor() const {
     torch::Tensor retTorch =
         torch::empty({batchSize(), 3}, torch::TensorOptions().dtype(torch::kFloat64));
+    // Direct accessor fill: per-element tensor indexing costs 6 ATen dispatches per grid, which
+    // dominates plan-construction-time transform validation (issue #755).
+    auto acc = retTorch.accessor<double, 2>();
     for (int64_t bi = 0; bi < batchSize(); bi += 1) {
         const auto voxSize = voxelSizeAt(bi);
-        retTorch[bi][0]    = voxSize[0];
-        retTorch[bi][1]    = voxSize[1];
-        retTorch[bi][2]    = voxSize[2];
+        acc[bi][0]         = voxSize[0];
+        acc[bi][1]         = voxSize[1];
+        acc[bi][2]         = voxSize[2];
     }
     return retTorch;
 }
@@ -178,11 +218,12 @@ const torch::Tensor
 GridBatchData::voxelOriginsTensor() const {
     torch::Tensor retTorch =
         torch::empty({batchSize(), 3}, torch::TensorOptions().dtype(torch::kFloat64));
+    auto acc = retTorch.accessor<double, 2>();
     for (int64_t bi = 0; bi < batchSize(); bi += 1) {
         const auto voxOrigin = voxelOriginAt(bi);
-        retTorch[bi][0]      = voxOrigin[0];
-        retTorch[bi][1]      = voxOrigin[1];
-        retTorch[bi][2]      = voxOrigin[2];
+        acc[bi][0]           = voxOrigin[0];
+        acc[bi][1]           = voxOrigin[1];
+        acc[bi][2]           = voxOrigin[2];
     }
     return retTorch;
 }
@@ -324,7 +365,8 @@ GridBatchData::jaggedTensor(const torch::Tensor &data) const {
     checkDevice(data);
     TORCH_CHECK(data.dim() >= 1, "Data have more than one dimensions");
     TORCH_CHECK(data.size(0) == totalVoxels(), "Data size mismatch");
-    return JaggedTensor::from_data_offsets_and_list_ids(data, voxelOffsets(), jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        data, voxelOffsets(), jlidx(), batchSize());
 }
 
 torch::Tensor

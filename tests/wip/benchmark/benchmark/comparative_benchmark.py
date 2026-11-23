@@ -115,7 +115,6 @@ def main(args) -> None:
                 start_events[j].record()
 
                 if args.detail:
-
                     with profile(activities=[ProfilerActivity.CPU], record_shapes=True) as prof:
                         with record_function(encode_range_name("main", "-", {})):
                             baseline_out = model(baseline_input, **aux_dict)

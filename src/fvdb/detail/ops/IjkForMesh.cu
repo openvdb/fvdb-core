@@ -79,9 +79,9 @@ generateSurfaceSamples(const VoxelCoordTransform *transforms,
     using Vec3F = nanovdb::math::Vec3<ScalarF>;
     using Vec3I = nanovdb::math::Vec3<ScalarI>;
 
-    const int32_t tid     = threadIdx.x + blockIdx.x * blockDim.x;
-    const int32_t numTris = cumSamplesPerTri.size(0) - 1; // Total number of triangles in the mesh
-    const int32_t totalSamples =
+    const int64_t tid     = int64_t(threadIdx.x) + int64_t(blockIdx.x) * int64_t(blockDim.x);
+    const int64_t numTris = cumSamplesPerTri.size(0) - 1; // Total number of triangles in the mesh
+    const int64_t totalSamples =
         cumSamplesPerTri[numTris]; // Total number of ijk samples we're going to generate
 
     if (tid >= totalSamples) {
@@ -250,37 +250,28 @@ dispatchIJKForMesh<torch::kCUDA>(const JaggedTensor &meshVertices,
                     cudaStream_t stream =
                         c10::cuda::getCurrentCUDAStream(meshFaces.device().index()).stream();
 
-                    if (outIJK.numel() >= 1 << 31) {
-                        auto outIJKAcc =
-                            outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
-                        auto outJidxKAcc =
-                            outJidx
-                                .packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-                        generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
-                            <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(transformDevPtr,
-                                                                          verticesAcc,
-                                                                          facesAcc,
-                                                                          samplesPerTriCumSumAcc,
-                                                                          outIJKAcc,
-                                                                          outJidxKAcc);
-                    } else {
-                        auto outIJKAcc =
-                            outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
-                        auto outJidxKAcc =
-                            outJidx
-                                .packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
-                        generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
-                            <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(transformDevPtr,
-                                                                          verticesAcc,
-                                                                          facesAcc,
-                                                                          samplesPerTriCumSumAcc,
-                                                                          outIJKAcc,
-                                                                          outJidxKAcc);
-                    }
+                    // packed_accessor64 (64-bit indexing) handles outputs above 2^31 elements,
+                    // and the kernel indexes with int64 tids, so a single launch path is correct
+                    // at every size.
+                    auto outIJKAcc =
+                        outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+                    auto outJidxKAcc =
+                        outJidx.packed_accessor64<fvdb::JIdxType, 1, torch::RestrictPtrTraits>();
+                    generateSurfaceSamples<scalar_f, scalar_i, TorchRAcc64>
+                        <<<numBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(transformDevPtr,
+                                                                      verticesAcc,
+                                                                      facesAcc,
+                                                                      samplesPerTriCumSumAcc,
+                                                                      outIJKAcc,
+                                                                      outJidxKAcc);
                     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-                    return fvdb::JaggedTensor::from_data_indices_and_list_ids(
-                        outIJK, outJidx, meshFaces.jlidx(), meshFaces.num_tensors());
+                    return fvdb::JaggedTensor::from_data_indices_and_list_ids_unsafe(
+                        outIJK,
+                        outJidx,
+                        meshFaces.jlidx(),
+                        meshFaces.num_tensors(),
+                        meshFaces.num_outer_lists());
                 }),
                 AT_EXPAND(AT_FLOATING_TYPES),
                 c10::kHalf);

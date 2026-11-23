@@ -1,9 +1,10 @@
 name: fVDB Conda Build and Test
 
 on:
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
   workflow_dispatch:
     inputs:
       branch:
@@ -12,23 +13,30 @@ on:
         default: "main"
 
 # Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
+# Only manual dispatches are de-duplicated here. When called from
+# pr-tests.yml, the caller's concurrency group already cancels the previous
+# run for the PR; a second group at this level would let a new run cancel the
+# previous run's stop-runner job mid-teardown and leave an EC2 instance
+# running. Called runs therefore get a group unique to the run. (The group
+# must not be built from github.workflow: in a called workflow that is the
+# caller's name and would collide with the caller's own group.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('fvdb-conda-dispatch-{0}', github.ref) || format('fvdb-conda-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
+# Read-only by default. Jobs that need more are granted it individually
+# (check-changes; the runner start and stop calls). The jobs that run PR code
+# get contents: read only.
 permissions:
   contents: read
-  deployments: read
-  pull-requests: read
-  issues: read
-  # Need ID token write permission to use OIDC
-  id-token: write
 
 jobs:
   ##############################################################################
   # CHECK FOR RELEVANT CHANGES
   ##############################################################################
   check-changes:
+    permissions:
+      pull-requests: read # scopes required by check-changes.yml; see that file
     uses: ./.github/workflows/check-changes.yml
 
   versions:
@@ -40,29 +48,19 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     needs: [check-changes, versions]
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     if: >-
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
-    outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+    uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      instance-type: m6a.8xlarge
+      runner-label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
+      az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
   fvdb-build:
     name: fVDB Build (Conda)
     needs: [start-build-runner, versions] # required to start the main job when the runner is ready
@@ -81,10 +79,11 @@ jobs:
       - name: Install system dependencies
         run: dnf install -y git procps-ng findutils
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -121,7 +120,7 @@ jobs:
       #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Set up fvdb_build Conda env
-        uses: mamba-org/setup-micromamba@v3
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           post-cleanup: 'all'
           environment-name: fvdb_build
@@ -132,12 +131,14 @@ jobs:
           micromamba activate fvdb_build
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
           pip install "$NANOVDB_EDITOR_SPEC"
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '8.9+PTX'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}"
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: dist/*.whl
             retention-days: 2
 
@@ -147,9 +148,9 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-conda
             path: fvdb-gtest.tar
             retention-days: 2
 
@@ -159,23 +160,18 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs, but only if the
     # start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-build-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      label: tests-build-${{ github.run_id }}-${{ github.run_attempt }}
+      ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
 
 
   ##############################################################################
@@ -184,26 +180,17 @@ jobs:
   start-tests-gpu-runner:
     name: Start EC2 GPU runner for tests
     needs: [fvdb-build, versions]
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 GPU runner
-        id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
-          ec2-instance-type: g6.xlarge # 4 CPU-core, L4 GPU
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+      fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
+      runner-label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -226,10 +213,11 @@ jobs:
       - name: Install system dependencies
         run: dnf install -y git procps-ng findutils
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -248,7 +236,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v3
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -256,9 +244,9 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download gtests
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-conda
             path: .
 
       - name: Extract tar
@@ -284,18 +272,24 @@ jobs:
         PYTHONPATH: ""
         CPM_SOURCE_CACHE: "/__w/cpm_cache"
         CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
+        # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
+        NVIDIA_DRIVER_CAPABILITIES: all
+        # Point the conda Vulkan loader at the driver manifest the toolkit mounts, in case it skips /etc
+        VK_DRIVER_FILES: /etc/vulkan/icd.d/nvidia_icd.json
       options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
     defaults:
       run:
         shell: bash -el {0}
     steps:
       - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
+        # libXext and libglvnd-egl let the NVIDIA Vulkan driver load for the viewer tests
+        run: dnf install -y git procps-ng findutils libXext libglvnd-egl
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -315,7 +309,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v3
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -323,9 +317,9 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: ./dist
 
       - name: Install package
@@ -334,6 +328,14 @@ jobs:
             pip install ./dist/*.whl
 
       - name: Run tests
+        env:
+          # The whole parametrized matrix shares one process, so the caching allocator's
+          # reserved pool only ever grows and its high-water mark ends up far above any
+          # single test's live footprint. Freeing straight back to the driver keeps the
+          # suite within the runner's VRAM, at the cost of a cudaMalloc/cudaFree per
+          # allocation. See
+          # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
+          PYTORCH_NO_CUDA_MEMORY_CACHING: 1
         run: |
             micromamba activate fvdb_test
             NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
@@ -361,10 +363,11 @@ jobs:
       - name: Install system dependencies
         run: dnf install -y git procps-ng findutils
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -384,7 +387,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@v3
+        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
           post-cleanup: 'all'
@@ -392,9 +395,9 @@ jobs:
           environment-file: env/test_environment.yml
 
       - name: Download package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-conda
             path: ./dist
 
       - name: Install package
@@ -433,20 +436,15 @@ jobs:
       - fvdb-unit-tests # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      label: tests-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}

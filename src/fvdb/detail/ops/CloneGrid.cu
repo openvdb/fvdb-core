@@ -10,19 +10,20 @@ namespace detail {
 namespace ops {
 
 c10::intrusive_ptr<GridBatchData>
-cloneGrid(const GridBatchData &grid, const torch::Device &device, bool blocking) {
+cloneGrid(const GridBatchData &grid, const torch::Device &requested) {
+    // `torch.device("cuda")` arrives index-less; it means the current CUDA device.
+    const torch::Device device = GridStorage::resolveDevice(requested);
     if (grid.batchSize() == 0) {
         return makeEmptyGridBatchData(device);
     }
 
-    TorchDeviceBuffer guide(0, device);
-    nanovdb::GridHandle<TorchDeviceBuffer> clonedHdl =
-        grid.nanoGridHandle().copy<TorchDeviceBuffer>(guide);
-
+    // The selected grids as fresh storage on the target device, one pass either way: a
+    // contiguous batch's storage is copied whole, a sliced or non-contiguous view (whose storage
+    // holds more physical grids than the batch selects) is compacted straight onto the device.
+    GridStorage cloned = contiguousGridStorage(grid, device);
     std::vector<nanovdb::Vec3d> voxelSizes, voxelOrigins;
     grid.gridVoxelSizesAndOrigins(voxelSizes, voxelOrigins);
-
-    return makeContiguous(makeGridBatchData(std::move(clonedHdl), voxelSizes, voxelOrigins));
+    return makeGridBatchData(std::move(cloned), voxelSizes, voxelOrigins);
 }
 
 } // namespace ops

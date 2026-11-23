@@ -9,7 +9,33 @@
     (__CUDACC_VER_MAJOR__ > 12) || (__CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ >= 8)
 #endif
 
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAStream.h>
+
+#include <cuda_runtime_api.h>
+
+#define FVDB_CUB_WRAPPER(func, ...)                                             \
+    do {                                                                        \
+        size_t tempStorageBytes = 0;                                            \
+        C10_CUDA_CHECK(func(nullptr, tempStorageBytes, __VA_ARGS__));           \
+        auto &cachingAllocator = *::c10::cuda::CUDACachingAllocator::get();     \
+        auto tempStorage       = cachingAllocator.allocate(tempStorageBytes);   \
+        C10_CUDA_CHECK(func(tempStorage.get(), tempStorageBytes, __VA_ARGS__)); \
+    } while (false)
+
+// Like FVDB_CUB_WRAPPER but allocates scratch with cudaMallocAsync/cudaFreeAsync on `stream`.
+// `stream` is appended to the CUB call automatically, so __VA_ARGS__ contains only the arguments
+// preceding the stream.
+#define FVDB_CUB_WRAPPER_ASYNC(stream, func, ...)                                 \
+    do {                                                                          \
+        size_t tempStorageBytes = 0;                                              \
+        void *tempStorage       = nullptr;                                        \
+        C10_CUDA_CHECK(func(tempStorage, tempStorageBytes, __VA_ARGS__, stream)); \
+        C10_CUDA_CHECK(cudaMallocAsync(&tempStorage, tempStorageBytes, stream));  \
+        C10_CUDA_CHECK(func(tempStorage, tempStorageBytes, __VA_ARGS__, stream)); \
+        C10_CUDA_CHECK(cudaFreeAsync(tempStorage, stream));                       \
+    } while (false)
 
 namespace fvdb {
 
@@ -50,13 +76,13 @@ mergeStreams() {
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
     }
 
     // Create an event on the merge device
     C10_CUDA_CHECK(cudaSetDevice(mergeDeviceId));
-    C10_CUDA_CHECK(cudaEventCreate(&mergeEvent, cudaEventDisableTiming));
+    C10_CUDA_CHECK(cudaEventCreateWithFlags(&mergeEvent, cudaEventDisableTiming));
     auto mergeStream = c10::cuda::getCurrentCUDAStream(mergeDeviceId);
     // On the merge stream, wait until the per-device events have completed
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {

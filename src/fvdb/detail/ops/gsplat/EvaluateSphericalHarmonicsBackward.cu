@@ -5,17 +5,79 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
+#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <ATen/cuda/Atomic.cuh>
 #include <c10/cuda/CUDAGuard.h>
+
+#include <cub/block/block_reduce.cuh>
+#include <cub/device/device_segmented_reduce.cuh>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
+
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+
+#include <type_traits>
 
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 namespace {
+
+template <typename T> struct ViewDirectionGradient {
+    T x;
+    T y;
+    T z;
+};
+
+template <typename T> struct AddViewDirectionGradients {
+    __host__ __device__ ViewDirectionGradient<T>
+    operator()(const ViewDirectionGradient<T> &lhs, const ViewDirectionGradient<T> &rhs) const {
+        return {lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z};
+    }
+};
+
+struct CameraBlockSumOffset {
+    int64_t numBlockSumsPerCamera;
+
+    __host__ __device__ int64_t
+    operator()(const int64_t cameraId) const {
+        return cameraId * numBlockSumsPerCamera;
+    }
+};
+
+template <typename T>
+cudaError_t
+reduceViewDirectionGradientBlockSums(void *tempStorage,
+                                     size_t &tempStorageBytes,
+                                     const T *viewDirectionGradientBlockSums,
+                                     T *reducedViewDirectionGradients,
+                                     const int64_t numCameras,
+                                     const int64_t numBlockSumsPerCamera,
+                                     const cudaStream_t stream) {
+    static_assert(sizeof(ViewDirectionGradient<T>) == 3 * sizeof(T));
+
+    const auto countingOffsets = thrust::make_counting_iterator<int64_t>(0);
+    const auto segmentOffsets  = thrust::make_transform_iterator(
+        countingOffsets, CameraBlockSumOffset{numBlockSumsPerCamera});
+    return cub::DeviceSegmentedReduce::Reduce(
+        tempStorage,
+        tempStorageBytes,
+        reinterpret_cast<const ViewDirectionGradient<T> *>(viewDirectionGradientBlockSums),
+        reinterpret_cast<ViewDirectionGradient<T> *>(reducedViewDirectionGradients),
+        numCameras,
+        segmentOffsets,
+        segmentOffsets + 1,
+        AddViewDirectionGradients<T>{},
+        ViewDirectionGradient<T>{T(0), T(0), T(0)},
+        stream);
+}
 
 // We repeat this code everywhere in evalShFunctionVJP to compute the gradient of the
 // direction and write it out, so pull this into a function.
@@ -27,6 +89,19 @@ writeDLossDViewDir(T x, T y, T z, T vX, T vY, T vZ, T inorm, float3 *dLossDViewD
     dLossDViewDir->x = (vX - dLossDViewDirDotViewDir * x) * inorm;
     dLossDViewDir->y = (vY - dLossDViewDirDotViewDir * y) * inorm;
     dLossDViewDir->z = (vZ - dLossDViewDirDotViewDir * z) * inorm;
+}
+
+template <typename T>
+inline __device__ float3
+viewDirectionFromWorldToCamMatrix(const T *__restrict__ mean,
+                                  const T *__restrict__ worldToCamMatrix) {
+    const T tx = worldToCamMatrix[3];
+    const T ty = worldToCamMatrix[7];
+    const T tz = worldToCamMatrix[11];
+    return make_float3(
+        mean[0] + worldToCamMatrix[0] * tx + worldToCamMatrix[4] * ty + worldToCamMatrix[8] * tz,
+        mean[1] + worldToCamMatrix[1] * tx + worldToCamMatrix[5] * ty + worldToCamMatrix[9] * tz,
+        mean[2] + worldToCamMatrix[2] * tx + worldToCamMatrix[6] * ty + worldToCamMatrix[10] * tz);
 }
 
 template <typename T>
@@ -280,60 +355,184 @@ __global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
 computeShBackward(
     const int64_t offset,
     const int64_t count,
-    const int64_t C,
     const int64_t N,
     const int64_t K,
     const int64_t D,
     const int64_t shDegreeToUse,
-    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> viewDirs,     // [C, N, 3]
-    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs,    // [K-1, N, D]
-    const int *__restrict__ radii,                                                    // [C, N, 2]
+    const T *__restrict__ means,                                                   // [N, 3]
+    const T *__restrict__ worldToCamMatrices,                                      // [C, 4, 4]
+    const int32_t *__restrict__ cameraIds,                                         // [N] optional
+    const int32_t *__restrict__ gaussianIds,                                       // [N] optional
+    const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> shNCoeffs, // [K-1, N, D]
+    const int *__restrict__ radii,                                                 // [C, N, 2]
     const torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits>
-        dLossDRenderQuantities,                                                       // [C, N, D]
+        dLossDRenderQuantities,                                                    // [C, N, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs, // [N, 1, D]
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDShNCoeffs, // [N, K-1, D]
-    T *__restrict__ outDLossDViewDirs // [C, N, 3] optiondl
+    T *__restrict__ outDLossDMeans,           // [N, 3] optional
+    T *__restrict__ outDLossDViewDirs,        // [C, N, 3] optional, packed only
+    T *__restrict__ outDLossDViewDirBlockSums // [C, gridDim.x, 3] optional, unpacked only
 ) {
-    // parallelize over C * N * D
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
-    if (idx >= count * C * D) {
+    // Each block handles one camera and parallelizes over count * D.
+    const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; // gidx * D + c
+    const auto cid    = blockIdx.y;                                                  // camera index
+
+    int64_t gidx       = 0;
+    int64_t gid        = 0;
+    int64_t gaussianId = 0;
+    bool isActive      = idx < count * D;
+    if (isActive) {
+        gidx     = idx / D;
+        gid      = gidx + offset;
+        isActive = radii == nullptr ||
+                   (radii[(cid * N + gid) * 2 + 0] > 0 && radii[(cid * N + gid) * 2 + 1] > 0);
+    }
+
+    float3 dLossDViewDir{T(0), T(0), T(0)};
+    if (isActive) {
+        static_assert(std::is_same<T, float>::value,
+                      "SH kernels assume float precision (float3 casts)");
+        const auto c              = idx % D; // render channel
+        const int64_t cameraId    = cameraIds == nullptr ? cid : cameraIds[gid];
+        gaussianId                = gaussianIds == nullptr ? gid : gaussianIds[gid];
+        const T *worldToCamMatrix = worldToCamMatrices + cameraId * 16;
+        const float3 viewDir =
+            viewDirectionFromWorldToCamMatrix(means + gaussianId * 3, worldToCamMatrix);
+        const T *dLossDRenderQuantity = dLossDRenderQuantities[cid][gid].data();
+        float3 *dLossDViewDirPtr      = outDLossDMeans == nullptr && outDLossDViewDirs == nullptr &&
+                                           outDLossDViewDirBlockSums == nullptr
+                                            ? nullptr
+                                            : &dLossDViewDir;
+        evalShFunctionVJP(shDegreeToUse,
+                          gid,
+                          c,
+                          viewDir,
+                          shNCoeffs,
+                          dLossDRenderQuantity,
+                          outDLossDSh0Coeffs,
+                          outDLossDShNCoeffs,
+                          dLossDViewDirPtr);
+    }
+
+    // The camera axis guarantees that all threads in this block contribute to the same camera.
+    // Emit one sum per block so CUB can reduce a compact, camera-major intermediate instead
+    // of materializing and rereading [C, N, 3] view-direction gradients.
+    if (outDLossDViewDirBlockSums != nullptr) {
+        using BlockReduce = cub::BlockReduce<ViewDirectionGradient<T>, DEFAULT_BLOCK_DIM>;
+        __shared__ typename BlockReduce::TempStorage tempStorage;
+        const auto blockSum = BlockReduce(tempStorage)
+                                  .Reduce({dLossDViewDir.x, dLossDViewDir.y, dLossDViewDir.z},
+                                          AddViewDirectionGradients<T>{});
+        if (threadIdx.x == 0) {
+            T *outBlockSum = outDLossDViewDirBlockSums +
+                             (static_cast<int64_t>(cid) * gridDim.x + blockIdx.x) * 3;
+            outBlockSum[0] = blockSum.x;
+            outBlockSum[1] = blockSum.y;
+            outBlockSum[2] = blockSum.z;
+        }
+    }
+
+    // Adjacent active threads handle the feature channels of the same camera-Gaussian pair.
+    // Reduce their direction gradients before chaining into means or writing packed gradients.
+    if (isActive && (outDLossDMeans != nullptr || outDLossDViewDirs != nullptr)) {
+        auto activeThreads = cooperative_groups::coalesced_threads();
+        auto pairThreads =
+            cooperative_groups::labeled_partition(activeThreads, static_cast<int>(gidx));
+        dLossDViewDir.x =
+            cooperative_groups::reduce(pairThreads, dLossDViewDir.x, cooperative_groups::plus<T>());
+        dLossDViewDir.y =
+            cooperative_groups::reduce(pairThreads, dLossDViewDir.y, cooperative_groups::plus<T>());
+        dLossDViewDir.z =
+            cooperative_groups::reduce(pairThreads, dLossDViewDir.z, cooperative_groups::plus<T>());
+        if (pairThreads.thread_rank() == 0) {
+            if (outDLossDMeans != nullptr) {
+                T *dLossDMean = outDLossDMeans + gaussianId * 3;
+                gpuAtomicAdd(dLossDMean, dLossDViewDir.x);
+                gpuAtomicAdd(dLossDMean + 1, dLossDViewDir.y);
+                gpuAtomicAdd(dLossDMean + 2, dLossDViewDir.z);
+            }
+            if (outDLossDViewDirs != nullptr) {
+                T *outDLossDViewDir = outDLossDViewDirs + (cid * N + gid) * 3;
+                gpuAtomicAdd(outDLossDViewDir, dLossDViewDir.x);
+                gpuAtomicAdd(outDLossDViewDir + 1, dLossDViewDir.y);
+                gpuAtomicAdd(outDLossDViewDir + 2, dLossDViewDir.z);
+            }
+        }
+    }
+}
+
+template <typename T>
+__device__ inline void
+writeWorldToCamMatrixGradient(const T *__restrict__ worldToCamMatrix,
+                              const ViewDirectionGradient<T> &gradient,
+                              T *__restrict__ output) {
+    const T tx = worldToCamMatrix[3];
+    const T ty = worldToCamMatrix[7];
+    const T tz = worldToCamMatrix[11];
+    output[0]  = tx * gradient.x;
+    output[1]  = tx * gradient.y;
+    output[2]  = tx * gradient.z;
+    output[3]  = worldToCamMatrix[0] * gradient.x + worldToCamMatrix[1] * gradient.y +
+                worldToCamMatrix[2] * gradient.z;
+    output[4] = ty * gradient.x;
+    output[5] = ty * gradient.y;
+    output[6] = ty * gradient.z;
+    output[7] = worldToCamMatrix[4] * gradient.x + worldToCamMatrix[5] * gradient.y +
+                worldToCamMatrix[6] * gradient.z;
+    output[8]  = tz * gradient.x;
+    output[9]  = tz * gradient.y;
+    output[10] = tz * gradient.z;
+    output[11] = worldToCamMatrix[8] * gradient.x + worldToCamMatrix[9] * gradient.y +
+                 worldToCamMatrix[10] * gradient.z;
+}
+
+template <typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+reducePackedViewDirectionGradients(const int64_t N,
+                                   const int32_t *__restrict__ cameraIds,
+                                   const T *__restrict__ dLossDViewDirs,
+                                   T *__restrict__ outReducedViewDirectionGradients) {
+    const int64_t gid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid >= N) {
         return;
     }
 
-    const auto eid = idx / D;              // cidx * N + gidx
-    const auto cid = eid / count;          // camera index
-    const auto gid = eid % count + offset; // gaussian index
-    const auto c   = idx % D;              // render channel
-    if (radii != nullptr &&
-        (radii[(cid * N + gid) * 2 + 0] <= 0 || radii[(cid * N + gid) * 2 + 1] <= 0)) {
+    const int32_t cameraId         = cameraIds[gid];
+    const T *dLossDViewDir         = dLossDViewDirs + gid * 3;
+    auto activeThreads             = cooperative_groups::coalesced_threads();
+    auto threadsForCamera          = cooperative_groups::labeled_partition(activeThreads, cameraId);
+    ViewDirectionGradient<T> local = {dLossDViewDir[0], dLossDViewDir[1], dLossDViewDir[2]};
+    local.x = cooperative_groups::reduce(threadsForCamera, local.x, cooperative_groups::plus<T>());
+    local.y = cooperative_groups::reduce(threadsForCamera, local.y, cooperative_groups::plus<T>());
+    local.z = cooperative_groups::reduce(threadsForCamera, local.z, cooperative_groups::plus<T>());
+
+    if (threadsForCamera.thread_rank() == 0) {
+        T *reducedGradient = outReducedViewDirectionGradients + cameraId * 3;
+        gpuAtomicAdd(reducedGradient, local.x);
+        gpuAtomicAdd(reducedGradient + 1, local.y);
+        gpuAtomicAdd(reducedGradient + 2, local.z);
+    }
+}
+
+template <typename T>
+__global__ __launch_bounds__(DEFAULT_BLOCK_DIM) void
+viewDirectionGradientsToWorldToCamMatrices(const int64_t cameraOffset,
+                                           const int64_t cameraCount,
+                                           const T *__restrict__ worldToCamMatrices,
+                                           const T *__restrict__ reducedViewDirectionGradients,
+                                           T *__restrict__ outDLossDWorldToCamMatrices) {
+    const int64_t localCameraId = blockIdx.x * blockDim.x + threadIdx.x;
+    if (localCameraId >= cameraCount) {
         return;
     }
+    const int64_t cameraId = cameraOffset + localCameraId;
 
-    static_assert(std::is_same<T, float>::value,
-                  "SH kernels assume float precision (float3 casts)");
-    using vec3t            = float3;
-    const bool hasViewDirs = viewDirs.size(0) > 0;
-    const vec3t viewDir    = hasViewDirs ? *reinterpret_cast<vec3t *>(viewDirs[cid][gid].data())
-                                         : vec3t{T(0), T(0), T(0)};
-    const T *dLossDRenderQuantityPtr = dLossDRenderQuantities[cid][gid].data();
-
-    vec3t dLossDViewDir{T(0), T(0), T(0)};
-    vec3t *outDLossDViewDirPtr = outDLossDViewDirs == nullptr ? nullptr : &dLossDViewDir;
-
-    evalShFunctionVJP(shDegreeToUse,
-                      gid,
-                      c,
-                      viewDir,
-                      shNCoeffs,
-                      dLossDRenderQuantityPtr,
-                      outDLossDSh0Coeffs,
-                      outDLossDShNCoeffs,
-                      outDLossDViewDirPtr);
-    if (outDLossDViewDirs != nullptr) {
-        gpuAtomicAdd(outDLossDViewDirs + (cid * N + gid) * 3, dLossDViewDir.x);
-        gpuAtomicAdd(outDLossDViewDirs + (cid * N + gid) * 3 + 1, dLossDViewDir.y);
-        gpuAtomicAdd(outDLossDViewDirs + (cid * N + gid) * 3 + 2, dLossDViewDir.z);
-    }
+    const T *worldToCamMatrix    = worldToCamMatrices + cameraId * 16;
+    const T *reducedGradient     = reducedViewDirectionGradients + localCameraId * 3;
+    T *outDLossDWorldToCamMatrix = outDLossDWorldToCamMatrices + cameraId * 16;
+    writeWorldToCamMatrixGradient(worldToCamMatrix,
+                                  {reducedGradient[0], reducedGradient[1], reducedGradient[2]},
+                                  outDLossDWorldToCamMatrix);
 }
 
 template <typename T>
@@ -350,7 +549,8 @@ computeShDiffuseOnlyBackward(
     torch::PackedTensorAccessor64<T, 3, torch::RestrictPtrTraits> outDLossDSh0Coeffs // [N, 1, D]
 ) {
     // parallelize over C * N * D
-    auto idx = blockIdx.x * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
+    const int64_t idx =
+        static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; // cidx * N * D + gidx * D + c
     if (idx >= count * C * D) {
         return;
     }
@@ -371,36 +571,47 @@ computeShDiffuseOnlyBackward(
 } // namespace
 
 template <torch::DeviceType>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchEvaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                                       const int64_t numCameras,
                                       const int64_t numGaussians,
-                                      const torch::Tensor &viewDirs,  // [C, N, 3] or empty
-                                      const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                      const torch::Tensor &dLossDColors,
-                                      const torch::Tensor &radii,     // [C, N, 2]
-                                      const bool computeDLossDViewDirs);
+                                      const torch::Tensor &means,              // [N, 3]
+                                      const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                      const torch::Tensor &cameraIds,          // [N] optional
+                                      const torch::Tensor &gaussianIds,        // [N] optional
+                                      const torch::Tensor &shNCoeffs,          // [N, K-1, D]
+                                      const torch::Tensor &dLossDColors,       // [C, N, D]
+                                      const torch::Tensor &radii,              // [C, N, 2]
+                                      const bool computeDLossDMeans,
+                                      const bool computeDLossDWorldToCamMatrices);
 
 template <>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     const int64_t shDegreeToUse,
     const int64_t numCameras,
     const int64_t numGaussians,
-    const torch::Tensor &viewDirs,               // [C, N, 3]
+    const torch::Tensor &means,                  // [N, 3]
+    const torch::Tensor &worldToCamMatrices,     // [C, 4, 4]
+    const torch::Tensor &cameraIds,              // [N] optional
+    const torch::Tensor &gaussianIds,            // [N] optional
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
     const torch::Tensor &radii,                  // [C, N, 2]
-    const bool computeDLossDViewDirs) {
+    const bool computeDLossDMeans,
+    const bool computeDLossDWorldToCamMatrices) {
     FVDB_FUNC_RANGE();
     const at::cuda::OptionalCUDAGuard device_guard(at::device_of(dLossDRenderQuantities));
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasViewirs   = viewDirs.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     if (hasShNCoeffs) {
-        TORCH_CHECK_VALUE(hasViewirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
+                          "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_cuda(), "shNCoeffs must be a CUDA tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K-1, D]");
         TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians,
@@ -428,15 +639,53 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     const int64_t TOTAL_ELEMS = C * N * D;
     const int64_t NUM_BLOCKS  = GET_BLOCKS(TOTAL_ELEMS, DEFAULT_BLOCK_DIM);
 
-    // If you are using degree > 0, then we are going to use the directions tensor which means
-    // we need to check it has the right shape
-    if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
-        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
+    const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+    const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+    const bool isPacked =
+        hasCameraIds || hasGaussianIds ||
+        (hasMeans && hasWorldToCamMatrices && cameraIds.defined() && gaussianIds.defined() &&
+         (means.size(0) != N || worldToCamMatrices.size(0) != C));
+
+    // View directions are computed in the kernel from the means and world-to-camera matrices.
+    if (hasShNCoeffs && K > 1) {
+        TORCH_CHECK_VALUE(means.is_cuda() && means.scalar_type() == torch::kFloat32,
+                          "means must be a float32 CUDA tensor");
+        TORCH_CHECK_VALUE(means.dim() == 2 && means.size(1) == 3 && means.is_contiguous(),
+                          "means must be contiguous with shape [N, 3]");
+        TORCH_CHECK_VALUE(worldToCamMatrices.is_cuda() &&
+                              worldToCamMatrices.scalar_type() == torch::kFloat32,
+                          "worldToCamMatrices must be a float32 CUDA tensor");
+        TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(1) == 4 &&
+                              worldToCamMatrices.size(2) == 4 && worldToCamMatrices.is_contiguous(),
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
         TORCH_CHECK_VALUE(
-            shNCoeffs.size(0) == viewDirs.size(1),
-            "shNCoeffs must have shape [N, K-1, D] and viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(viewDirs.is_cuda(), "dirs must be a CUDA tensor");
-        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+            means.device() == dLossDRenderQuantities.device() &&
+                worldToCamMatrices.device() == dLossDRenderQuantities.device(),
+            "means and worldToCamMatrices must be on the same device as dLossDRenderQuantities");
+        TORCH_CHECK_VALUE(
+            hasCameraIds == hasGaussianIds,
+            "cameraIds and gaussianIds must either both be empty or both be populated");
+        if (isPacked) {
+            TORCH_CHECK_VALUE(C == 1, "packed SH evaluation must have numCameras == 1");
+            TORCH_CHECK_VALUE(cameraIds.is_cuda() && gaussianIds.is_cuda(),
+                              "cameraIds and gaussianIds must be CUDA tensors");
+            TORCH_CHECK_VALUE(cameraIds.scalar_type() == torch::kInt32 &&
+                                  gaussianIds.scalar_type() == torch::kInt32,
+                              "cameraIds and gaussianIds must be int32 tensors");
+            TORCH_CHECK_VALUE(cameraIds.dim() == 1 && gaussianIds.dim() == 1 &&
+                                  cameraIds.size(0) == N && gaussianIds.size(0) == N,
+                              "cameraIds and gaussianIds must have shape [N]");
+            TORCH_CHECK_VALUE(cameraIds.is_contiguous() && gaussianIds.is_contiguous(),
+                              "cameraIds and gaussianIds must be contiguous");
+            TORCH_CHECK_VALUE(
+                cameraIds.device() == dLossDRenderQuantities.device() &&
+                    gaussianIds.device() == dLossDRenderQuantities.device(),
+                "cameraIds and gaussianIds must be on the same device as dLossDRenderQuantities");
+        } else {
+            TORCH_CHECK_VALUE(means.size(0) == N, "means must have shape [N, 3] in unpacked mode");
+            TORCH_CHECK_VALUE(worldToCamMatrices.size(0) == C,
+                              "worldToCamMatrices must have shape [C, 4, 4] in unpacked mode");
+        }
     }
 
     at::cuda::CUDAStream stream =
@@ -450,38 +699,109 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
     if (hasShNCoeffs && K > 1) {
         torch::Tensor dLossDShNCoeffs = torch::zeros_like(shNCoeffs);
         torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
+        torch::Tensor dLossDMeans;
+        torch::Tensor dLossDWorldToCamMatrices;
         torch::Tensor dLossDViewDirs;
-        if (computeDLossDViewDirs) {
-            dLossDViewDirs = torch::zeros_like(viewDirs);
+        torch::Tensor dLossDViewDirBlockSums;
+        torch::Tensor reducedViewDirectionGradients;
+        if (computeDLossDMeans) {
+            dLossDMeans = torch::zeros_like(means);
+        }
+        if (computeDLossDWorldToCamMatrices) {
+            dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
         }
         if (N == 0) {
-            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+            return std::make_tuple(
+                dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
+        }
+
+        const dim3 NUM_BLOCKS(GET_BLOCKS(N * D, DEFAULT_BLOCK_DIM), C);
+        if (computeDLossDWorldToCamMatrices) {
+            if (isPacked) {
+                dLossDViewDirs = torch::zeros({C, N, 3}, tensorOptions);
+            } else {
+                dLossDViewDirBlockSums        = torch::empty({C, NUM_BLOCKS.x, 3}, tensorOptions);
+                reducedViewDirectionGradients = torch::empty({C, 3}, tensorOptions);
+            }
         }
 
         computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
             0,
             N,
-            C,
             N,
             K,
             D,
             shDegreeToUse,
-            viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+            means.data_ptr<scalar_t>(),
+            worldToCamMatrices.data_ptr<scalar_t>(),
+            isPacked ? cameraIds.data_ptr<int32_t>() : nullptr,
+            isPacked ? gaussianIds.data_ptr<int32_t>() : nullptr,
             shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             radiiPtr,
             dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
             dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-            computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
+            computeDLossDMeans ? dLossDMeans.data_ptr<scalar_t>() : nullptr,
+            computeDLossDWorldToCamMatrices && isPacked ? dLossDViewDirs.data_ptr<scalar_t>()
+                                                        : nullptr,
+            computeDLossDWorldToCamMatrices && !isPacked
+                ? dLossDViewDirBlockSums.data_ptr<scalar_t>()
+                : nullptr);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        if (computeDLossDWorldToCamMatrices) {
+            const auto numWorldToCamMatrices = worldToCamMatrices.size(0);
+            if (isPacked) {
+                reducedViewDirectionGradients =
+                    torch::zeros({numWorldToCamMatrices, 3}, tensorOptions);
+                const auto packedReductionBlocks = GET_BLOCKS(N, DEFAULT_BLOCK_DIM);
+                reducePackedViewDirectionGradients<scalar_t>
+                    <<<packedReductionBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        N,
+                        cameraIds.data_ptr<int32_t>(),
+                        dLossDViewDirs.data_ptr<scalar_t>(),
+                        reducedViewDirectionGradients.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+                const auto viewMatrixBlocks = GET_BLOCKS(numWorldToCamMatrices, DEFAULT_BLOCK_DIM);
+                viewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                    <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        0,
+                        numWorldToCamMatrices,
+                        worldToCamMatrices.data_ptr<scalar_t>(),
+                        reducedViewDirectionGradients.data_ptr<scalar_t>(),
+                        dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            } else {
+                FVDB_CUB_WRAPPER(reduceViewDirectionGradientBlockSums<scalar_t>,
+                                 dLossDViewDirBlockSums.data_ptr<scalar_t>(),
+                                 reducedViewDirectionGradients.data_ptr<scalar_t>(),
+                                 C,
+                                 NUM_BLOCKS.x,
+                                 stream);
+
+                const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
+                viewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                    <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        0,
+                        C,
+                        worldToCamMatrices.data_ptr<scalar_t>(),
+                        reducedViewDirectionGradients.data_ptr<scalar_t>(),
+                        dLossDWorldToCamMatrices.data_ptr<scalar_t>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+        }
+
+        return std::make_tuple(
+            dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
     } else {
         torch::Tensor dLossDSh0Coeffs = torch::zeros({N, 1, D}, tensorOptions);
         torch::Tensor dLossDShNCoeffs;
-        torch::Tensor dLossDViewDirs;
+        torch::Tensor dLossDMeans;
+        torch::Tensor dLossDWorldToCamMatrices;
         if (N == 0) {
-            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+            return std::make_tuple(
+                dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
         computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -494,29 +814,37 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kCUDA>(
             radiiPtr,
             dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
-        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        return std::make_tuple(
+            dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
     }
 }
 
 template <>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const int64_t shDegreeToUse,
     const int64_t numCameras,
     const int64_t numGaussians,
-    const torch::Tensor &viewDirs,               // [C, N, 3]
+    const torch::Tensor &means,                  // [N, 3]
+    const torch::Tensor &worldToCamMatrices,     // [C, 4, 4]
+    const torch::Tensor &cameraIds,              // [N] optional
+    const torch::Tensor &gaussianIds,            // [N] optional
     const torch::Tensor &shNCoeffs,              // [N, K-1, D]
     const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
     const torch::Tensor &radii,                  // [C, N, 2]
-    const bool computeDLossDViewDirs) {
+    const bool computeDLossDMeans,
+    const bool computeDLossDWorldToCamMatrices) {
     FVDB_FUNC_RANGE();
 
-    const bool hasShNCoeffs = shNCoeffs.defined();
-    const bool hasViewirs   = viewDirs.defined();
-    const bool hasRadii     = radii.defined();
+    const bool hasShNCoeffs          = shNCoeffs.defined();
+    const bool hasMeans              = means.defined();
+    const bool hasWorldToCamMatrices = worldToCamMatrices.defined();
+    const bool hasRadii              = radii.defined();
 
     if (hasShNCoeffs) {
-        TORCH_CHECK_VALUE(hasViewirs, "viewDirs must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasMeans, "means must be defined if shNCoeffs is defined");
+        TORCH_CHECK_VALUE(hasWorldToCamMatrices,
+                          "worldToCamMatrices must be defined if shNCoeffs is defined");
         TORCH_CHECK_VALUE(shNCoeffs.is_privateuseone(), "shNCoeffs must be a PrivateUse1 tensor");
         TORCH_CHECK_VALUE(shNCoeffs.dim() == 3, "shNCoeffs must have shape [N, K-1, D]");
         TORCH_CHECK_VALUE(shNCoeffs.size(0) == numGaussians,
@@ -542,15 +870,24 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     const int64_t C = numCameras;
     const int64_t D = dLossDRenderQuantities.size(2);
 
-    // If you are using degree > 0, then we are going to use the directions tensor which means
-    // we need to check it has the right shape
-    if (hasShNCoeffs && K > 1 && shDegreeToUse > 0) {
-        TORCH_CHECK_VALUE(viewDirs.dim() == 3, "viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(
-            shNCoeffs.size(0) == viewDirs.size(1),
-            "shNCoeffs must have shape [N, K-1, D] and viewDirs must have shape [C, N, 3]");
-        TORCH_CHECK_VALUE(viewDirs.is_privateuseone(), "dirs must be a PrivateUse1 tensor");
-        TORCH_CHECK_VALUE(viewDirs.size(-1) == 3, "dirs must have last dimension 3");
+    // View directions are computed in the kernel from the means and world-to-camera matrices.
+    if (hasShNCoeffs && K > 1) {
+        const bool hasCameraIds   = cameraIds.defined() && cameraIds.numel() > 0;
+        const bool hasGaussianIds = gaussianIds.defined() && gaussianIds.numel() > 0;
+        TORCH_CHECK_VALUE(!hasCameraIds && !hasGaussianIds,
+                          "packed SH evaluation is not available on PrivateUse1");
+        TORCH_CHECK_VALUE(means.is_privateuseone() && means.scalar_type() == torch::kFloat32,
+                          "means must be a float32 PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(means.dim() == 2 && means.size(0) == N && means.size(1) == 3 &&
+                              means.is_contiguous(),
+                          "means must be contiguous with shape [N, 3]");
+        TORCH_CHECK_VALUE(worldToCamMatrices.is_privateuseone() &&
+                              worldToCamMatrices.scalar_type() == torch::kFloat32,
+                          "worldToCamMatrices must be a float32 PrivateUse1 tensor");
+        TORCH_CHECK_VALUE(worldToCamMatrices.dim() == 3 && worldToCamMatrices.size(0) == C &&
+                              worldToCamMatrices.size(1) == 4 && worldToCamMatrices.size(2) == 4 &&
+                              worldToCamMatrices.is_contiguous(),
+                          "worldToCamMatrices must be contiguous with shape [C, 4, 4]");
     }
 
     using scalar_t = float;
@@ -561,289 +898,331 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
     if (hasShNCoeffs && K > 1) {
         torch::Tensor dLossDShNCoeffs = torch::empty_like(shNCoeffs);
         torch::Tensor dLossDSh0Coeffs = torch::empty({N, 1, D}, tensorOptions);
-        torch::Tensor dLossDViewDirs;
-        if (computeDLossDViewDirs) {
-            dLossDViewDirs = torch::empty_like(viewDirs);
+        torch::Tensor dLossDMeans;
+        torch::Tensor dLossDWorldToCamMatrices;
+        if (computeDLossDMeans) {
+            dLossDMeans = torch::empty_like(means);
+        }
+        if (computeDLossDWorldToCamMatrices) {
+            dLossDWorldToCamMatrices = torch::zeros_like(worldToCamMatrices);
         }
         if (N == 0) {
-            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+            return std::make_tuple(
+                dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        std::vector<cudaEvent_t> events(c10::cuda::device_count());
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-        }
+        std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
+        std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
 
+        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
+            prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
+            auto prefetchStream       = prefetchStreams[deviceId];
+
+            cudaEvent_t prefetchEvent;
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-#if (CUDART_VERSION < 13000)
-            nanovdb::util::cuda::memPrefetchAsync(
-                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
-                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                deviceId,
-                stream);
-            nanovdb::util::cuda::memPrefetchAsync(
-                dLossDShNCoeffs.data_ptr<scalar_t>() + elementOffset * dLossDShNCoeffs.stride(0),
-                elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t),
-                deviceId,
-                stream);
-            if (computeDLossDViewDirs) {
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    nanovdb::util::cuda::memPrefetchAsync(
-                        dLossDViewDirs.data_ptr<scalar_t>() +
-                            cameraIndex * dLossDViewDirs.stride(0) +
-                            elementOffset * dLossDViewDirs.stride(1),
-                        elementCount * dLossDViewDirs.stride(1) * sizeof(scalar_t),
-                        deviceId,
-                        stream);
-                }
+            if (computeDLossDWorldToCamMatrices) {
+                // Use the compute stream so the captured cleanup stream follows the kernels and
+                // reduction. Zeroing can overlap prefetching on the preparation stream.
+                dLossDWorldToCamMatricesLocals[deviceId] =
+                    makeLocalGradient(dLossDWorldToCamMatrices, deviceId, stream);
             }
-            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDRenderQuantities.data_ptr<scalar_t>() +
-                        cameraIndex * dLossDRenderQuantities.stride(0) +
-                        elementOffset * dLossDRenderQuantities.stride(1),
-                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
-                    deviceId,
-                    stream);
-            }
-#else
-            std::vector<void *> prefetchPtrs;
-            std::vector<size_t> prefetchSizes;
-            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
-            std::vector<cudaMemLocation> prefetchLocations = {location};
-            std::vector<size_t> prefetchLocationIndices    = {0};
 
-            prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                      elementOffset * dLossDSh0Coeffs.stride(0));
-            prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t));
-            prefetchPtrs.emplace_back(dLossDShNCoeffs.data_ptr<scalar_t>() +
-                                      elementOffset * dLossDShNCoeffs.stride(0));
-            prefetchSizes.emplace_back(elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t));
-            if (computeDLossDViewDirs) {
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    prefetchPtrs.emplace_back(dLossDViewDirs.data_ptr<scalar_t>() +
-                                              cameraIndex * dLossDViewDirs.stride(0) +
-                                              elementOffset * dLossDViewDirs.stride(1));
-                    prefetchSizes.emplace_back(elementCount * dLossDViewDirs.stride(1) *
+            if (elementCount > 0) {
+                std::vector<void *> prefetchPtrs;
+                std::vector<size_t> prefetchSizes;
+
+                prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
+                                          elementOffset * dLossDSh0Coeffs.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) *
+                                           sizeof(scalar_t));
+                prefetchPtrs.emplace_back(dLossDShNCoeffs.data_ptr<scalar_t>() +
+                                          elementOffset * dLossDShNCoeffs.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDShNCoeffs.stride(0) *
+                                           sizeof(scalar_t));
+                if (computeDLossDMeans) {
+                    prefetchPtrs.emplace_back(dLossDMeans.data_ptr<scalar_t>() +
+                                              elementOffset * dLossDMeans.stride(0));
+                    prefetchSizes.emplace_back(elementCount * dLossDMeans.stride(0) *
                                                sizeof(scalar_t));
                 }
-            }
-            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
-                                          cameraIndex * dLossDRenderQuantities.stride(0) +
-                                          elementOffset * dLossDRenderQuantities.stride(1));
-                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
-                                           sizeof(scalar_t));
-            }
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
-            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                     prefetchSizes.data(),
-                                                     prefetchPtrs.size(),
-                                                     prefetchLocations.data(),
-                                                     prefetchLocationIndices.data(),
-                                                     prefetchLocations.size(),
-                                                     0,
-                                                     stream));
-#endif
-            C10_CUDA_CHECK(cudaMemsetAsync(
-                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
-                0,
-                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                stream));
-            C10_CUDA_CHECK(cudaMemsetAsync(
-                dLossDShNCoeffs.data_ptr<scalar_t>() + elementOffset * dLossDShNCoeffs.stride(0),
-                0,
-                elementCount * dLossDShNCoeffs.stride(0) * sizeof(scalar_t),
-                stream));
-            if (computeDLossDViewDirs) {
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    C10_CUDA_CHECK(
-                        cudaMemsetAsync(dLossDViewDirs.data_ptr<scalar_t>() +
-                                            cameraIndex * dLossDViewDirs.stride(0) +
-                                            elementOffset * dLossDViewDirs.stride(1),
-                                        0,
-                                        elementCount * dLossDViewDirs.stride(1) * sizeof(scalar_t),
-                                        stream));
+                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+                for (const auto i: c10::irange(prefetchPtrs.size())) {
+                    C10_CUDA_CHECK(cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], stream));
                 }
+
+                prefetchPtrs.clear();
+                prefetchSizes.clear();
+                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                    prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                              cameraIndex * dLossDRenderQuantities.stride(0) +
+                                              elementOffset * dLossDRenderQuantities.stride(1));
+                    prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                               sizeof(scalar_t));
+                }
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
             }
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+            // Join input prefetching after output zeroing, before the SH kernel.
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
+        // Launch kernels on every device before submitting camera-gradient output prefetches.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-            const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
+            if (elementCount > 0) {
+                const dim3 NUM_BLOCKS(GET_BLOCKS(elementCount * D, DEFAULT_BLOCK_DIM), C);
+                scalar_t *dLossDViewDirBlockSums        = nullptr;
+                scalar_t *reducedViewDirectionGradients = nullptr;
+                if (computeDLossDWorldToCamMatrices) {
+                    const size_t numBlockSumElements = C * NUM_BLOCKS.x * 3;
+                    const size_t numReducedElements  = C * 3;
+                    C10_CUDA_CHECK(cudaMallocAsync(&dLossDViewDirBlockSums,
+                                                   (numBlockSumElements + numReducedElements) *
+                                                       sizeof(scalar_t),
+                                                   stream));
+                    reducedViewDirectionGradients = dLossDViewDirBlockSums + numBlockSumElements;
+                }
 
-            computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                elementOffset,
-                elementCount,
-                C,
-                N,
-                K,
-                D,
-                shDegreeToUse,
-                viewDirs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                radiiPtr,
-                dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                computeDLossDViewDirs ? dLossDViewDirs.data_ptr<scalar_t>() : nullptr);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
+                computeShBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                    elementOffset,
+                    elementCount,
+                    N,
+                    K,
+                    D,
+                    shDegreeToUse,
+                    means.data_ptr<scalar_t>(),
+                    worldToCamMatrices.data_ptr<scalar_t>(),
+                    nullptr,
+                    nullptr,
+                    shNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    radiiPtr,
+                    dLossDRenderQuantities
+                        .packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    dLossDShNCoeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                    computeDLossDMeans ? dLossDMeans.data_ptr<scalar_t>() : nullptr,
+                    nullptr,
+                    dLossDViewDirBlockSums);
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+
+                if (computeDLossDWorldToCamMatrices) {
+                    FVDB_CUB_WRAPPER_ASYNC(stream,
+                                           reduceViewDirectionGradientBlockSums<scalar_t>,
+                                           dLossDViewDirBlockSums,
+                                           reducedViewDirectionGradients,
+                                           C,
+                                           NUM_BLOCKS.x);
+
+                    const auto viewMatrixBlocks = GET_BLOCKS(C, DEFAULT_BLOCK_DIM);
+                    viewDirectionGradientsToWorldToCamMatrices<scalar_t>
+                        <<<viewMatrixBlocks, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                            0,
+                            C,
+                            worldToCamMatrices.data_ptr<scalar_t>(),
+                            reducedViewDirectionGradients,
+                            dLossDWorldToCamMatricesLocals[deviceId].data_ptr<scalar_t>());
+                    C10_CUDA_KERNEL_LAUNCH_CHECK();
+                    C10_CUDA_CHECK(cudaFreeAsync(dLossDViewDirBlockSums, stream));
+                }
+            }
+        }
+
+        if (computeDLossDWorldToCamMatrices) {
+            // Kernels write camera gradients to device-local buffers, allowing output prefetching
+            // to overlap. Reuse the preparation streams to preserve their waits and ordering.
+            std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                const auto [elementOffset, elementCount] =
+                    deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
+                if (elementCount == 0) {
+                    continue;
+                }
+
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto prefetchStream                  = prefetchStreams[deviceId];
+                std::vector<void *> prefetchPointers = {
+                    dLossDWorldToCamMatrices.data_ptr<scalar_t>() + elementOffset};
+                std::vector<size_t> prefetchSizes = {elementCount * sizeof(scalar_t)};
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+
+                // The output copy waits on these events after the reduction has been queued.
+                C10_CUDA_CHECK(cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId],
+                                                        cudaEventDisableTiming));
+                C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
+            }
+
+            reduceGradientShards(dLossDWorldToCamMatricesLocals);
+            for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+                if (outputPrefetchEvents[deviceId]) {
+                    C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                    auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+                    C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+                    C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+                }
+            }
+            copyGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+
+            // Enqueue frees after reduction and output copies, before merging the compute streams.
+            dLossDWorldToCamMatricesLocals.clear();
         }
         mergeStreams();
 
-        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        return std::make_tuple(
+            dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
     } else {
         torch::Tensor dLossDSh0Coeffs = torch::empty({N, 1, D}, tensorOptions);
         torch::Tensor dLossDShNCoeffs;
-        torch::Tensor dLossDViewDirs;
+        torch::Tensor dLossDMeans;
+        torch::Tensor dLossDWorldToCamMatrices;
         if (N == 0) {
-            return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+            return std::make_tuple(
+                dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        std::vector<cudaEvent_t> events(c10::cuda::device_count());
+        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-        }
+            auto stream         = c10::cuda::getCurrentCUDAStream(deviceId);
+            auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
 
-        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+            cudaEvent_t prefetchEvent;
+            C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-#if (CUDART_VERSION < 13000)
-            nanovdb::util::cuda::memPrefetchAsync(
-                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
-                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                deviceId,
-                stream);
-            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                nanovdb::util::cuda::memPrefetchAsync(
-                    dLossDRenderQuantities.data_ptr<scalar_t>() +
-                        cameraIndex * dLossDRenderQuantities.stride(0) +
-                        elementOffset * dLossDRenderQuantities.stride(1),
-                    elementCount * dLossDRenderQuantities.stride(1) * sizeof(scalar_t),
-                    deviceId,
-                    stream);
-            }
-#else
-            std::vector<void *> prefetchPtrs;
-            std::vector<size_t> prefetchSizes;
-            const cudaMemLocation location                 = {cudaMemLocationTypeDevice, deviceId};
-            std::vector<cudaMemLocation> prefetchLocations = {location};
-            std::vector<size_t> prefetchLocationIndices    = {0};
+            if (elementCount > 0) {
+                std::vector<void *> prefetchPtrs;
+                std::vector<size_t> prefetchSizes;
 
-            prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
-                                      elementOffset * dLossDSh0Coeffs.stride(0));
-            prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t));
-            for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
-                                          cameraIndex * dLossDRenderQuantities.stride(0) +
-                                          elementOffset * dLossDRenderQuantities.stride(1));
-                prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                prefetchPtrs.emplace_back(dLossDSh0Coeffs.data_ptr<scalar_t>() +
+                                          elementOffset * dLossDSh0Coeffs.stride(0));
+                prefetchSizes.emplace_back(elementCount * dLossDSh0Coeffs.stride(0) *
                                            sizeof(scalar_t));
-            }
+                memDiscardAndPrefetchBatchAsync(
+                    prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
-            C10_CUDA_CHECK(cudaMemPrefetchBatchAsync(prefetchPtrs.data(),
-                                                     prefetchSizes.data(),
-                                                     prefetchPtrs.size(),
-                                                     prefetchLocations.data(),
-                                                     prefetchLocationIndices.data(),
-                                                     prefetchLocations.size(),
-                                                     0,
-                                                     stream));
-#endif
-            C10_CUDA_CHECK(cudaMemsetAsync(
-                dLossDSh0Coeffs.data_ptr<scalar_t>() + elementOffset * dLossDSh0Coeffs.stride(0),
-                0,
-                elementCount * dLossDSh0Coeffs.stride(0) * sizeof(scalar_t),
-                stream));
-            C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+                C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+                for (const auto i: c10::irange(prefetchPtrs.size())) {
+                    C10_CUDA_CHECK(cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], stream));
+                }
+
+                prefetchPtrs.clear();
+                prefetchSizes.clear();
+                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
+                    prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
+                                              cameraIndex * dLossDRenderQuantities.stride(0) +
+                                              elementOffset * dLossDRenderQuantities.stride(1));
+                    prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
+                                               sizeof(scalar_t));
+                }
+                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
+            }
+            // Join input prefetching after output zeroing, before the SH kernel.
+            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
+            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+            C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-            C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
             int64_t elementOffset, elementCount;
             std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
 
-            const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
+            if (elementCount > 0) {
+                const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);
 
-            computeShDiffuseOnlyBackward<scalar_t><<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
-                elementOffset,
-                elementCount,
-                C,
-                N,
-                D,
-                dLossDRenderQuantities.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
-                radiiPtr,
-                dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
+                computeShDiffuseOnlyBackward<scalar_t>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, 0, stream>>>(
+                        elementOffset,
+                        elementCount,
+                        C,
+                        N,
+                        D,
+                        dLossDRenderQuantities
+                            .packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>(),
+                        radiiPtr,
+                        dLossDSh0Coeffs.packed_accessor64<scalar_t, 3, torch::RestrictPtrTraits>());
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
         }
         mergeStreams();
 
-        return std::make_tuple(dLossDSh0Coeffs, dLossDShNCoeffs, dLossDViewDirs);
+        return std::make_tuple(
+            dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
     }
 }
 
 template <>
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
-dispatchEvaluateSphericalHarmonicsBwd<torch::kCPU>(
-    const int64_t shDegreeToUse,
-    const int64_t numCameras,
-    const int64_t numGaussians,
-    const torch::Tensor &viewDirs,               // [C, N, 3] or empty
-    const torch::Tensor &shNCoeffs,              // [N, K-1, D]
-    const torch::Tensor &dLossDRenderQuantities, // [C, N, D]
-    const torch::Tensor &radii,                  // [C, N, 2]
-    const bool computeDLossDViewDirs) {
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+dispatchEvaluateSphericalHarmonicsBwd<torch::kCPU>(const int64_t shDegreeToUse,
+                                                   const int64_t numCameras,
+                                                   const int64_t numGaussians,
+                                                   const torch::Tensor &means,
+                                                   const torch::Tensor &worldToCamMatrices,
+                                                   const torch::Tensor &cameraIds,
+                                                   const torch::Tensor &gaussianIds,
+                                                   const torch::Tensor &shNCoeffs,
+                                                   const torch::Tensor &dLossDRenderQuantities,
+                                                   const torch::Tensor &radii,
+                                                   const bool computeDLossDMeans,
+                                                   const bool computeDLossDWorldToCamMatrices) {
     TORCH_CHECK(false, "CPU implementation not available");
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 evaluateSphericalHarmonicsBwd(const int64_t shDegreeToUse,
                               const int64_t numCameras,
                               const int64_t numGaussians,
-                              const torch::Tensor &viewDirs,  // [C, N, 3] or empty
-                              const torch::Tensor &shNCoeffs, // [N, K-1, D]
+                              const torch::Tensor &means,
+                              const torch::Tensor &worldToCamMatrices,
+                              const torch::Tensor &cameraIds,
+                              const torch::Tensor &gaussianIds,
+                              const torch::Tensor &shNCoeffs,
                               const torch::Tensor &dLossDColors,
-                              const torch::Tensor &radii,     // [C, N, 2]
-                              const bool computeDLossDViewDirs) {
+                              const torch::Tensor &radii,
+                              const bool computeDLossDMeans,
+                              const bool computeDLossDWorldToCamMatrices) {
     return FVDB_DISPATCH_KERNEL(dLossDColors.device(), [&]() {
         return dispatchEvaluateSphericalHarmonicsBwd<DeviceTag>(shDegreeToUse,
                                                                 numCameras,
                                                                 numGaussians,
-                                                                viewDirs,
+                                                                means,
+                                                                worldToCamMatrices,
+                                                                cameraIds,
+                                                                gaussianIds,
                                                                 shNCoeffs,
                                                                 dLossDColors,
                                                                 radii,
-                                                                computeDLossDViewDirs);
+                                                                computeDLossDMeans,
+                                                                computeDLossDWorldToCamMatrices);
     });
 }
 

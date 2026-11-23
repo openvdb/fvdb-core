@@ -29,12 +29,11 @@
 //                         isosurface extraction that dual contouring is the dual of.
 //
 #include <fvdb/VoxelCoordTransform.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/DualContour.h>
 #include <fvdb/detail/utils/cuda/GridDim.h>
-#include <fvdb/detail/utils/cuda/VoxelBlockManagerHelper.h>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/cuda/DeviceBuffer.h>
 #include <nanovdb/tools/VoxelBlockManager.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 
@@ -52,6 +51,11 @@ namespace detail {
 namespace ops {
 
 namespace {
+
+using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
+
+// log2 of the VoxelBlockManager block width, shared with the batch's cached VBM handles.
+static constexpr int kLog2BlockWidth = VbmCache::kLog2BlockWidth;
 
 // ------------------------- box-stencil geometry (compile-time) -------------------------
 
@@ -207,6 +211,7 @@ gatherFusedKernel(const OnIndexGridT *grid,
                   const uint32_t *firstLeafID,
                   const uint64_t *jumpMap,
                   uint64_t firstOffset,
+                  uint64_t lastOffset,
                   const float *sdf,
                   BoxStencilGeometry geometry,
                   float iso,
@@ -214,14 +219,28 @@ gatherFusedKernel(const OnIndexGridT *grid,
                   float *gradient,
                   uint8_t *surfaceFlag,
                   int32_t *voxelCoord) {
-    __shared__ VbmBlockMaps<kLog2BlockWidth> maps;
-    if (!vbmDecodeBlock<kLog2BlockWidth>(grid, firstLeafID, jumpMap, firstOffset, maps))
-        return;
-    const int threadId       = threadIdx.x;
-    using VoxelBlockManagerT = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;
+    // Register-only VBM decode of this thread's voxel (no shared memory, no barrier); launched as
+    // <<<blockCount, blockWidth>>> over the grid's VBM blocks, one thread per block slot.
+    constexpr int blockWidth = 1 << kLog2BlockWidth, jumpMapWordCount = blockWidth / 64;
+    using VoxelBlockManagerT        = nanovdb::tools::cuda::VoxelBlockManager<kLog2BlockWidth>;
+    const uint64_t blockFirstOffset = firstOffset + uint64_t(blockIdx.x) * blockWidth;
+    if (blockFirstOffset + threadIdx.x > lastOffset)
+        return; // slot past the grid's last active voxel
+    uint32_t leafIndex;
+    uint16_t voxelOffset;
+    VoxelBlockManagerT::template decodeInverseMap<nanovdb::ValueOnIndex>(
+        grid,
+        firstLeafID[blockIdx.x],
+        &jumpMap[uint64_t(blockIdx.x) * jumpMapWordCount],
+        blockFirstOffset,
+        int(threadIdx.x),
+        leafIndex,
+        voxelOffset);
+    if (leafIndex == VoxelBlockManagerT::UnusedLeafIndex)
+        return; // defensive; the lastOffset guard above makes this unreachable
     uint64_t stencil[27];
     VoxelBlockManagerT::template computeBoxStencil<nanovdb::ValueOnIndex>(
-        grid, maps.leafIndex, maps.voxelOffset, stencil);
+        grid, leafIndex, voxelOffset, stencil);
     const uint64_t centerIndex = stencil[13]; // centre value index (>= 1 for active)
     const int numColumns       = geometry.numColumns;
 
@@ -262,8 +281,8 @@ gatherFusedKernel(const OnIndexGridT *grid,
     surfaceFlag[centerIndex] =
         (allCornersActive && numInsideCorners > 0 && numInsideCorners < 8) ? 1u : 0u;
 
-    const auto &leaf                 = grid->tree().getFirstNode<0>()[maps.leafIndex[threadId]];
-    const nanovdb::Coord globalCoord = leaf.offsetToGlobalCoord(maps.voxelOffset[threadId]);
+    const auto &leaf                 = grid->tree().getFirstNode<0>()[leafIndex];
+    const nanovdb::Coord globalCoord = leaf.offsetToGlobalCoord(voxelOffset);
     voxelCoord[centerIndex * 3 + 0]  = globalCoord[0];
     voxelCoord[centerIndex * 3 + 1]  = globalCoord[1];
     voxelCoord[centerIndex * 3 + 2]  = globalCoord[2];
@@ -891,7 +910,7 @@ struct ScratchOptions {
 /// local to this grid.
 static std::tuple<torch::Tensor, torch::Tensor, torch::Tensor>
 meshOneGrid(OnIndexGridT *grid,
-            const VBMHelper &vbm,
+            const GridVbm &vbm,
             const float *sdf,
             int64_t valueCount,
             VoxelCoordTransform transform,
@@ -920,9 +939,10 @@ meshOneGrid(OnIndexGridT *grid,
     C10_CUDA_CHECK(cudaMemsetAsync(surfaceFlag, 0, sizeof(uint8_t), stream));
 
     gatherFusedKernel<<<vbm.blockCount, 1 << kLog2BlockWidth, 0, stream>>>(grid,
-                                                                           vbm.firstLeafID(),
-                                                                           vbm.jumpMap(),
+                                                                           vbm.firstLeafID,
+                                                                           vbm.jumpMap,
                                                                            vbm.firstOffset,
+                                                                           vbm.lastOffset,
                                                                            sdf,
                                                                            kGeometry,
                                                                            iso,
@@ -1241,11 +1261,11 @@ dualContour(const GridBatchData &batchHdl,
             normals   = torch::empty({0, 3}, opts.f32);
             triangles = torch::empty({0, 3}, opts.i32);
         } else {
-            OnIndexGridT *grid = batchHdl.mGridHdl->deviceGrid<nanovdb::ValueOnIndex>((uint32_t)b);
+            OnIndexGridT *grid            = batchHdl.deviceGridPtrAt(b);
             const int64_t voxelOffset     = batchHdl.cumVoxelsAt(b);
             VoxelCoordTransform transform = batchHdl.primalTransformAt(b);
-            VBMHelper vbm(grid, stream);
-            const int64_t valueCount = (int64_t)vbm.valueCount; // numVoxels + 1
+            const GridVbm vbm             = batchHdl.vbmAt(b);           // cached on the batch
+            const int64_t valueCount      = int64_t(vbm.lastOffset) + 1; // numVoxels + 1
             // Value indices are stored as int32 in the neighbour table / surface-cell / coord
             // buffers; fail loudly rather than silently overflow on an enormous single grid.
             TORCH_CHECK(valueCount <= std::numeric_limits<int32_t>::max(),

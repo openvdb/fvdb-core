@@ -6,13 +6,15 @@ import unittest
 
 import numpy as np
 import torch
+from parameterized import parameterized
+
+from fvdb import GridBatch, JaggedTensor
 from fvdb.utils.tests import (
     make_dense_grid_batch_and_jagged_point_data,
     make_grid_batch_and_jagged_point_data,
 )
-from parameterized import parameterized
 
-from fvdb import GridBatch, JaggedTensor
+from . import expand_tests
 
 all_device_dtype_combos = [
     ["cuda", torch.float16],
@@ -28,17 +30,22 @@ all_device_dtype_channel_combos = [
 
 
 def trilinear_sample_pytorch(grid: GridBatch, p: JaggedTensor, features: JaggedTensor, is_dual: bool) -> torch.Tensor:
-    dual_features_grid = grid.inject_to_dense_cminor(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0)
-    p_in = p.jdata.reshape(1, 1, 1, -1, 3)  # [1, 1, 1, N, 3]
+    # Evaluate the reference in at least fp32. In fp16, grid_sample's CUDA backward accumulates
+    # into the half gradient with atomics, so its result is noisy and order dependent. fVDB
+    # accumulates in fp32, so the fp16 reference gradient would otherwise fail the tolerance.
+    dtype = features.dtype
+    math_dtype = torch.float32 if dtype == torch.half else dtype
+    dense = grid.inject_to_dense_cminor(features).squeeze(0).permute(3, 2, 1, 0).unsqueeze(0).to(math_dtype)
+    p_in = p.jdata.reshape(1, 1, 1, -1, 3).to(math_dtype)  # [1, 1, 1, N, 3]
     # grid_sample output: [1, C, 1, 1, N] -> squeeze batch and spatial dims, keep C
     res = (
-        torch.nn.functional.grid_sample(dual_features_grid, p_in, mode="bilinear", align_corners=is_dual)
+        torch.nn.functional.grid_sample(dense, p_in, mode="bilinear", align_corners=is_dual)
         .squeeze(0)
         .squeeze(-2)
         .squeeze(-2)  # [1, C, 1, 1, N] -> [C, N]
         .transpose(0, 1)  # [N, C]
     )
-    return res
+    return res.to(dtype)
 
 
 def upsample_pytorch(small_features: torch.Tensor, scale: int, mode: str) -> torch.Tensor:
@@ -298,7 +305,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_upsample_dense_vs_pytorch(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-2
@@ -659,7 +666,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_sparse_vs_brute(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-1
@@ -717,7 +724,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_with_grad_sparse_vs_brute(self, device, dtype):
         if dtype == torch.half:
             atol = 1e-1
@@ -777,7 +784,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_sparse_onbound_vs_brute(self, device, dtype):
         if dtype == torch.half:
             f_atol = 1e-2
@@ -839,7 +846,7 @@ class TestSample(unittest.TestCase):
             f"Max grad error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_bezier_with_grad_sparse_onbound_vs_brute(self, device, dtype):
         if dtype == torch.half:
             f_atol = 1e-2
@@ -940,7 +947,7 @@ class TestSample(unittest.TestCase):
             f"Max error is {torch.max(torch.abs(gv - gp))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_splat_bezier_vs_brute(self, device, dtype):
         if dtype == torch.half:
             fatol = 1e-3
@@ -1063,7 +1070,7 @@ class TestSample(unittest.TestCase):
             f"At voxel centers max error is {torch.max(torch.abs(result - features))}",
         )
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_nearest_all_inactive(self, device, dtype):
         """Points far outside the grid must return zero."""
         grid, _, _ = make_grid_batch_and_jagged_point_data(device, dtype)

@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
 
 # Set global download timeout to 600 seconds (10 minutes)
 set(CMAKE_DOWNLOAD_TIMEOUT 600 CACHE STRING "Time allowed for downloads in seconds")
@@ -128,12 +128,44 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/src/cmake/get_nanovdb_editor.cmake)
 # Generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# configure libfvdb
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
+# ----------------------------------------------------------------------------
+# libfvdb
+#
+# libfvdb.so does not depend on Python. Set FVDB_PREBUILT_CORE to a libfvdb.so
+# from an earlier build with the same CUDA and torch versions to build only the
+# Python bindings against it. docker/build_wheel.py uses this to build wheels
+# for several Python versions from one core build.
+# ----------------------------------------------------------------------------
+set(FVDB_PREBUILT_CORE "" CACHE FILEPATH "Prebuilt libfvdb.so to link the Python bindings against")
+
+if(FVDB_PREBUILT_CORE)
+    if(NOT EXISTS "${FVDB_PREBUILT_CORE}")
+        message(FATAL_ERROR "FVDB_PREBUILT_CORE does not exist: ${FVDB_PREBUILT_CORE}")
+    endif()
+    message(STATUS "FVDB: linking bindings against prebuilt core ${FVDB_PREBUILT_CORE}")
+
+    # Mirrors the PUBLIC usage requirements of the fvdb target in src/CMakeLists.txt
+    add_library(fvdb SHARED IMPORTED)
+    set_target_properties(fvdb PROPERTIES
+        IMPORTED_LOCATION "${FVDB_PREBUILT_CORE}"
+        IMPORTED_SONAME "libfvdb.so")
+    target_include_directories(fvdb INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${nvtx3_SOURCE_DIR}/include)
+    # libfvdb.so already contains NanoVDB's libraries; the bindings need only its headers and
+    # definitions.
+    target_link_libraries(fvdb INTERFACE
+        torch $<COMPILE_ONLY:NanoVDB::nanovdb> nanovdb_editor::public_headers ${CMAKE_DL_LIBS})
+else()
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/src/)
+endif()
 
 # Source files
 set(FVDB_BINDINGS_CPP_FILES
     src/python/Bindings.cpp
+    src/python/CopyImageToDeviceBinding.cpp
+    src/python/FusedL1Binding.cpp
+    src/python/FusedL1SSIMBinding.cpp
     src/python/FusedSSIMBinding.cpp
     src/python/GaussianSplatOps.cpp
     src/python/GridBatchDataBinding.cpp
@@ -167,9 +199,7 @@ set_target_properties(_fvdb_cpp PROPERTIES
     INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(_fvdb_cpp PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${nanovdb_SOURCE_DIR}/nanovdb
-    ${NANOVDB_EDITOR_INCLUDE_DIR})
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(_fvdb_cpp PRIVATE
     ${TORCH_PYTHON_LIBRARY}
     fvdb)
@@ -216,9 +246,28 @@ if(NOT (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithD
 endif()
 
 # Only install the Python package artifacts; the core lib is installed as part of the Python module
-install(TARGETS _fvdb_cpp fvdb
-    LIBRARY DESTINATION fvdb COMPONENT PythonModule
-    RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+if(FVDB_PREBUILT_CORE)
+    install(TARGETS _fvdb_cpp
+        LIBRARY DESTINATION fvdb COMPONENT PythonModule
+        RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+    # Match install(TARGETS), which rewrites the build-tree RUNPATH to $ORIGIN
+    # and strips when installing with --strip
+    install(PROGRAMS ${FVDB_PREBUILT_CORE}
+        DESTINATION fvdb COMPONENT PythonModule
+        RENAME libfvdb.so)
+    install(CODE "set(_fvdb_strip \"${CMAKE_STRIP}\")" COMPONENT PythonModule)
+    install(CODE [[
+        set(_fvdb_core "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/fvdb/libfvdb.so")
+        file(RPATH_SET FILE "${_fvdb_core}" NEW_RPATH "$ORIGIN")
+        if(CMAKE_INSTALL_DO_STRIP)
+            execute_process(COMMAND "${_fvdb_strip}" "${_fvdb_core}")
+        endif()
+    ]] COMPONENT PythonModule)
+else()
+    install(TARGETS _fvdb_cpp fvdb
+        LIBRARY DESTINATION fvdb COMPONENT PythonModule
+        RUNTIME DESTINATION fvdb COMPONENT PythonModule)
+endif()
 
 # Public headers for downstream C++ consumers (bundled in wheel like torch/include/)
 file(GLOB FVDB_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/src/fvdb/*.h")
@@ -226,10 +275,19 @@ install(FILES ${FVDB_PUBLIC_HEADERS}
     DESTINATION fvdb/include/fvdb
     COMPONENT PythonModule)
 
-install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+install(DIRECTORY ${FVDB_NANOVDB_INCLUDE_DIR}/nanovdb/
     DESTINATION fvdb/include/nanovdb
     COMPONENT PythonModule
     FILES_MATCHING PATTERN "*.h")
+
+if(FVDB_NANOVDB_BLOSC_DIR)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/LICENSE.txt
+        DESTINATION fvdb/licenses/blosc COMPONENT PythonModule)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/lz4/LICENSE
+        DESTINATION fvdb/licenses/lz4 COMPONENT PythonModule)
+    install(FILES ${FVDB_NANOVDB_BLOSC_DIR}/LICENSES/FASTLZ.txt
+        DESTINATION fvdb/licenses/fastlz COMPONENT PythonModule)
+endif()
 
 install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/dispatch/dispatch/macros.h
     DESTINATION fvdb/include/dispatch/dispatch

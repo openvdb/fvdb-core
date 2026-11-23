@@ -9,6 +9,8 @@ from parameterized import parameterized
 
 from fvdb import GridBatch, JaggedTensor
 
+from . import expand_tests
+
 all_device_dtype_combos = [
     ["cpu", torch.float16],
     ["cuda", torch.float16],
@@ -25,7 +27,7 @@ all_device_combos = [
 
 
 class TestDenseInterfaceBatch(unittest.TestCase):
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dense(self, device, dtype):
         dense_vdb = GridBatch.from_dense_axis_aligned_bounds(
             num_grids=1,
@@ -54,7 +56,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
         vdb_feature2 = dense_vdb.inject_from_dense_cminor(dense_feature.unsqueeze(0)).jdata
         self.assertTrue(torch.allclose(vdb_feature, vdb_feature2))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -93,7 +95,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -132,7 +134,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -183,7 +185,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             assert random_grid_copy.grad is not None
             self.assertTrue(torch.equal(random_grid.grad, random_grid_copy.grad))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -225,7 +227,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -267,7 +269,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -320,7 +322,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
             self.assertEqual(torch.abs(sparse_data.grad - sparse_data_copy.grad).max().item(), 0.0)
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
@@ -354,7 +356,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
 
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_cmajor_rand_point_grid(self, device, dtype):
 
         # Build a random sparse grid
@@ -393,7 +395,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
 
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
@@ -467,7 +469,7 @@ class TestDenseInterfaceBatch(unittest.TestCase):
 
 
 class TestDenseInterfaceSingle(unittest.TestCase):
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_dense(self, device, dtype):
         dense_vdb = GridBatch.from_dense_axis_aligned_bounds(
             num_grids=1,
@@ -496,7 +498,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
         vdb_feature2 = dense_vdb.inject_from_dense_cminor(dense_feature.unsqueeze(0)).jdata
         self.assertTrue(torch.allclose(vdb_feature, vdb_feature2))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -535,7 +537,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -574,7 +576,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertEqual(torch.abs(target_sparse - pred_sparse).max().item(), 0.0)
             self.assertTrue(torch.all(target_sparse == pred_sparse))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -625,7 +627,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             assert random_grid_copy.grad is not None
             self.assertTrue(torch.equal(random_grid.grad, random_grid_copy.grad))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -667,7 +669,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_multidim(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -709,7 +711,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
 
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_multidim_grad(self, device, dtype):
 
         random_points = torch.randn(100000, 3).to(device).to(dtype)
@@ -762,7 +764,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
             self.assertEqual(torch.abs(sparse_data.grad - sparse_data_copy.grad).max().item(), 0.0)
             self.assertTrue(torch.all(pred_crop == target_crop))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]
@@ -796,7 +798,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
 
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_write_to_dense_cminor_cmajor_rand_point_grid(self, device, dtype):
 
         # Build a random sparse grid
@@ -835,7 +837,7 @@ class TestDenseInterfaceSingle(unittest.TestCase):
 
             self.assertTrue(torch.equal(dense_default, dense_conv_like_default))
 
-    @parameterized.expand(all_device_dtype_combos)
+    @expand_tests(all_device_dtype_combos)
     def test_read_from_dense_cminor_cmajor_dense_grid(self, device, dtype):
 
         dims = [11, 6, 8]

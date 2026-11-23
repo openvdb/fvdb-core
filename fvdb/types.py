@@ -65,10 +65,12 @@ GridBatchIndex = int | np.integer | slice | list[bool] | list[int] | torch.Tenso
 
 
 def is_Numeric(x: Any) -> bool:
+    """Return whether the value is a Python integer or float."""
     return isinstance(x, (int, float))
 
 
 def is_Vec3i(x: Any) -> bool:
+    """Check for a three-element integer vector."""
     if isinstance(x, torch.Size):
         return len(x) == 3
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
@@ -81,6 +83,7 @@ def is_Vec3i(x: Any) -> bool:
 
 
 def is_Vec3d(x: Any) -> bool:
+    """Check for a three-element vector accepted as floating-point coordinates."""
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
         return x.shape == (3,) and x.dtype in (
             torch.float16,
@@ -99,14 +102,17 @@ def is_Vec3d(x: Any) -> bool:
 
 
 def is_Vec3dOrScalar(x: Any) -> bool:
+    """Check for a floating-point coordinate vector or Python numeric scalar."""
     return is_Vec3d(x) or isinstance(x, (float, int))
 
 
 def is_Vec3iOrScalar(x: Any) -> bool:
+    """Check for an integer coordinate vector or Python integer."""
     return is_Vec3i(x) or isinstance(x, int)
 
 
 def is_Vec4i(x: Any) -> bool:
+    """Check for a four-element integer vector."""
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
         return x.shape == (4,) and x.dtype in (torch.int32, torch.int64, numpy.int32, numpy.int64)
     if isinstance(x, list):
@@ -117,6 +123,7 @@ def is_Vec4i(x: Any) -> bool:
 
 
 def is_Vec3iBatch(x: Any) -> bool:
+    """Check for integer coordinate input accepted by batched vector conversion."""
     if is_Vec3i(x):
         return True
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
@@ -138,6 +145,7 @@ def is_Vec3iBatch(x: Any) -> bool:
 
 
 def is_Vec3dBatch(x: Any) -> bool:
+    """Check for numeric coordinate input accepted by batched vector conversion."""
     if is_Vec3iBatch(x) or is_Vec3d(x):
         return True
     if isinstance(x, (torch.Tensor, numpy.ndarray)):
@@ -163,14 +171,17 @@ def is_Vec3dBatch(x: Any) -> bool:
 
 
 def is_Vec3dBatchOrScalar(x: Any) -> bool:
+    """Check for batched coordinate input or a Python numeric scalar."""
     return is_Vec3dBatch(x) or isinstance(x, (float, int))
 
 
 def is_Index(x: Any) -> bool:
+    """Check for an integer, slice, ellipsis, or None index."""
     return isinstance(x, (int, slice, type(Ellipsis), type(None)))
 
 
 def is_GridIdentifier(x: Any) -> bool:
+    """Check for grid names or indices, individually or in a list or tuple."""
     if isinstance(x, (str, int)):
         return True
     if isinstance(x, list):
@@ -181,30 +192,37 @@ def is_GridIdentifier(x: Any) -> bool:
 
 
 def is_LShapeRank1(x: Any) -> TypeGuard[LShapeRank1]:
+    """Check for a sequence of integer jagged lengths."""
     return isinstance(x, Sequence) and all(isinstance(item, int) for item in x)
 
 
 def is_LShapeRank2(x: Any) -> TypeGuard[LShapeRank2]:
+    """Check for nested sequences of integer jagged lengths."""
     return isinstance(x, Sequence) and all(is_LShapeRank1(item) for item in x)
 
 
 def is_LShapeSpec(x: Any) -> TypeGuard[LShapeSpec]:
+    """Check for a supported flat or nested jagged-length specification."""
     return is_LShapeRank1(x) or is_LShapeRank2(x)
 
 
 def is_RShapeSpec(x: Any) -> TypeGuard[RShapeSpec]:
+    """Check for a sequence of integer feature dimensions."""
     return isinstance(x, Sequence) and all(isinstance(item, int) for item in x)
 
 
 def is_ListOfTensors(x: Any) -> TypeGuard[ListOfTensors]:
+    """Check for a list containing only PyTorch tensors."""
     return isinstance(x, list) and all(isinstance(item, torch.Tensor) for item in x)
 
 
 def is_ListOfListsOfTensors(x: Any) -> TypeGuard[ListOfListsOfTensors]:
+    """Check for a list of lists containing only PyTorch tensors."""
     return isinstance(x, list) and all(is_ListOfTensors(item) for item in x)
 
 
 def is_JaggedTensorOrTensor(x: Any) -> bool:
+    """Check for an fVDB jagged tensor or PyTorch tensor."""
     from .jagged_tensor import JaggedTensor
 
     return isinstance(x, (JaggedTensor, torch.Tensor))
@@ -212,6 +230,7 @@ def is_JaggedTensorOrTensor(x: Any) -> bool:
 
 # Corresponding validation function
 def is_GridBatchIndex(x: Any) -> bool:
+    """Check for a supported scalar, slice, list, or tensor grid-batch index."""
     if isinstance(x, (int, np.integer, slice)):
         return True
     if isinstance(x, torch.Tensor):
@@ -251,32 +270,39 @@ NumericMaxRank3 = NumericMaxRank2 | Sequence[Sequence[Sequence[NumericScalarNati
 
 
 def is_DeviceIdentifier(x: Any) -> TypeGuard[DeviceIdentifier]:
+    """Check for a device string or PyTorch device object."""
     return isinstance(x, (str, torch.device))
 
 
 def is_NumericScalarNative(x: Any) -> TypeGuard[NumericScalarNative]:
+    """Check for a Python or NumPy integer or floating-point scalar."""
     return isinstance(x, (int, float, np.integer, np.floating))
 
 
 def is_NumericScalar(x: Any) -> TypeGuard[NumericScalar]:
+    """Check for a native numeric scalar or a zero-dimensional tensor or array."""
     return is_NumericScalarNative(x) or (isinstance(x, (torch.Tensor, numpy.ndarray)) and x.ndim == 0)
 
 
 def is_SequenceOfNumericScalarNative(x: Any) -> TypeGuard[Sequence[NumericScalarNative]]:
+    """Check for a sequence of native numeric scalars."""
     return isinstance(x, Sequence) and all(is_NumericScalarNative(item) for item in x)
 
 
 def is_SequenceOfSequenceOfNumericScalarNative(x: Any) -> TypeGuard[Sequence[Sequence[NumericScalarNative]]]:
+    """Check for nested sequences of native numeric scalars."""
     return isinstance(x, Sequence) and all(is_SequenceOfNumericScalarNative(item) for item in x)
 
 
 def is_SequenceOfSequenceOfSequenceOfNumericScalarNative(
     x: Any,
 ) -> TypeGuard[Sequence[Sequence[Sequence[NumericScalarNative]]]]:
+    """Check for three nested sequence levels of native numeric scalars."""
     return isinstance(x, Sequence) and all(is_SequenceOfSequenceOfNumericScalarNative(item) for item in x)
 
 
 def is_NumericMaxRank1(x: Any) -> TypeGuard[NumericMaxRank1]:
+    """Check for numeric input with at most one dimension."""
     return (
         is_NumericScalar(x)
         or is_SequenceOfNumericScalarNative(x)
@@ -286,6 +312,7 @@ def is_NumericMaxRank1(x: Any) -> TypeGuard[NumericMaxRank1]:
 
 
 def is_NumericMaxRank2(x: Any) -> TypeGuard[NumericMaxRank2]:
+    """Check for numeric input with at most two dimensions."""
     return (
         is_NumericMaxRank1(x)
         or is_SequenceOfSequenceOfNumericScalarNative(x)
@@ -294,6 +321,7 @@ def is_NumericMaxRank2(x: Any) -> TypeGuard[NumericMaxRank2]:
 
 
 def is_NumericMaxRank3(x: Any) -> TypeGuard[NumericMaxRank3]:
+    """Check for numeric input with at most three dimensions."""
     return (
         is_NumericMaxRank2(x)
         or is_SequenceOfSequenceOfSequenceOfNumericScalarNative(x)
@@ -357,6 +385,8 @@ def resolve_device(device_id: DeviceIdentifier | None, inherit_from: Any = None)
 
 
 class ValueConstraint(Enum):
+    """Optional sign constraints applied when converting numeric inputs to tensors."""
+
     NONE = auto()
     NON_NEGATIVE = auto()
     POSITIVE = auto()

@@ -14,6 +14,10 @@ establishing baseline understanding of:
 This file does NOT test fVDB sparse transposed convolution - it validates our
 understanding of PyTorch semantics that we will use as ground truth.
 
+The cases in this legacy file use odd kernel extents, so their ``K // 2``
+notation is exactly ``P_before = floor((K - 1) / 2)``. General even-kernel
+phase is covered by the independent canonical semantics oracle.
+
 =============================================================================
 THEORY: Transposed Convolution vs Regular Convolution
 =============================================================================
@@ -60,6 +64,8 @@ The relationship: strided conv_transpose is the adjoint of strided conv3d.
 import unittest
 
 import torch
+from parameterized import parameterized
+
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
     fourier_anti_symmetric_kernel,
@@ -72,7 +78,8 @@ from fvdb.utils.tests.convolution_utils import (
     disable_tf32,
     get_tolerances,
 )
-from parameterized import parameterized
+
+from . import expand_tests
 
 
 def _validate_impulse_conv_transpose(
@@ -157,7 +164,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
     # Forward Pass Tests
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that conv_transpose3d of an impulse produces the original kernel.
@@ -309,7 +316,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
                 check_bounds=False,
             )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_conv_transpose_is_adjoint_of_conv(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Verify that conv_transpose3d is the adjoint of conv3d.
@@ -355,7 +362,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
     # Since conv_transpose is the adjoint of conv, its backward w.r.t. input
     # is the forward conv! This creates a nice symmetry.
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_input_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. input produces expected gradients.
@@ -418,7 +425,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
             input_grad_region, flipped_kernel, rtol=tols["input_grad"][0], atol=tols["input_grad"][1]
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test that backward pass w.r.t. weights produces expected gradients.
@@ -465,7 +472,7 @@ class TestConvTransposeGroundTruth(unittest.TestCase):
         tols = get_tolerances(dtype)
         torch.testing.assert_close(weight_grad, expected_grad, rtol=tols["kernel_grad"][0], atol=tols["kernel_grad"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward_weight_grad_offset(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test weight gradient when input and output gradient impulses are at different coords.

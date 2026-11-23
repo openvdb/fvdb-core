@@ -4,12 +4,12 @@
 import logging
 import timeit
 
-import fvdb.viz as fviz
 import polyscope as ps
 import torch
-from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
+import fvdb.viz as fviz
 from fvdb import GridBatch, JaggedTensor
+from fvdb.utils.examples import load_dragon_mesh, make_ray_grid
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
 
     gc, ge = fviz.gridbatch_edge_network(grid)
 
-    logging.info(f"Tracing {nrays ** 2} Ray Segments...")
+    logging.info(f"Tracing {nrays**2} Ray Segments...")
     start = timeit.default_timer()
     segments = grid.segments_along_rays(ray_o, ray_d, N, eps=1e-5)
     if p.is_cuda:

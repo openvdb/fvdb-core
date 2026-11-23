@@ -32,10 +32,10 @@ namespace ops {
 /// @param[in] eps2d 2D projection epsilon for numerical stability
 /// @param[in] radii Output radii from forward pass [C, N]
 /// @param[in] conics Output conics from forward pass [C, N, 3]
-/// @param[out] dLossDMeans2d Gradients with respect to projected 2D means [C, N, 2]
-/// @param[out] dLossDDepths Gradients with respect to depths [C, N]
-/// @param[out] dLossDConics Gradients with respect to conics [C, N, 3]
-/// @param[out] dLossDCompensations Gradients with respect to compensations [C, N] (optional)
+/// @param[in] dLossDMeans2d Gradients with respect to projected 2D means [C, N, 2]
+/// @param[in] dLossDDepths Gradients with respect to depths [C, N] (optional; absent means zero)
+/// @param[in] dLossDConics Gradients with respect to conics [C, N, 3]
+/// @param[in] dLossDCompensations Gradients with respect to compensations [C, N] (optional)
 /// @param[in] worldToCamMatricesRequiresGrad Whether viewmats requires gradient
 /// @param[in] ortho Whether orthographic projection was used in forward pass
 /// @param[in] outNormalizeddLossdMeans2dNormAccum Optional output for normalized gradients tracked
@@ -66,7 +66,7 @@ projectGaussiansAnalyticBwd(
     const torch::Tensor &radii,                             // [C, N]
     const torch::Tensor &conics,                            // [C, N, 3]
     const torch::Tensor &dLossDMeans2d,                     // [C, N, 2]
-    const torch::Tensor &dLossDDepths,                      // [C, N]
+    const at::optional<torch::Tensor> &dLossDDepths,        // [C, N] optional
     const torch::Tensor &dLossDConics,                      // [C, N, 3]
     const at::optional<torch::Tensor> &dLossDCompensations, // [C, N] optional
     const bool worldToCamMatricesRequiresGrad,

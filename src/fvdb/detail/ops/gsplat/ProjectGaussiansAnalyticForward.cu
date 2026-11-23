@@ -349,56 +349,58 @@ dispatchProjectGaussiansAnalyticFwd<torch::kPrivateUse1>(
         int64_t deviceProblemOffset, deviceProblemSize;
         std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
 
-        const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
+        if (deviceProblemSize > 0) {
+            const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);
 
-        if (ortho) {
-            const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
-                                                             worldToCamMatrices,
-                                                             static_cast<int32_t>(imageWidth),
-                                                             static_cast<int32_t>(imageHeight),
-                                                             nearPlane,
-                                                             farPlane};
-            ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
-                camera,
-                eps2d,
-                radiusClip,
-                calcCompensations,
-                means,
-                quats,
-                logScales,
-                outRadii,
-                outMeans2d,
-                outDepths,
-                outConics,
-                outCompensations);
-            projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
-                    deviceProblemOffset, deviceProblemSize, projectionForward);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        } else {
-            const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
-                                                            worldToCamMatrices,
-                                                            static_cast<int32_t>(imageWidth),
-                                                            static_cast<int32_t>(imageHeight),
-                                                            nearPlane,
-                                                            farPlane};
-            ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
-                camera,
-                eps2d,
-                radiusClip,
-                calcCompensations,
-                means,
-                quats,
-                logScales,
-                outRadii,
-                outMeans2d,
-                outDepths,
-                outConics,
-                outCompensations);
-            projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
-                <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
-                    deviceProblemOffset, deviceProblemSize, projectionForward);
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
+            if (ortho) {
+                const auto camera = OrthographicCamera<scalar_t>{projectionMatrices,
+                                                                 worldToCamMatrices,
+                                                                 static_cast<int32_t>(imageWidth),
+                                                                 static_cast<int32_t>(imageHeight),
+                                                                 nearPlane,
+                                                                 farPlane};
+                ProjectionForward<scalar_t, OrthographicCamera<scalar_t>> projectionForward(
+                    camera,
+                    eps2d,
+                    radiusClip,
+                    calcCompensations,
+                    means,
+                    quats,
+                    logScales,
+                    outRadii,
+                    outMeans2d,
+                    outDepths,
+                    outConics,
+                    outCompensations);
+                projectionForwardKernel<scalar_t, OrthographicCamera<scalar_t>>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                        deviceProblemOffset, deviceProblemSize, projectionForward);
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            } else {
+                const auto camera = PerspectiveCamera<scalar_t>{projectionMatrices,
+                                                                worldToCamMatrices,
+                                                                static_cast<int32_t>(imageWidth),
+                                                                static_cast<int32_t>(imageHeight),
+                                                                nearPlane,
+                                                                farPlane};
+                ProjectionForward<scalar_t, PerspectiveCamera<scalar_t>> projectionForward(
+                    camera,
+                    eps2d,
+                    radiusClip,
+                    calcCompensations,
+                    means,
+                    quats,
+                    logScales,
+                    outRadii,
+                    outMeans2d,
+                    outDepths,
+                    outConics,
+                    outCompensations);
+                projectionForwardKernel<scalar_t, PerspectiveCamera<scalar_t>>
+                    <<<NUM_BLOCKS, DEFAULT_BLOCK_DIM, camera.numSharedMemBytes(), stream>>>(
+                        deviceProblemOffset, deviceProblemSize, projectionForward);
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
         }
     }
 

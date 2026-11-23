@@ -6,16 +6,15 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "fvdb-core"
-version = "0.5.0.dev0"
+version = "0.7.0.dev0"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 readme = "README.md"
 dependencies = [
-    # Require torch; users will choose the correct CUDA build from PyTorch's index
-    "torch>=2.8,<2.13",
+    # Require torch; users will choose the correct CUDA build from PyTorch's index.
+    "torch>=2.7",
     "numpy",
 ]
-optional-dependencies = {viewer = ["nanovdb-editor>=0.0.23,<0.2.0"]}
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -30,6 +29,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Visualization",
     "Topic :: Multimedia :: Graphics :: 3D Modeling",
 ]
+
+[project.optional-dependencies]
+viewer = ["nanovdb-editor>=0.1.6,<0.2.0"]
+# Mesh/point-cloud loading and plotting used by fvdb.utils.examples. These are imported
+# lazily, so the core package works without them; install with `pip install fvdb-core[examples]`.
+examples = ["point_cloud_utils", "polyscope"]
 
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}-{build_type}"
@@ -48,11 +53,35 @@ components = ["PythonModule"]
 [tool.scikit-build.wheel]
 packages = ["fvdb"]
 
-[tool.black]
+[tool.ruff]
+required-version = "==0.15.7"
+target-version = "py311"
 line-length = 120
-target-version = ["py311"]
+
+[tool.ruff.format]
+# Only Python sources are formatted: not notebooks, and not the code blocks in Markdown
+# docs that newer Ruff releases format by default.
+exclude = ["*.ipynb", "*.md"]
+
+[tool.ruff.lint]
+# Enforce API descriptions and sort imports. Type stubs and test/example helpers
+# remain exempt from linting, but are still formatted by `ruff format`.
+select = ["D101", "D102", "D103", "D104", "D417", "I"]
+exclude = ["*.pyi", "fvdb/utils/tests/**", "fvdb/utils/examples/**", "*.ipynb", "*.md"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pyright]
+# fvdb/functional is checked against the hand-written fvdb/_fvdb_cpp.pyi stub. The rest of the
+# package is not yet clean; widen this as it is.
+include = ["fvdb/functional"]
+pythonVersion = "3.10"
+# The compiled extension has a stub but no Python source.
+reportMissingModuleSource = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-norecursedirs = [".*", "build", "dist"]
+# Sphinx extensions have their own tests in the documentation-build environment.
+norecursedirs = [".*", "build", "dist", "docs/_ext"]

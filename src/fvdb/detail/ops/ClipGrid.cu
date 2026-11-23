@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 #include <fvdb/detail/GridBatchDataFactory.h>
-#include <fvdb/detail/ops/ActiveGridCoords.h>
 #include <fvdb/detail/ops/ActiveVoxelsInBoundsMask.h>
-#include <fvdb/detail/ops/BuildGridFromIjk.h>
+#include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/ops/ClipGrid.h>
 
 namespace fvdb {
@@ -15,18 +14,20 @@ std::tuple<c10::intrusive_ptr<GridBatchData>, JaggedTensor>
 clipGridWithMask(const GridBatchData &grid,
                  const std::vector<nanovdb::Coord> &ijkMin,
                  const std::vector<nanovdb::Coord> &ijkMax) {
-    JaggedTensor activeVoxelMask       = activeVoxelsInBoundsMask(grid, ijkMin, ijkMax);
-    JaggedTensor activeVoxelCoords     = activeGridCoords(grid);
-    JaggedTensor activeVoxelMaskCoords = activeVoxelCoords.rmask(activeVoxelMask.jdata());
+    JaggedTensor activeVoxelMask = activeVoxelsInBoundsMask(grid, ijkMin, ijkMax);
 
-    std::vector<nanovdb::Vec3d> voxS, voxO;
-    grid.gridVoxelSizesAndOrigins(voxS, voxO);
     if (grid.batchSize() == 0) {
         return std::make_tuple(makeEmptyGridBatchData(grid.device()), activeVoxelMask);
-    } else {
-        auto clippedGridPtr = createNanoGridFromIJK(activeVoxelMaskCoords, voxS, voxO);
-        return std::make_tuple(clippedGridPtr, activeVoxelMask);
     }
+
+    // Clipping keeps a subset of the source voxels, so prune the grid to the per-voxel in-bounds
+    // mask directly (leaf-mask morphology) rather than materializing every active coordinate and
+    // rebuilding via a radix sort. pruneGrid preserves the source transform and the canonical
+    // voxel order, so the features rmask'd in clipGridFeaturesWithMask stay row-aligned with the
+    // clipped grid. (Both this and activeVoxelsInBoundsMask are CPU+CUDA only; clip never
+    // supported PrivateUse1.)
+    auto clippedGridPtr = pruneGrid(grid, activeVoxelMask);
+    return std::make_tuple(clippedGridPtr, activeVoxelMask);
 }
 
 c10::intrusive_ptr<GridBatchData>

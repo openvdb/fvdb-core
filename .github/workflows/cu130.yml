@@ -1,28 +1,28 @@
 name: fVDB pip CUDA 13.0 Build and Test
 
 on:
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
 
-# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# No concurrency group here: PR runs are de-duplicated by the caller
+# (pr-tests.yml). A group built from github.workflow would collide with the
+# caller's, because in a called workflow github.workflow is the caller's name.
 
+# Read-only by default. Jobs that need more are granted it individually
+# (check-changes; the runner start and stop calls). The jobs that run PR code
+# get contents: read only.
 permissions:
   contents: read
-  deployments: read
-  pull-requests: read
-  issues: read
-  # Need ID token write permission to use OIDC
-  id-token: write
 
 jobs:
   ##############################################################################
   # CHECK FOR RELEVANT CHANGES
   ##############################################################################
   check-changes:
+    permissions:
+      pull-requests: read # scopes required by check-changes.yml; see that file
     uses: ./.github/workflows/check-changes.yml
 
   versions:
@@ -34,29 +34,19 @@ jobs:
   start-build-runner:
     name: Start CPU-only EC2 runner for build
     needs: [check-changes, versions]
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     if: >-
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
-    outputs:
-      label: ${{ steps.start-build-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-build-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 runner
-        id: start-build-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-cpu-ami }}
-          ec2-instance-type: m6a.8xlarge
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+    uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      instance-type: m6a.8xlarge
+      runner-label: cu130-build-${{ github.run_id }}-${{ github.run_attempt }}
+      az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
   # BUILD FVDB
@@ -84,16 +74,19 @@ jobs:
           apt-get install -y software-properties-common
           add-apt-repository -y ppa:ubuntu-toolchain-r/test
           apt-get update
-          apt-get install -y gcc-${{ needs.versions.outputs.gcc-toolset }} g++-${{ needs.versions.outputs.gcc-toolset }}
-          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ needs.versions.outputs.gcc-toolset }} 100
-          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${{ needs.versions.outputs.gcc-toolset }} 100
+          apt-get install -y gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET}
+          update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+          update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-${NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET} 100
+        env:
+          NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -129,11 +122,11 @@ jobs:
       #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -141,10 +134,12 @@ jobs:
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
 
       - name: Install apt dependencies
         run: apt install -y zlib1g-dev libpng-dev pkg-config
@@ -152,19 +147,24 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Build fvdb
         run: |
           source .venv/bin/activate
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
           pip install "$NANOVDB_EDITOR_SPEC"
-          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list '${{ needs.versions.outputs.cuda-arch-pr }}'
+          ./build.sh wheel verbose gtests benchmarks --cuda-arch-list "${NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR}"
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 
       - name: Upload wheel
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu130
             path: dist/*.whl
             retention-days: 2
 
@@ -174,9 +174,9 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-cu130
             path: fvdb-gtest.tar
             retention-days: 2
 
@@ -196,23 +196,18 @@ jobs:
       - start-build-runner # required to get output from the start-build-runner job
       - fvdb-build # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
     # but only if the start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-build-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      label: cu130-build-${{ github.run_id }}-${{ github.run_attempt }}
+      ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
   # START FVDB TESTS GPU RUNNER
@@ -220,26 +215,17 @@ jobs:
   start-tests-gpu-runner:
     name: Start EC2 GPU runner for gtests
     needs: [fvdb-build, versions]
-    runs-on: ubuntu-latest
-    outputs:
-      label: ${{ steps.start-tests-gpu-runner.outputs.label }}
-      ec2-instance-id: ${{ steps.start-tests-gpu-runner.outputs.ec2-instance-id }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Start EC2 GPU runner
-        id: start-tests-gpu-runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: start
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          ec2-image-id: ${{ needs.versions.outputs.aws-gpu-ami }}
-          ec2-instance-type: g6.2xlarge # 8 CPU-core, L4 GPU
-          subnet-id: ${{ needs.versions.outputs.aws-subnet }}
-          security-group-id: ${{ needs.versions.outputs.aws-security-group }}
+    permissions:
+      id-token: write  # Required for AWS OIDC
+    uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      instance-type: g6.xlarge # 4 CPU-core, L4 GPU
+      fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
+      runner-label: cu130-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -268,12 +254,13 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
         run: |
@@ -293,11 +280,11 @@ jobs:
 
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -305,10 +292,12 @@ jobs:
 
       - name: Install CMake
         run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${{ needs.versions.outputs.cmake-version }}/cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh &&
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
           mkdir /opt/cmake &&
-          sh cmake-${{ needs.versions.outputs.cmake-version }}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
           cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
 
       - name: Install apt dependencies
         run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools make
@@ -316,12 +305,15 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download gtests
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-cu130
             path: .
 
       - name: Extract tar
@@ -352,6 +344,8 @@ jobs:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
+        # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
+        NVIDIA_DRIVER_CAPABILITIES: all
       options: --rm
     defaults:
       run:
@@ -367,12 +361,13 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -392,11 +387,11 @@ jobs:
           git merge pr_branch
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         id: setup-python
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
@@ -404,18 +399,22 @@ jobs:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
 
       - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
+        # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
+        run: apt install -y zlib1g-dev libpng-dev libvulkan1 libxext6 libegl1
 
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
           uv pip install --no-cache-dir setuptools
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu130
             path: ./dist
 
       - name: Install package
@@ -424,6 +423,14 @@ jobs:
           pip install ./dist/*.whl
 
       - name: Run tests
+        env:
+          # The whole parametrized matrix shares one process, so the caching allocator's
+          # reserved pool only ever grows and its high-water mark ends up far above any
+          # single test's live footprint. Freeing straight back to the driver keeps the
+          # suite within the runner's VRAM, at the cost of a cudaMalloc/cudaFree per
+          # allocation. See
+          # https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-alloc-conf
+          PYTORCH_NO_CUDA_MEMORY_CACHING: 1
         run: |
           source .venv/bin/activate
           NANOVDB_EDITOR_SPEC=$(python .github/scripts/get_viewer_dependency.py)
@@ -464,12 +471,13 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
           # For pushes, this checks out the pushed commit
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
 
       - name: Fetch PR branch
         if: github.event_name == 'pull_request_target'
@@ -488,11 +496,11 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -504,12 +512,15 @@ jobs:
       - name: Install pip dependencies
         run: |
           uv venv
-          uv pip install --no-cache-dir -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
+          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
+          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
+        env:
+          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu130
             path: ./dist
 
       - name: Install package
@@ -540,20 +551,15 @@ jobs:
       - fvdb-unit-test # required to wait when the main job is done
       - fvdb-docs-test # required to wait when the main job is done
       - versions
-    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for AWS OIDC
     # required to stop the runner even if the error happened in the previous jobs
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
-    steps:
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ needs.versions.outputs.aws-role }}
-          aws-region: ${{ needs.versions.outputs.aws-region }}
-      - name: Stop EC2 runner
-        uses: machulav/ec2-github-runner@v2
-        with:
-          mode: stop
-          github-token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
-          label: ${{ needs.start-tests-gpu-runner.outputs.label }}
-          ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+    uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
+    with:
+      label: cu130-gpu-${{ github.run_id }}-${{ github.run_attempt }}
+      ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
+      aws-region: ${{ needs.versions.outputs.aws-region }}

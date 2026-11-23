@@ -1,17 +1,19 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
+#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
+#include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/BuildGridFromPoints.h>
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
-#include <fvdb/detail/utils/cuda/GridDim.h>
-#include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
+#include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
@@ -21,14 +23,90 @@
 
 #include <thrust/universal_vector.h>
 
+#include <limits>
+
 namespace fvdb {
 namespace detail {
 namespace ops {
 
 template <torch::DeviceType>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromPoints(const JaggedTensor &points,
-                            const std::vector<VoxelCoordTransform> &txs);
+GridStorage dispatchBuildGridFromPoints(const JaggedTensor &points,
+                                        const std::vector<VoxelCoordTransform> &txs);
+
+namespace {
+
+/// @brief Pointer-like adaptor that yields index-space voxel coordinates from world-space points
+///        on demand, so the coordinates never have to be materialized in memory.
+///
+/// `nanovdb::tools::cuda::voxelsToGrid` reads its input through a pointer-like type rather than a
+/// raw pointer (see `nanovdb::tools::cuda::fancy_ptr`, which documents the contract): `operator[]`
+/// is what the kernels actually call, and `operator*` exists only so `pointer_traits` can deduce
+/// `element_type` from its return type. Returning `nanovdb::Coord` by value satisfies both and
+/// selects the `is_same<Vec3T, Coord>` branch of `TileKeyFunctor` — the same branch a raw
+/// `nanovdb::Coord *` takes — so the resulting topology is bit-for-bit what the previous
+/// materialize-then-sort path produced.
+///
+/// This replaces a `torch::empty({N, 3}, kInt32)` coordinate tensor (12 B per input point) that
+/// was written once and read once.
+///
+/// The class supports both memory layouts of an (N, 3) tensor so that non-contiguous views --
+/// e.g. the xyz columns of an (N, 6) point cloud, `cloud[:, :3]` -- are read in place rather
+/// than copied. `IsContiguous` selects between compile-time strides (3, 1) and runtime strides
+/// taken from the tensor, so the packed fast path pays nothing for the generality.
+///
+/// @tparam ScalarT Scalar type of the input points (floating point or half)
+/// @tparam IsContiguous Whether the points are a packed (N, 3) array; when false, element
+///         strides are supplied at construction
+template <typename ScalarT, bool IsContiguous> class TransformedPointPtr {
+  public:
+    using MathT = typename at::opmath_type<ScalarT>;
+
+    /// @param points Pointer to the first component of the first point
+    /// @param transform World-space to index-space transform for this batch item
+    /// @param rowStride Distance in elements between consecutive points (3 if packed)
+    /// @param colStride Distance in elements between a point's components (1 if packed)
+    __hostdev__
+    TransformedPointPtr(const ScalarT *points,
+                        const VoxelCoordTransform &transform,
+                        int64_t rowStride = 3,
+                        int64_t colStride = 1)
+        : mPoints(points), mTransform(transform), mRowStride(rowStride), mColStride(colStride) {}
+
+    /// @brief Return the index-space voxel coordinate of the i'th point. Required by PointsToGrid.
+    __hostdev__ inline nanovdb::Coord
+    operator[](size_t i) const {
+        MathT x, y, z;
+        if constexpr (IsContiguous) {
+            const ScalarT *point = mPoints + 3 * i;
+            x                    = static_cast<MathT>(point[0]);
+            y                    = static_cast<MathT>(point[1]);
+            z                    = static_cast<MathT>(point[2]);
+        } else {
+            const ScalarT *point = mPoints + static_cast<int64_t>(i) * mRowStride;
+            x                    = static_cast<MathT>(point[0]);
+            y                    = static_cast<MathT>(point[mColStride]);
+            z                    = static_cast<MathT>(point[2 * mColStride]);
+        }
+        return mTransform.apply(x, y, z).round();
+    }
+
+    /// @brief Required by `pointer_traits` to deduce `element_type` -- only the return *type* is
+    ///        used. Deliberately does not read `mPoints`: `pointer_traits` never evaluates this,
+    ///        and returning a default coordinate keeps it well defined for an empty point set if
+    ///        some future code path (or debug instrumentation) ever does evaluate it.
+    __hostdev__ inline nanovdb::Coord
+    operator*() const {
+        return nanovdb::Coord();
+    }
+
+  private:
+    const ScalarT *mPoints;
+    VoxelCoordTransform mTransform;
+    int64_t mRowStride;
+    int64_t mColStride;
+};
+
+} // namespace
 
 template <typename ScalarT>
 __device__ void
@@ -50,49 +128,106 @@ ijkForPointsCallback(int32_t bidx,
     outIJKData[eidx][2] = ijk0[2];
 }
 
-JaggedTensor
-ijkForPoints(const JaggedTensor &jaggedPoints, const std::vector<VoxelCoordTransform> &transforms) {
-    TORCH_CHECK(jaggedPoints.device().is_cuda(), "GridBatchData must be on CUDA device");
-    TORCH_CHECK(jaggedPoints.device().has_index(), "GridBatchData must have a valid index");
+template <>
+GridStorage
+dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
+                                          const std::vector<VoxelCoordTransform> &txs) {
+    using GridT = nanovdb::ValueOnIndex;
 
-    const torch::TensorOptions optsData =
-        torch::TensorOptions().dtype(torch::kInt32).device(jaggedPoints.device());
-    torch::Tensor outIJK = torch::empty({jaggedPoints.jdata().size(0), 3}, optsData);
+    TORCH_CHECK(points.device().is_cuda(), "points must be on a CUDA device");
+    TORCH_CHECK(points.device().has_index(), "points device must have a valid index");
 
-    AT_DISPATCH_V2(
-        jaggedPoints.scalar_type(),
-        "ijkForPoints",
-        AT_WRAP([&] {
-            RAIIRawDeviceBuffer<VoxelCoordTransform> transformsDVec(transforms.size(),
-                                                                    jaggedPoints.device());
-            transformsDVec.setData((VoxelCoordTransform *)transforms.data(), true /* blocking */);
-            const VoxelCoordTransform *transformDevPtr = transformsDVec.devicePtr;
+    const torch::Device device = points.device();
+    c10::cuda::CUDAGuard deviceGuard(device);
+    // The grids are built and their storage retained on the device's current torch stream; the
+    // prototype carries that stream and the device into every allocation the builder makes.
+    const cudaStream_t stream    = storageStream(device);
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
 
-            auto outIJKAcc = outIJK.packed_accessor64<int32_t, 2, torch::RestrictPtrTraits>();
+    // FIXME: Same host sync as _createNanoGridFromIJK -- the per-batch-item loop below needs the
+    // offsets on the host in order to slice the point array. Ideally this would be a single
+    // invocation over the whole batch.
+    const torch::Tensor pointsBOffsetTensor = points.joffsets().cpu();
+    const auto pointsBOffset                = pointsBOffsetTensor.accessor<fvdb::JOffsetsType, 1>();
 
-            auto cb = [=] __device__(int32_t bidx,
-                                     int32_t eidx,
-                                     int32_t cidx,
-                                     JaggedRAcc64<scalar_t, 2> pacc) {
-                ijkForPointsCallback(bidx, eidx, pacc, transformDevPtr, outIJKAcc);
-            };
-            forEachJaggedElementChannelCUDA<scalar_t, 2, 1024>(1, jaggedPoints, cb);
+    // The loop below indexes txs by batch item, so make the invariant explicit rather than
+    // relying on the caller. joffsets holds one offset per batch item plus a terminating entry.
+    TORCH_CHECK(pointsBOffset.size(0) >= 1,
+                "Expected joffsets to have at least one entry, got ",
+                pointsBOffset.size(0));
+    TORCH_CHECK(static_cast<int64_t>(txs.size()) == pointsBOffset.size(0) - 1,
+                "Expected one transform per batch item, but got ",
+                txs.size(),
+                " transforms for ",
+                pointsBOffset.size(0) - 1,
+                " batch items");
+
+    // TransformedPointPtr reads the points in place for both layouts: compile-time strides for
+    // a packed (N, 3) array, runtime strides otherwise (e.g. the xyz columns of an (N, 6)
+    // tensor). Neither path copies the point data.
+    const torch::Tensor pointsData = points.jdata();
+    const bool pointsAreContiguous = pointsData.is_contiguous();
+    const int64_t rowStride        = pointsData.stride(0);
+    const int64_t colStride        = pointsData.stride(1);
+
+    return AT_DISPATCH_V2(
+        points.scalar_type(),
+        "buildGridFromPoints",
+        AT_WRAP([&]() -> GridStorage {
+            const scalar_t *pointsPtr = pointsData.data_ptr<scalar_t>();
+
+            // Build one grid per batch item, then lay them end to end in one storage.
+            GridStorageParts parts(device, stream, pointsBOffset.size(0) - 1);
+            for (int64_t i = 0; i < (pointsBOffset.size(0) - 1); i += 1) {
+                const int64_t startIdx = pointsBOffset[i];
+                const int64_t nPoints  = pointsBOffset[i + 1] - startIdx;
+
+                // PointsToGrid casts its element count to int for the segmented radix sort, so
+                // anything at or above 2^31 would silently produce a corrupt grid.
+                TORCH_CHECK(nPoints <= std::numeric_limits<int32_t>::max(),
+                            "Cannot build a grid from ",
+                            nPoints,
+                            " points in a single batch item (limit is ",
+                            std::numeric_limits<int32_t>::max(),
+                            ")");
+
+                if (nPoints == 0) {
+                    parts.addEmpty();
+                } else if (pointsAreContiguous) {
+                    using PointPtrT = TransformedPointPtr<scalar_t, true>;
+                    parts.add(GridStorage(
+                        nanovdb::tools::cuda::
+                            voxelsToGrid<GridT, PointPtrT, DeviceGridBuffer, BuilderResource>(
+                                PointPtrT(pointsPtr + 3 * startIdx, txs[i]),
+                                nPoints,
+                                1.0,
+                                proto,
+                                stream),
+                        device));
+                } else {
+                    using PointPtrT = TransformedPointPtr<scalar_t, false>;
+                    parts.add(GridStorage(
+                        nanovdb::tools::cuda::
+                            voxelsToGrid<GridT, PointPtrT, DeviceGridBuffer, BuilderResource>(
+                                PointPtrT(
+                                    pointsPtr + startIdx * rowStride, txs[i], rowStride, colStride),
+                                nPoints,
+                                1.0,
+                                proto,
+                                stream),
+                        device));
+                }
+                C10_CUDA_KERNEL_LAUNCH_CHECK();
+            }
+
+            return parts.merge();
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
-    return jaggedPoints.jagged_like(outIJK);
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
-dispatchBuildGridFromPoints<torch::kCUDA>(const JaggedTensor &points,
-                                          const std::vector<VoxelCoordTransform> &txs) {
-    JaggedTensor coords = ijkForPoints(points, txs);
-    return ops::_createNanoGridFromIJK(coords);
-}
-
-template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromPoints<torch::kPrivateUse1>(const JaggedTensor &points,
                                                  const std::vector<VoxelCoordTransform> &txs) {
     TORCH_CHECK(points.device().is_privateuseone(), "GridBatchData must be on PrivateUse1 device");
@@ -127,7 +262,7 @@ dispatchBuildGridFromPoints<torch::kPrivateUse1>(const JaggedTensor &points,
 }
 
 template <>
-nanovdb::GridHandle<TorchDeviceBuffer>
+GridStorage
 dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
                                          const std::vector<VoxelCoordTransform> &txs) {
     using GridT = nanovdb::ValueOnIndex;
@@ -148,7 +283,7 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
             const torch::TensorAccessor<fvdb::JOffsetsType, 1> &pointsBOffsetsAcc =
                 pointsJagged.joffsets().accessor<fvdb::JOffsetsType, 1>();
 
-            std::vector<nanovdb::GridHandle<TorchDeviceBuffer>> batchHandles;
+            std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> batchHandles;
             batchHandles.reserve(pointsBOffsetsAcc.size(0) - 1);
             for (int bi = 0; bi < (pointsBOffsetsAcc.size(0) - 1); bi += 1) {
                 VoxelCoordTransform tx = txs[bi];
@@ -168,17 +303,13 @@ dispatchBuildGridFromPoints<torch::kCPU>(const JaggedTensor &pointsJagged,
                 }
 
                 proxyGridAccessor.merge();
-                auto ret = nanovdb::tools::createNanoGrid<ProxyGridT, GridT, TorchDeviceBuffer>(
-                    *proxyGrid, 0u, false, false);
-                ret.buffer().to(torch::kCPU);
-                batchHandles.push_back(std::move(ret));
+                batchHandles.push_back(
+                    nanovdb::tools::createNanoGrid<ProxyGridT, GridT, nanovdb::HostBuffer>(
+                        *proxyGrid, 0u, false, false));
             }
 
-            if (batchHandles.size() == 1) {
-                return std::move(batchHandles[0]);
-            } else {
-                return nanovdb::mergeGrids(batchHandles);
-            }
+            return GridStorage(batchHandles.size() == 1 ? std::move(batchHandles[0])
+                                                        : nanovdb::mergeGrids(batchHandles));
         }),
         AT_EXPAND(AT_FLOATING_TYPES),
         c10::kHalf);
@@ -219,10 +350,10 @@ buildGridFromPoints(const JaggedTensor &points,
     for (int64_t i = 0; i < numGrids; i += 1) {
         transforms.push_back(primalVoxelTransformForSizeAndOrigin(voxelSizes[i], origins[i]));
     }
-    auto handle = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
+    GridStorage storage = FVDB_DISPATCH_KERNEL(points.device(), [&]() {
         return dispatchBuildGridFromPoints<DeviceTag>(points, transforms);
     });
-    return makeGridBatchData(std::move(handle), voxelSizes, origins);
+    return makeGridBatchData(std::move(storage), voxelSizes, origins);
 }
 
 } // namespace ops

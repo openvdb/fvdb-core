@@ -3,10 +3,154 @@
 
 #include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
 #include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianIntersectionRange.h>
 
 #include <torch/types.h>
 
 #include <gtest/gtest.h>
+
+#include <cmath>
+#include <numeric>
+#include <vector>
+
+namespace {
+
+// Enumerate tile ownership independently of the range helper's camera boundary arithmetic.
+void
+checkGaussianRange(const int64_t keyStart,
+                   const int64_t keyEnd,
+                   const uint32_t totalTiles,
+                   const std::vector<int32_t> &cameraIds,
+                   const fvdb::detail::ops::GaussianIntersectionRange range) {
+    SCOPED_TRACE(::testing::Message() << "tile keys [" << keyStart << ", " << keyEnd
+                                      << "), tiles per camera " << totalTiles);
+    ASSERT_LE(range.offset, cameraIds.size());
+    ASSERT_LE(range.count, cameraIds.size() - range.offset);
+    std::vector<uint32_t> expected;
+    for (uint32_t gaussian = 0; gaussian < cameraIds.size(); ++gaussian) {
+        bool overlaps = false;
+        for (uint32_t tile = 0; tile < totalTiles; ++tile) {
+            const int64_t key = int64_t{cameraIds[gaussian]} * totalTiles + tile;
+            overlaps |= key >= keyStart && key < keyEnd;
+        }
+        if (overlaps) {
+            expected.push_back(gaussian);
+        }
+    }
+    std::vector<uint32_t> actual(range.count);
+    std::iota(actual.begin(), actual.end(), range.offset);
+    EXPECT_EQ(actual, expected);
+}
+
+} // namespace
+
+TEST(GaussianIntersectionRangeTest, DenseRangesMatchTileEnumeration) {
+    for (const uint32_t numCameras: {1u, 3u, 5u}) {
+        for (const uint32_t totalTiles: {1u, 3u, 9u}) {
+            for (const uint32_t numGaussians: {0u, 1u, 7u, 257u}) {
+                std::vector<int32_t> cameraIds;
+                for (uint32_t camera = 0; camera < numCameras; ++camera) {
+                    cameraIds.insert(cameraIds.end(), numGaussians, camera);
+                }
+                const int64_t totalKeys = numCameras * totalTiles;
+                // All half-open intervals include exact camera boundaries, partial cameras,
+                // the final tile and empty ranges, including an empty range within a camera.
+                for (int64_t begin = 0; begin <= totalKeys; ++begin) {
+                    for (int64_t end = begin; end <= totalKeys; ++end) {
+                        checkGaussianRange(begin,
+                                           end,
+                                           totalTiles,
+                                           cameraIds,
+                                           fvdb::detail::ops::gaussianRangeForTileKeys(
+                                               begin, end, totalTiles, numGaussians));
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, PackedRangesMatchTileEnumeration) {
+    // Missing leading, middle and trailing cameras; repeated IDs; and completely empty inputs.
+    for (const std::vector<int32_t> &cameraIds:
+         {std::vector<int32_t>{}, {0}, {4}, {1, 1, 3, 3, 3}, {0, 2, 2, 4}}) {
+        for (const uint32_t totalTiles: {1u, 3u, 9u}) {
+            const int64_t totalKeys = 5 * totalTiles;
+            for (int64_t begin = 0; begin <= totalKeys; ++begin) {
+                for (int64_t end = begin; end <= totalKeys; ++end) {
+                    checkGaussianRange(
+                        begin,
+                        end,
+                        totalTiles,
+                        cameraIds,
+                        fvdb::detail::ops::gaussianRangeForTileKeys(
+                            begin, end, totalTiles, cameraIds.size(), cameraIds.data()));
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, DevicePartitionsCoverEachIntersectionExactlyOnce) {
+    for (const bool packed: {false, true}) {
+        for (const uint32_t numCameras: {1u, 3u, 5u}) {
+            std::vector<int32_t> cameraIds;
+            for (uint32_t camera = 0; camera < numCameras; ++camera) {
+                cameraIds.insert(cameraIds.end(), packed ? camera % 3 : 3, camera);
+            }
+            for (const uint32_t totalTiles: {1u, 3u, 7u}) {
+                const int64_t totalKeys = numCameras * totalTiles;
+                for (const int deviceCount: {1, 2, 3, 4, 8}) {
+                    SCOPED_TRACE(::testing::Message()
+                                 << "packed " << packed << ", cameras " << numCameras << ", tiles "
+                                 << totalTiles << ", devices " << deviceCount);
+                    std::vector<int> visits(cameraIds.size() * totalTiles, 0);
+                    for (int device = 0; device < deviceCount; ++device) {
+                        // Explicit device count exercises production partitioning on the CPU,
+                        // including uneven splits and more devices than tile keys.
+                        const auto [keyStart, keyCount] =
+                            fvdb::detail::deviceAlignedChunk(1, totalKeys, device, deviceCount);
+                        const auto range = fvdb::detail::ops::gaussianRangeForTileKeys(
+                            keyStart,
+                            keyStart + keyCount,
+                            totalTiles,
+                            packed ? cameraIds.size() : 3,
+                            packed ? cameraIds.data() : nullptr);
+                        checkGaussianRange(
+                            keyStart, keyStart + keyCount, totalTiles, cameraIds, range);
+                        for (uint32_t gaussian = range.offset;
+                             gaussian < range.offset + range.count;
+                             ++gaussian) {
+                            for (uint32_t tile = 0; tile < totalTiles; ++tile) {
+                                const size_t key =
+                                    static_cast<size_t>(cameraIds[gaussian]) * totalTiles + tile;
+                                if (key >= keyStart && key < keyStart + keyCount) {
+                                    ++visits[gaussian * totalTiles + tile];
+                                }
+                            }
+                        }
+                    }
+                    EXPECT_EQ(visits, std::vector<int>(visits.size(), 1));
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, TileKeysUse64BitArithmetic) {
+    const uint32_t totalTiles = 1u << 30;
+    const int64_t boundary    = int64_t{4} * totalTiles;
+    const auto dense =
+        fvdb::detail::ops::gaussianRangeForTileKeys(boundary - 1, boundary + 1, totalTiles, 7);
+    EXPECT_EQ(dense.offset, 21u);
+    EXPECT_EQ(dense.count, 14u);
+    const int32_t cameraIds[] = {0, 3, 3, 4, 5};
+    const auto packed         = fvdb::detail::ops::gaussianRangeForTileKeys(
+        boundary - 1, boundary + 1, totalTiles, 5, cameraIds);
+    EXPECT_EQ(packed.offset, 1u);
+    EXPECT_EQ(packed.count, 3u);
+}
 
 class GaussianTileIntersectionTest : public ::testing::Test {
   protected:
@@ -69,19 +213,20 @@ class GaussianTileIntersectionTest : public ::testing::Test {
                        const torch::Tensor &intersection_values,
                        const torch::Tensor &depths,
                        const torch::Tensor &tile_mask = torch::Tensor()) {
+        EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
         // Handle dense case - iterate through 3D tensor
         if (tile_offsets.dim() == 3) {
             for (uint32_t c = 0; c < num_cameras; c++) {
                 for (uint32_t h = 0; h < num_tiles_h; h++) {
                     for (uint32_t w = 0; w < num_tiles_w; w++) {
-                        int start = tile_offsets[c][h][w].item<int32_t>();
-                        int end;
+                        int64_t start = tile_offsets[c][h][w].item<int64_t>();
+                        int64_t end;
                         if (w < num_tiles_w - 1) {
-                            end = tile_offsets[c][h][w + 1].item<int32_t>();
+                            end = tile_offsets[c][h][w + 1].item<int64_t>();
                         } else if (h < num_tiles_h - 1) {
-                            end = tile_offsets[c][h + 1][0].item<int32_t>();
+                            end = tile_offsets[c][h + 1][0].item<int64_t>();
                         } else {
-                            end = (c < num_cameras - 1) ? tile_offsets[c + 1][0][0].item<int32_t>()
+                            end = (c < num_cameras - 1) ? tile_offsets[c + 1][0][0].item<int64_t>()
                                                         : intersection_values.size(0);
                         }
                         verifyTileDepthOrder(start, end, intersection_values, depths);
@@ -91,10 +236,10 @@ class GaussianTileIntersectionTest : public ::testing::Test {
         }
         // Handle sparse case - iterate through 1D tensor
         else {
-            for (int i = 0; i < tile_offsets.size(0); i++) {
-                int start = tile_offsets[i].item<int32_t>();
-                int end   = (i < tile_offsets.size(0) - 1) ? tile_offsets[i + 1].item<int32_t>()
-                                                           : intersection_values.size(0);
+            for (int64_t i = 0; i < tile_offsets.size(0); i++) {
+                int64_t start = tile_offsets[i].item<int64_t>();
+                int64_t end   = (i < tile_offsets.size(0) - 1) ? tile_offsets[i + 1].item<int64_t>()
+                                                               : intersection_values.size(0);
                 verifyTileDepthOrder(start, end, intersection_values, depths);
             }
         }
@@ -102,11 +247,11 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
     // Helper to verify depth order within a single tile's range
     void
-    verifyTileDepthOrder(int start,
-                         int end,
+    verifyTileDepthOrder(int64_t start,
+                         int64_t end,
                          const torch::Tensor &intersection_values,
                          const torch::Tensor &depths) {
-        for (int i = start + 1; i < end; i++) {
+        for (int64_t i = start + 1; i < end; i++) {
             int global_idx1 = intersection_values[i - 1].item<int32_t>();
             int global_idx2 = intersection_values[i].item<int32_t>();
 
@@ -133,6 +278,7 @@ class GaussianTileIntersectionTest : public ::testing::Test {
                             const torch::Tensor &radii,
                             const torch::Tensor &depths,
                             const torch::Tensor &active_tiles) {
+        EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
         // Generate expected output by computing intersections for each active tile
         std::vector<std::vector<int32_t>> expected_intersections;
         int32_t total_expected = 0;
@@ -188,16 +334,16 @@ class GaussianTileIntersectionTest : public ::testing::Test {
 
         EXPECT_EQ(intersection_values.size(0), total_expected);
 
-        int32_t curr_offset = 0;
-        for (int32_t i = 0; i < num_active_tiles; i++) {
-            int32_t next_offset = tile_offsets[i + 1].item<int32_t>();
+        int64_t curr_offset = 0;
+        for (int64_t i = 0; i < num_active_tiles; i++) {
+            int64_t next_offset = tile_offsets[i + 1].item<int64_t>();
             EXPECT_GE(next_offset, curr_offset) << "Tile offsets must be monotonically increasing";
-            int32_t num_intersections = next_offset - curr_offset;
+            int64_t num_intersections = next_offset - curr_offset;
 
             EXPECT_EQ(static_cast<std::size_t>(num_intersections), expected_intersections[i].size())
                 << "Number of intersections mismatch for tile " << i;
 
-            for (int32_t j = 0; j < num_intersections; j++) {
+            for (int64_t j = 0; j < num_intersections; j++) {
                 EXPECT_EQ(intersection_values[curr_offset + j].item<int32_t>(),
                           expected_intersections[i][j])
                     << "Intersection mismatch at tile " << i << " index " << j;
@@ -252,6 +398,7 @@ TEST_F(GaussianTileIntersectionTest, ZeroLengthGaussianTest) {
 
     // For zero Gaussians, we should still get a valid tile_offsets tensor filled with zeros
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({numCameras, num_tiles_h, num_tiles_w}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
     EXPECT_TRUE(tile_offsets.equal(torch::zeros_like(tile_offsets)));
     EXPECT_EQ(intersection_values.numel(), 0);
 }
@@ -349,7 +496,8 @@ TEST_F(GaussianTileIntersectionTest, ZeroRadiusGaussianTest) {
                                                   num_tiles_w);
 
     // Verify that there are no intersections
-    EXPECT_EQ(tile_offsets.sum().item<int32_t>(), 0);
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
+    EXPECT_EQ(tile_offsets.sum().item<int64_t>(), 0);
 }
 
 TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
@@ -371,9 +519,157 @@ TEST_F(GaussianTileIntersectionTest, BasicIntersectionTest) {
 
     // Verify dimensions
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_cameras, num_tiles_h, num_tiles_w}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // Verify depth sorting
     verifyDepthSorting(tile_offsets, intersection_values, depths);
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseEllipseIntersectionTest) {
+    const uint32_t numCameras = 1;
+    const uint32_t numTiles   = 3;
+
+    // A radius-10 circle centered in the middle tile has an AABB spanning all nine tiles, but the
+    // circle itself misses the four corner tiles.
+    const float threshold  = 2.0f * std::log(255.0f);
+    const float conicCoeff = threshold / 100.0f;
+    auto means2d           = torch::tensor({{{24.0f, 24.0f}}}, torch::kFloat32);
+    auto radii             = torch::tensor({{{11, 11}}}, torch::kInt32);
+    auto depths            = torch::tensor({{1.0f}}, torch::kFloat32);
+    auto conics            = torch::tensor({{{conicCoeff, 0.0f, conicCoeff}}}, torch::kFloat32);
+    auto opacities         = torch::ones({1, 1}, torch::kFloat32);
+
+    auto [tileOffsets, intersectionValues] =
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*cameraIds=*/at::nullopt,
+                                                  numCameras,
+                                                  tile_size,
+                                                  numTiles,
+                                                  numTiles,
+                                                  conics.cuda(),
+                                                  opacities.cuda());
+
+    tileOffsets                = tileOffsets.cpu();
+    intersectionValues         = intersectionValues.cpu();
+    const auto expectedOffsets = torch::tensor({{{0, 0, 1}, {1, 2, 3}, {4, 4, 5}}}, torch::kInt64);
+    EXPECT_TRUE(tileOffsets.equal(expectedOffsets));
+    EXPECT_EQ(intersectionValues.numel(), 5);
+    EXPECT_TRUE(intersectionValues.equal(torch::zeros({5}, torch::kInt32)));
+
+    auto cameraIds = torch::zeros({1}, torch::kInt32);
+    auto [packedTileOffsets, packedIntersectionValues] =
+        fvdb::detail::ops::intersectGaussianTiles(means2d.reshape({1, 2}).cuda(),
+                                                  radii.reshape({1, 2}).cuda(),
+                                                  depths.reshape({1}).cuda(),
+                                                  cameraIds.cuda(),
+                                                  numCameras,
+                                                  tile_size,
+                                                  numTiles,
+                                                  numTiles,
+                                                  conics.reshape({1, 3}).cuda(),
+                                                  opacities.reshape({1}).cuda());
+    EXPECT_TRUE(packedTileOffsets.cpu().equal(expectedOffsets));
+    EXPECT_TRUE(packedIntersectionValues.cpu().equal(intersectionValues));
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseIntersectionRejectsSubthresholdOpacityTest) {
+    auto means2d   = torch::tensor({{{24.0f, 24.0f}}}, torch::kFloat32);
+    auto radii     = torch::tensor({{{11, 11}}}, torch::kInt32);
+    auto depths    = torch::tensor({{1.0f}}, torch::kFloat32);
+    auto conics    = torch::tensor({{{0.1f, 0.0f, 0.1f}}}, torch::kFloat32);
+    auto opacities = torch::full({1, 1}, 1.0f / 512.0f, torch::kFloat32);
+
+    auto [tileOffsets, intersectionValues] =
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*cameraIds=*/at::nullopt,
+                                                  /*numCameras=*/1,
+                                                  tile_size,
+                                                  /*numTilesH=*/3,
+                                                  /*numTilesW=*/3,
+                                                  conics.cuda(),
+                                                  opacities.cuda());
+
+    EXPECT_EQ(tileOffsets.sum().item<int64_t>(), 0);
+    EXPECT_EQ(intersectionValues.numel(), 0);
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseIntersectionIteratesOverShorterRowExtentTest) {
+    const float threshold = 2.0f * std::log(255.0f);
+    auto means2d          = torch::tensor({{{24.0f, 24.0f}}}, torch::kFloat32);
+    auto radii            = torch::tensor({{{26, 11}}}, torch::kInt32);
+    auto depths           = torch::tensor({{1.0f}}, torch::kFloat32);
+    auto conics =
+        torch::tensor({{{threshold / (25.0f * 25.0f), 0.0f, threshold / 100.0f}}}, torch::kFloat32);
+    auto opacities = torch::ones({1, 1}, torch::kFloat32);
+
+    auto [tileOffsets, intersectionValues] =
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*cameraIds=*/at::nullopt,
+                                                  /*numCameras=*/1,
+                                                  tile_size,
+                                                  /*numTilesH=*/3,
+                                                  /*numTilesW=*/4,
+                                                  conics.cuda(),
+                                                  opacities.cuda());
+
+    const auto expectedOffsets =
+        torch::tensor({{{0, 1, 2, 3}, {3, 4, 5, 6}, {7, 8, 9, 10}}}, torch::kInt64);
+    EXPECT_TRUE(tileOffsets.cpu().equal(expectedOffsets));
+    EXPECT_TRUE(intersectionValues.cpu().equal(torch::zeros({10}, torch::kInt32)));
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseRotatedEllipseIntersectionTest) {
+    const float threshold = 2.0f * std::log(255.0f);
+    const float major     = threshold / (30.0f * 30.0f);
+    const float minor     = threshold / (4.0f * 4.0f);
+    const float diagonal  = 0.5f * (major + minor);
+    const float offDiag   = 0.5f * (major - minor);
+
+    auto means2d   = torch::tensor({{{32.0f, 32.0f}}}, torch::kFloat32);
+    auto radii     = torch::tensor({{{22, 22}}}, torch::kInt32);
+    auto depths    = torch::tensor({{1.0f}}, torch::kFloat32);
+    auto conics    = torch::tensor({{{diagonal, offDiag, diagonal}}}, torch::kFloat32);
+    auto opacities = torch::ones({1, 1}, torch::kFloat32);
+
+    auto [tileOffsets, intersectionValues] =
+        fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                  radii.cuda(),
+                                                  depths.cuda(),
+                                                  /*cameraIds=*/at::nullopt,
+                                                  /*numCameras=*/1,
+                                                  tile_size,
+                                                  /*numTilesH=*/4,
+                                                  /*numTilesW=*/4,
+                                                  conics.cuda(),
+                                                  opacities.cuda());
+
+    const auto expectedOffsets =
+        torch::tensor({{{0, 1, 2, 2}, {2, 3, 4, 5}, {5, 5, 6, 7}, {8, 8, 8, 9}}}, torch::kInt64);
+    EXPECT_TRUE(tileOffsets.cpu().equal(expectedOffsets));
+    EXPECT_TRUE(intersectionValues.cpu().equal(torch::zeros({10}, torch::kInt32)));
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseIntersectionRequiresConicsAndOpacitiesTest) {
+    auto [means2d, radii, depths] = createTestData();
+    auto conics = torch::ones({num_cameras, num_gaussians, 3}, torch::kFloat32).cuda();
+
+    EXPECT_THROW(fvdb::detail::ops::intersectGaussianTiles(means2d.cuda(),
+                                                           radii.cuda(),
+                                                           depths.cuda(),
+                                                           /*cameraIds=*/at::nullopt,
+                                                           num_cameras,
+                                                           tile_size,
+                                                           num_tiles_h,
+                                                           num_tiles_w,
+                                                           conics,
+                                                           /*opacities=*/at::nullopt),
+                 c10::ValueError);
 }
 
 TEST_F(GaussianTileIntersectionTest, PackedFormatTest) {
@@ -443,19 +739,53 @@ TEST_F(GaussianTileIntersectionTest, DenseViaSparseTest) {
 
     // Verify dimensions
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // Verify that offsets are monotonically increasing
     for (int64_t i = 1; i < tile_offsets.size(0); i++) {
-        EXPECT_GE(tile_offsets[i].item<int32_t>(), tile_offsets[i - 1].item<int32_t>())
+        EXPECT_GE(tile_offsets[i].item<int64_t>(), tile_offsets[i - 1].item<int64_t>())
             << "Tile offsets must be monotonically increasing";
     }
 
     // Verify that the last offset equals the size of intersection_values
-    EXPECT_EQ(tile_offsets[tile_offsets.size(0) - 1].item<int32_t>(), intersection_values.size(0))
+    EXPECT_EQ(tile_offsets[tile_offsets.size(0) - 1].item<int64_t>(), intersection_values.size(0))
         << "Last offset should equal number of intersections";
 
     // Verify depth sorting
     verifyDepthSorting(tile_offsets, intersection_values, depths, tile_mask);
+}
+
+TEST_F(GaussianTileIntersectionTest, PreciseIntersectionSparseTest) {
+    const uint32_t numCameras = 1;
+    const uint32_t numTiles   = 3;
+    const float threshold     = 2.0f * std::log(255.0f);
+    const float conicCoeff    = threshold / 100.0f;
+
+    auto means2d     = torch::tensor({{{24.0f, 24.0f}}}, torch::kFloat32);
+    auto radii       = torch::tensor({{{11, 11}}}, torch::kInt32);
+    auto depths      = torch::tensor({{1.0f}}, torch::kFloat32);
+    auto conics      = torch::tensor({{{conicCoeff, 0.0f, conicCoeff}}}, torch::kFloat32);
+    auto opacities   = torch::ones({1, 1}, torch::kFloat32);
+    auto tileMask    = torch::ones({1, numTiles, numTiles}, torch::kBool);
+    auto activeTiles = tile_mask_to_active_tiles(tileMask);
+
+    auto [tileOffsets, intersectionValues] =
+        fvdb::detail::ops::intersectGaussianTilesSparse(means2d.cuda(),
+                                                        radii.cuda(),
+                                                        depths.cuda(),
+                                                        tileMask.cuda(),
+                                                        activeTiles.cuda(),
+                                                        /*cameraIds=*/at::nullopt,
+                                                        numCameras,
+                                                        tile_size,
+                                                        numTiles,
+                                                        numTiles,
+                                                        conics.cuda(),
+                                                        opacities.cuda());
+
+    const auto expectedOffsets = torch::tensor({0, 0, 1, 1, 2, 3, 4, 4, 5, 5}, torch::kInt64);
+    EXPECT_TRUE(tileOffsets.cpu().equal(expectedOffsets));
+    EXPECT_TRUE(intersectionValues.cpu().equal(torch::zeros({5}, torch::kInt32)));
 }
 
 TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
@@ -487,17 +817,18 @@ TEST_F(GaussianTileIntersectionTest, SparseIntersectionTest) {
     tile_mask           = tile_mask.cpu();
 
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
 
     // tile_offsets should be: [0 2 3 4 5 5 5 5 7] (note 9 elements)
 
     // Verify that offsets are monotonically increasing
     for (int64_t i = 1; i < tile_offsets.size(0); i++) {
-        EXPECT_GE(tile_offsets[i].item<int32_t>(), tile_offsets[i - 1].item<int32_t>())
+        EXPECT_GE(tile_offsets[i].item<int64_t>(), tile_offsets[i - 1].item<int64_t>())
             << "Tile offsets must be monotonically increasing";
     }
 
     // Verify that the last offset equals the size of intersection_values minus 1
-    EXPECT_EQ(tile_offsets[-1].item<int32_t>(), intersection_values.size(0));
+    EXPECT_EQ(tile_offsets[-1].item<int64_t>(), intersection_values.size(0));
 
     verifyDepthSorting(tile_offsets, intersection_values, depths, tile_mask);
 }
@@ -550,6 +881,7 @@ TEST_F(GaussianTileIntersectionTest, SparseZeroLengthGaussianTest) {
 
     // For zero Gaussians, we should still get a valid tile_offsets tensor
     EXPECT_EQ(tile_offsets.sizes(), std::vector<int64_t>({num_active_tiles + 1}));
+    EXPECT_EQ(tile_offsets.scalar_type(), torch::kInt64);
     EXPECT_TRUE(tile_offsets.equal(torch::zeros_like(tile_offsets)));
     EXPECT_EQ(intersection_values.numel(), 0);
 }

@@ -545,7 +545,10 @@ class GridBatch:
         return functional.clipped_grid_batch(self, ijk_min, ijk_max)
 
     def coarsened_grid(self, coarsening_factor: NumericMaxRank1) -> "GridBatch":
-        """Return a coarsened version of this grid batch by keeping every N-th voxel.
+        """Return a block-coarsened cell grid for pooling and aggregation.
+
+        This operation groups physical cells and uses a block-centroid transform. It is not
+        equivalent to :meth:`conv_grid`, whose output is a Torch-phase convolution lattice.
 
         Args:
             coarsening_factor (NumericMaxRank1): Coarsening factor, broadcastable to shape ``(3,)``, integer dtype.
@@ -556,6 +559,11 @@ class GridBatch:
         .. seealso:: :meth:`Grid.coarsened_grid`
         """
         from . import functional
+
+        # Coarsening by 1 is the identity (same topology and transforms): return this grid as-is,
+        # preserving its (possibly sliced/non-contiguous) view and metadata with no copy.
+        if bool((torch.as_tensor(coarsening_factor) == 1).all()):
+            return self
 
         return functional.coarsened_grid_batch(self, coarsening_factor)
 
@@ -572,7 +580,15 @@ class GridBatch:
         return functional.contiguous_batch(self)
 
     def conv_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the output grid topology for a convolution applied to this grid batch.
+        """Return the complete structural output grid for a convolution applied to this grid batch.
+
+        The generated coordinates are the positive structural support of the componentwise relation
+        ``fine_ijk = stride * coarse_ijk + tap_ijk - padding_before``. Here ``fine_ijk`` and
+        ``coarse_ijk`` are integer coordinates on the fine and strided lattices,
+        ``padding_before = floor((kernel_size - 1) / 2)``, and the zero-based kernel tap satisfies
+        ``0 <= tap_ijk[axis] < kernel_size[axis]``. A strided result has voxel size ``stride * h`` and the
+        same canonical origin. It is not a coarsened cell grid. ``kernel_size=stride=1`` returns this object
+        itself; ``kernel_size=1`` with a larger stride samples stride-aligned residues.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.
@@ -588,7 +604,11 @@ class GridBatch:
         return functional.conv_grid_batch(self, kernel_size, stride)
 
     def conv_transpose_grid(self, kernel_size: NumericMaxRank1, stride: NumericMaxRank1 = 1) -> "GridBatch":
-        """Return the output grid topology for a transposed convolution applied to this grid batch.
+        """Return the complete structural output grid for transposed convolution.
+
+        Each active coarse coordinate spreads through every canonical tap. The result has voxel
+        size ``h / stride`` and the same canonical origin. This is generated structural support,
+        not a value inverse of a forward convolution. ``kernel_size=stride=1`` returns this object.
 
         Args:
             kernel_size (NumericMaxRank1): Convolution kernel size, broadcastable to shape ``(3,)``, integer dtype.
@@ -699,6 +719,11 @@ class GridBatch:
         .. seealso:: :meth:`Grid.dilated_grid`
         """
         from . import functional
+
+        # Dilating by 0 is the identity: return this grid as-is (no copy), preserving its
+        # (possibly sliced/non-contiguous) view and metadata.
+        if dilation == 0:
+            return self
 
         return functional.dilated_grid_batch(self, dilation)
 
@@ -1021,7 +1046,11 @@ class GridBatch:
         Returns:
             vertex_positions (JaggedTensor): Mesh vertex positions. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
             face_indices (JaggedTensor): Triangle face indices. Shape: ``(batch_size, num_faces_for_grid_b, 3)``.
-            vertex_normals (JaggedTensor): Vertex normals. Shape: ``(batch_size, num_vertices_for_grid_b, 3)``.
+            vertex_edge_keys (JaggedTensor): Edge keys used to deduplicate mesh vertices, dtype ``torch.int64``.
+                Shape: ``(batch_size, num_vertices_for_grid_b, 3)``. Each row ``[batch_idx, voxel_a, voxel_b]``
+                identifies the grid edge on which the vertex was interpolated, where ``voxel_a`` and ``voxel_b``
+                are flat voxel indices of the two endpoint voxels (``voxel_a >= voxel_b``). This can be used to
+                map mesh vertices back to the grid edges and voxels they originated from.
 
         .. seealso:: :meth:`Grid.marching_cubes`
         """
@@ -1040,7 +1069,7 @@ class GridBatch:
 
         Places one vertex per surface cell via quadratic-error-function minimization (sharp-feature
         preserving), with optional cluster-collapse decimation. Needs a narrow-band SDF with a
-        >= ~3-voxel band for a watertight result (e.g. from :meth:`retopologize_sdf`).
+        >= ~3-voxel band for a watertight result (e.g. from :meth:`rebuild_narrow_band`).
 
         Args:
             field (JaggedTensor): Per-voxel signed distance values.
@@ -1081,10 +1110,36 @@ class GridBatch:
             smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
-            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
+            redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
+                ``max(6, round(2.5*band) + 2)``.
 
         Returns:
             sdf (JaggedTensor): The re-initialized SDF, same per-voxel ordering as ``field``.
+
+        Note:
+            * ``field`` must represent the intended inside/outside regions and zero crossings. Its
+              magnitudes need not be accurate distances, but affect convergence, accuracy, and
+              sub-voxel surface location. With ``smooth=0`` redistancing aims to preserve the input
+              surface, subject to discretization error; smoothing moves it and then re-redistances.
+            * Values must be finite, with shape ``(N,)`` or ``(N, 1)`` (for a batch, the shape of
+              ``field.jdata``). Invalid shapes and NaN/Inf values raise ``ValueError``.
+            * The surface is where the field changes sign between *active* voxels; one active voxel
+              of each sign across the crossing is sufficient (two or more per side gives the best
+              sub-voxel accuracy). A grid whose active values are all one sign has no surface: the
+              result is the constant ``-/+band*vx`` and :meth:`rebuild_narrow_band` returns an empty
+              band for that grid, which is correct for e.g. a tile that lies entirely inside an
+              object.
+            * Inactive neighbours read as ``+/-band*vx`` using the adjacent voxel's frozen sign during
+              redistancing and its current sign during smoothing. Both filled solids (interior active)
+              and narrow bands whose interior is inactive are valid inputs. Leave no-data voxels
+              *inactive* rather than assigning them NaN/Inf values.
+            * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
+              redistance (a no-data pass-through; :meth:`ray_implicit_intersection` treats exact
+              ``0`` as a gap). Their signed neighbours, however, see them as an interface and are
+              redistanced toward them, and smoothing blends them -- prune such voxels first when you
+              can.
+            * Each grid must have isotropic voxels (``ValueError`` otherwise); grids in the batch
+              may differ from one another. CUDA only; ``float32`` or ``float64``.
 
         .. seealso:: :meth:`Grid.reinitialize_sdf`
         """
@@ -1092,7 +1147,7 @@ class GridBatch:
 
         return functional.reinitialize_sdf_batch(self, field, band, smooth, order, smoothing, redistance_iters)
 
-    def retopologize_sdf(
+    def rebuild_narrow_band(
         self,
         field: JaggedTensor,
         band: int = 3,
@@ -1103,7 +1158,7 @@ class GridBatch:
         pad: bool = True,
         prune: bool = True,
     ) -> tuple["GridBatch", JaggedTensor]:
-        """Retopologize a signed field into a clean narrow-band SDF on a (possibly pruned) grid batch.
+        """Rebuild a signed field into a clean narrow-band SDF on a (possibly pruned) grid batch.
 
         If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels so the redistance has
         room to fill the full ``±band*vx`` band, then :meth:`reinitialize_sdf` is run, and finally, if
@@ -1119,22 +1174,27 @@ class GridBatch:
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default.
-            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band reaches the
-                full ``band`` voxels on each side of the surface (``±band*vx``) even if the input grid
-                was thinner. New voxels are seeded as exterior (``+band*vx``), which is correct when the
-                interior (``phi < 0``) is already represented; for a hollow thin shell, pass
-                ``pad=False`` with a pre-banded grid.
+            pad (bool): If ``True`` (default) dilate by ``band`` first so the output band is a full
+                ``band`` voxels wide even if the input grid was thinner. The dilation grows one layer
+                at a time and seeds each new voxel with ``+/-band*vx`` according to the sign of its
+                existing neighbours, so it continues the band inward (interior) as well as outward and
+                works for filled solids and for narrow bands whose interior is inactive.
             prune (bool): If ``True`` prune to the narrow band, else return the (padded) grid batch.
 
         Returns:
             out_grid (GridBatch): The pruned (or padded/original) grid batch.
             sdf (JaggedTensor): The narrow-band SDF, aligned with ``out_grid``.
 
-        .. seealso:: :meth:`Grid.retopologize_sdf`
+        Note:
+            Applying this to its own output reproduces it (up to a voxel layer at the band edge).
+            See :meth:`reinitialize_sdf` for the input contract (sign trusted, inactive neighbours
+            continue the adjacent sign, exact-``0`` voxels are no-data pass-through).
+
+        .. seealso:: :meth:`Grid.rebuild_narrow_band`
         """
         from . import functional
 
-        return functional.retopologize_sdf_batch(
+        return functional.rebuild_narrow_band_batch(
             self, field, band, smooth, order, smoothing, redistance_iters, pad, prune
         )
 
@@ -1517,6 +1577,11 @@ class GridBatch:
         .. seealso:: :meth:`Grid.refined_grid`
         """
         from . import functional
+
+        # Subdividing by 1 with no mask is the identity: return this grid as-is (no copy),
+        # preserving its view/metadata. (A mask still prunes, so it is not an identity.)
+        if mask is None and bool((torch.as_tensor(subdiv_factor) == 1).all()):
+            return self
 
         return functional.refined_grid_batch(self, subdiv_factor, mask)
 

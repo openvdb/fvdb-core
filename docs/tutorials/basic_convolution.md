@@ -56,7 +56,13 @@ output = conv(vox_normals, plan)
 Let's visualize the original grid with normals visualized as colours alongside the result of these features after a convolution initialized with random weights:
 ![](../imgs/fig/simple_conv.png)
 
-For stride values greater than 1, the output of the convolution will be a grid with a smaller resolution than the input grid (similar in topological effect to the output of a Pooling operator).  Let's illustrate this:
+For stride values greater than 1, the output is a sampled convolution lattice: its voxel size is multiplied by the
+stride while its origin is preserved. It is not a pooling or block-coarsening grid. For the default registration, an
+integer fine-lattice coordinate `fine_ijk` and an integer coarse-lattice coordinate `coarse_ijk` are connected by the
+zero-based kernel tap `tap_ijk` when `fine_ijk = stride * coarse_ijk + tap_ijk - padding_before` (componentwise),
+where `padding_before = floor((kernel_size - 1) / 2)` and
+`0 <= tap_ijk[axis] < kernel_size[axis]`. Generated output topology is the positive structural support of that
+relation.
 
 ```python continuation
 # Stride=2: output grid has half the resolution (twice the world-space voxel size)
@@ -69,26 +75,38 @@ coarse_grid = plan_down.target_grid_batch
 
 ![](../imgs/fig/stride_conv.png)
 
-The following animations illustrate how strided sparse convolution and its transpose work. In the strided convolution figure below, a kernel slides across the fine input grid with a stride of 2, producing a coarser output grid. In the strided transposed convolution figure, the process is reversed — a coarse grid is upsampled back to a finer resolution:
+The following animations illustrate strided sparse convolution and transposed convolution. A forward operation evaluates the fine-to-coarse edges of this graph; a transposed operation evaluates the same connectivity in the opposite direction. Neither operation is a value inverse of the other:
 
 ![Strided sparse convolution animation](../imgs/fig/strided_sparse_conv.gif)
 
 ![Strided transposed sparse convolution animation](../imgs/fig/strided_transposed_sparse_conv.gif)
 
-Strided transposed convolution can be performed with `fvdb.nn.SparseConvTranspose3d` (a separate class) to increase the resolution of the grid. Because the output of a transposed convolution on a sparse grid is not uniquely determined, the plan must specify a `target_grid` using `ConvolutionPlan.from_grid_batch_transposed`. The choice of `target_grid` depends on the use case: in an encoder-decoder network (such as a U-Net), the target is typically a grid saved from the corresponding encoder layer; for other architectures, it could be any grid with the desired resolution and active voxel pattern.
+Strided transposed convolution can be performed with `fvdb.nn.SparseConvTranspose3d` (a separate class). With `target_grid=None` it generates the complete, uncropped structural topology (`ConvolutionTopologyPolicy.COMPLETE`). Supplying a target chooses the symmetric `ConvolutionTopologyPolicy.RESTRICTED` policy: the same relation is evaluated only on those requested rows, which may include unreachable zero-degree rows. An encoder-decoder commonly uses a saved fine grid as a restricted target, but this does not make the operation an inverse or guarantee that every saved coordinate is reachable.
 
 ```python continuation
 # Strided transposed convolution operator, stride=2
 transposed_conv = fvdbnn.SparseConvTranspose3d(in_channels=3, out_channels=3, kernel_size=3, stride=2, bias=False).to(grid.device)
 
-# Build a transposed plan: source is the coarse grid, target is the original fine grid
+# Build a restricted decoder plan: source is coarse and the saved fine grid limits output rows.
 plan_up = ConvolutionPlan.from_grid_batch_transposed(kernel_size=3, stride=2, source_grid=coarse_grid, target_grid=grid)
 transposed_output = transposed_conv(output, plan_up)
+
+# Or generate the complete transposed topology without a saved target.
+plan_up_complete = ConvolutionPlan.from_grid_batch_transposed(
+    kernel_size=3,
+    stride=2,
+    source_grid=coarse_grid,
+    topology_policy=fvdb.ConvolutionTopologyPolicy.COMPLETE,
+)
 ```
 
-Here we visualize the original grid, the grid after strided convolution, and the grid after strided transposed convolution. The strided transposed convolution inverts the topological operation of the strided convolution, producing the same topology as the original grid with the features convolved by our two layers:
+Here we visualize the original grid, the grid after strided convolution, and a transposed convolution restricted to the original grid. The saved target selects the displayed output topology; it does not restore values or define the generated transposed support:
 
 ![](../imgs/fig/transposed_stride_conv.png)
+
+For the exact finite adjoint of an existing plan, use `ConvolutionPlan.from_plan_transposed(plan_down)` rather than rebuilding from grids. It reverses that plan's stored edges exactly. With tied weights, pass `weight.transpose(0, 1).contiguous()` to the transposed execution. An independently learned `SparseConvTranspose3d` instead has its own weights and uses transposed connectivity without an adjoint claim.
+
+`grid.coarsened_grid(stride)` serves pooling and cell aggregation: it has a block-centroid transform and is not interchangeable with `conv_grid(kernel_size, stride)`. In particular, it is not a valid shortcut for convolution targets. The special `kernel_size=1, stride=1` generated forward grid is the source object itself; `kernel_size=1, stride>1` samples only the stride-aligned residues rather than coarsening every block. Issue #668 is the motivating even-kernel example: a complete `kernel_size=stride=4` convolution of a `16^3` cube produces a `5^3` coarse support, not `4^3`.
 
 
 ## Low-level Usage with `GridBatch`

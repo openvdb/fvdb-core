@@ -20,8 +20,12 @@ namespace ops {
 /// @param[in] shDegreeToUse Degree of spherical harmonics to use (0-3 typically, higher degrees
 /// provide more detail)
 /// @param[in] numCameras Number of cameras used for rendering
-/// @param[in] viewDirs Direction vectors [N, 3] (packed) or [C, N, 3] (unpacked) representing
-/// view directions. Need not be unit-length; the kernel normalizes internally.
+/// @param[in] means Gaussian means in world space [N, 3]
+/// @param[in] worldToCamMatrices Rigid world-to-camera matrices [C, 4, 4]. The matrices must be
+/// rigid transforms with orthonormal rotation blocks.
+/// @param[in] cameraIds Camera index for each packed work item, or empty for unpacked evaluation
+/// @param[in] gaussianIds Gaussian index for each packed work item, or empty for unpacked
+/// evaluation
 /// @param[in] sh0Coeffs Spherical harmonic coefficients [N, 1, D] (packed) or
 /// [1, N, D] (unpacked), where D is the number of feature channels
 /// @param[in] shNCoeffs Higher order spherical harmonic coefficients [N, K-1, D] (packed) or
@@ -32,10 +36,13 @@ namespace ops {
 /// @return Features/colors [N, D] computed from the spherical harmonics evaluation
 torch::Tensor evaluateSphericalHarmonicsFwd(const int64_t shDegreeToUse,
                                             const int64_t numCameras,
-                                            const torch::Tensor &viewDirs,  // [C, N, 3]
-                                            const torch::Tensor &sh0Coeffs, // [1, N, D]
-                                            const torch::Tensor &shNCoeffs, // [N, K-1, D]
-                                            const torch::Tensor &radii      // [C, N, 2]
+                                            const torch::Tensor &means,              // [N, 3]
+                                            const torch::Tensor &worldToCamMatrices, // [C, 4, 4]
+                                            const torch::Tensor &cameraIds,          // [N] or empty
+                                            const torch::Tensor &gaussianIds,        // [N] or empty
+                                            const torch::Tensor &sh0Coeffs,          // [1, N, D]
+                                            const torch::Tensor &shNCoeffs,          // [N, K-1, D]
+                                            const torch::Tensor &radii               // [C, N, 2]
 );
 
 } // namespace ops

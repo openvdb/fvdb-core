@@ -9,24 +9,45 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  test-python-black-lint:
-    name: Python code style (black)
+  test-python-docstrings:
+    name: Python docstrings (Ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: psf/black@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          options: "--check --diff --verbose"
-          src: "./"
-          version: "~= 24.0"
+          persist-credentials: false
+      - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
+        with:
+          version: "0.15.7"
+          args: "check --output-format=github"
+          src: "fvdb"
+
+  test-python-ruff-format:
+    name: Python code style (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
+        with:
+          version: "0.15.7"
+          args: "format --check --diff"
+          src: "."
+      - run: ruff check --select I --output-format=github .
 
   test-cpp-clang-format-lint:
     name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: DoozyX/clang-format-lint-action@v0.20
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: DoozyX/clang-format-lint-action@bcb4eb2cb0d707ee4f3e5cc3b456eb075f12cf73 # v0.20
       with:
         source: 'src/'
         extensions: 'h,cpp,cc,cu,cuh'
@@ -37,8 +58,10 @@ jobs:
     name: Include guards
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: swahtz/include-guards-check-action@master
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: swahtz/include-guards-check-action@41d1997205f936c50e23272c849398168b72083a # master
       with:
         path: 'src/'
 
@@ -46,11 +69,32 @@ jobs:
     name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
-    - uses: enarx/spdx@master
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - uses: enarx/spdx@d4020ee98e3101dd487c5184f27c6a6fb4f88709 # master
       with:
         licenses: |-
           Apache-2.0
+
+  # The compiled bindings are typed by the hand-written fvdb/_fvdb_cpp.pyi. Pyright checks the
+  # Python code in [tool.pyright] include against it, so a wrapper whose calls or returns disagree
+  # with the stub fails here. tests/unit/test_fvdb_cpp_stub.py checks the stub itself against the
+  # compiled bindings. CPU PyTorch is enough for the types; its version follows the build env.
+  pyright:
+    name: Python types (pyright)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Type-check against the _fvdb_cpp stub
+      run: |
+        set -euo pipefail
+        TORCH_VERSION=$(grep -oP 'pytorch-gpu=\K[0-9.]+' env/build_environment.yml)
+        python3 -m pip install --quiet "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+        python3 -m pip install --quiet "pyright==1.1.414" numpy
+        python3 -m pyright --pythonpath "$(command -v python3)"
 
   # Search the git repository for any trailing spaces excluding auto-generated wlt files
   # NOTE: Migrated from openvdb whitespace.yml
@@ -58,7 +102,9 @@ jobs:
     name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: test
       run: |
           set +e
@@ -71,9 +117,52 @@ jobs:
     name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - name: test
       run: |
           set +e
           git grep -n "	" -- ':!*/codestyle.yml' ':!*.svg' ':!*.webp' ':!*.cmd' ':!*.png' ':!*.wlt' ':!*.jpg' ':!*.gif' ':!*.mp4' ':!*.pt' ':!*.pth' ':!*.nvdb' ':!*.npz' ':!*.gitmodules' ':!*/wip/*'
           test $? -eq 1
+
+  # fvdb's grid storage is GridStorage over NanoVDB's single-space cuda::Buffer (#770). The
+  # dual-space buffers NanoVDB removed (DeviceBuffer, UnifiedBuffer) and fvdb's removed
+  # TorchDeviceBuffer shim must not creep back into the library.
+  no-dual-space-buffers:
+    name: No dual-space NanoVDB buffers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: test
+      run: |
+          set +e
+          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/'
+          test $? -eq 1
+
+  # env/ holds several conda environments that each pin python, cuda-version and
+  # pytorch-gpu independently. build_environment.yml is the environment the wheel
+  # is compiled in, so it fixes the ABI; a developer working from a different env
+  # file with a different PyTorch hits an undefined-symbol ImportError at
+  # `import fvdb`. fvdb-reality-capture also derives its benchmark environment
+  # from build_environment.yml, so a disagreement here leaves "which PyTorch does
+  # fvdb-core use?" with no single answer.
+  #
+  # The rule is permissive about presence and strict about agreement: a file may
+  # omit a key (release_base_environment.yml pins none), but two files that pin
+  # the same key must pin the same value.
+  env-pin-consistency:
+    name: Shared toolchain pins agree
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+    - name: Enforce shared toolchain pins
+      run: |
+        set -euo pipefail
+        python3 -m pip install --quiet "pytest==9.0.3"
+        python3 -m pytest .github/scripts/test_check_env_pin_consistency.py -q
+        python3 .github/scripts/check_env_pin_consistency.py env

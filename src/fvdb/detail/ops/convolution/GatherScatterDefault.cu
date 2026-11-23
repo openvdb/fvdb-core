@@ -21,6 +21,7 @@
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 #include <fvdb/detail/dispatch/TensorChecks.h>
+#include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
 #include <torch/types.h>
@@ -29,6 +30,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <set>
 #include <tuple>
 
 namespace fvdb {
@@ -96,17 +99,11 @@ struct twopass_topology_op {
        nanovdb::Coord kernel_size,
        nanovdb::Coord stride,
        ConvDirection direction) {
-        int64_t const ks0 = kernel_size[0];
-        int64_t const ks1 = kernel_size[1];
-        int64_t const ks2 = kernel_size[2];
-        int64_t const K   = ks0 * ks1 * ks2;
+        ConvolutionGeometry const geometry(kernel_size, stride);
+        int64_t const K = geometry.kernelVolume();
 
         int64_t const featureTotal = feature_grid.totalVoxels();
         int64_t const output_total = output_grid.totalVoxels();
-
-        nanovdb::Coord const kernel_start(static_cast<int>(std::floor(-ks0 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks1 / 2.0 + 1)),
-                                          static_cast<int>(std::floor(-ks2 / 2.0 + 1)));
 
         bool const is_transposed = (direction == ConvDirection::Transposed);
         auto const device        = output_grid.device();
@@ -130,22 +127,12 @@ struct twopass_topology_op {
                 auto feat_tree_acc    = feat_grid->getAccessor();
 
                 for (int64_t k = 0; k < K; ++k) {
-                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
-                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
-                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
-
                     nanovdb::Coord probe;
                     if (is_transposed) {
-                        int32_t const r0 = ijk[0] - k0;
-                        int32_t const r1 = ijk[1] - k1;
-                        int32_t const r2 = ijk[2] - k2;
-                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                        if (!geometry.coarseFromFine(ijk, geometry.tapCoord(k), probe))
                             continue;
-                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
                     } else {
-                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
-                                               ijk[1] * stride[1] + k1,
-                                               ijk[2] * stride[2] + k2);
+                        probe = geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
                     }
 
                     if (feat_tree_acc.isActive(probe)) {
@@ -201,22 +188,12 @@ struct twopass_topology_op {
                 int64_t const feat_base = feature_acc.voxelOffset(batch_idx);
 
                 for (int64_t k = 0; k < K; ++k) {
-                    int32_t const k0 = kernel_start[0] + static_cast<int32_t>(k / (ks1 * ks2));
-                    int32_t const k1 = kernel_start[1] + static_cast<int32_t>((k / ks2) % ks1);
-                    int32_t const k2 = kernel_start[2] + static_cast<int32_t>(k % ks2);
-
                     nanovdb::Coord probe;
                     if (is_transposed) {
-                        int32_t const r0 = ijk[0] - k0;
-                        int32_t const r1 = ijk[1] - k1;
-                        int32_t const r2 = ijk[2] - k2;
-                        if (r0 % stride[0] != 0 || r1 % stride[1] != 0 || r2 % stride[2] != 0)
+                        if (!geometry.coarseFromFine(ijk, geometry.tapCoord(k), probe))
                             continue;
-                        probe = nanovdb::Coord(r0 / stride[0], r1 / stride[1], r2 / stride[2]);
                     } else {
-                        probe = nanovdb::Coord(ijk[0] * stride[0] + k0,
-                                               ijk[1] * stride[1] + k1,
-                                               ijk[2] * stride[2] + k2);
+                        probe = geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
                     }
 
                     if (feat_tree_acc.isActive(probe)) {
@@ -291,6 +268,262 @@ gatherScatterDefaultSparseConvTransposeTopology(GridBatchData const &feature_gri
                                                 nanovdb::Coord stride) {
     return buildTopologyTwoPass(
         feature_grid, output_grid, kernel_size, stride, ConvDirection::Transposed);
+}
+
+GatherScatterDefaultTopology
+reverseGatherScatterDefaultTopology(GatherScatterDefaultTopology const &topology) {
+    TORCH_CHECK(topology.direction == ConvDirection::Forward ||
+                    topology.direction == ConvDirection::Transposed,
+                "cannot reverse topology with invalid convolution direction ",
+                static_cast<int>(topology.direction));
+    ConvDirection const reversedDirection = topology.direction == ConvDirection::Forward
+                                                ? ConvDirection::Transposed
+                                                : ConvDirection::Forward;
+    return GatherScatterDefaultTopology{
+        topology.scatterIndices,
+        topology.gatherIndices,
+        topology.offsets,
+        topology.outputTotalVoxels,
+        topology.featureTotalVoxels,
+        topology.kernelVolume,
+        topology.totalPairs,
+        topology.kernelSize,
+        topology.stride,
+        reversedDirection,
+    };
+}
+
+// =============================================================================
+// Explicit test/debug topology validation
+// =============================================================================
+
+struct topology_validation_coordinates_op {
+    template <typename Tag>
+        requires with_type<Tag, torch::DeviceType>
+    static torch::Tensor
+    op(Tag tg, GridBatchData const &grid) {
+        auto coordinates = torch::full({grid.totalVoxels(), 4},
+                                       std::numeric_limits<int32_t>::min(),
+                                       optsOn<torch::kInt32>(grid.device()));
+        if (grid.totalVoxels() == 0) {
+            return coordinates;
+        }
+
+        auto guard           = make_device_guard(tg, coordinates);
+        auto *coordinatesPtr = coordinates.data_ptr<int32_t>();
+        dispatch::forEachActiveVoxel(tg,
+                                     grid,
+                                     [=] __hostdev__(Tag,
+                                                     JIdxType batchIndex,
+                                                     nanovdb::Coord ijk,
+                                                     int64_t voxelIndex,
+                                                     GridBatchData::Accessor) {
+                                         int32_t *row = coordinatesPtr + voxelIndex * 4;
+                                         row[0]       = static_cast<int32_t>(batchIndex);
+                                         row[1]       = ijk[0];
+                                         row[2]       = ijk[1];
+                                         row[3]       = ijk[2];
+                                     });
+        return coordinates;
+    }
+
+    using space      = axes<torch_full_device_axis>;
+    using subspaces  = coverage<space>;
+    using dispatcher = dispatch_table<space, torch::Tensor(GridBatchData const &)>;
+};
+
+static torch::Tensor
+topologyValidationCoordinates(GridBatchData const &grid) {
+    static auto const table = dispatch_table_from_op<topology_validation_coordinates_op>(
+        "gather_scatter_default_validation_coordinates");
+    return table.select(dispatch_set{grid.device().type()})(grid);
+}
+
+void
+validateGatherScatterDefaultTopology(GridBatchData const &fineGrid,
+                                     GridBatchData const &coarseGrid,
+                                     GatherScatterDefaultTopology const &topology) {
+    TORCH_CHECK(topology.direction == ConvDirection::Forward ||
+                    topology.direction == ConvDirection::Transposed,
+                "topology has invalid convolution direction ",
+                static_cast<int>(topology.direction));
+    TORCH_CHECK(fineGrid.device() == coarseGrid.device(),
+                "fine_grid and coarse_grid must be on the same device, got ",
+                fineGrid.device(),
+                " and ",
+                coarseGrid.device());
+    TORCH_CHECK(fineGrid.batchSize() == coarseGrid.batchSize(),
+                "fine_grid and coarse_grid batch sizes must match, got ",
+                fineGrid.batchSize(),
+                " and ",
+                coarseGrid.batchSize());
+
+    bool const isForward             = topology.direction == ConvDirection::Forward;
+    GridBatchData const &featureGrid = isForward ? fineGrid : coarseGrid;
+    GridBatchData const &outputGrid  = isForward ? coarseGrid : fineGrid;
+    TORCH_CHECK(topology.featureTotalVoxels == featureGrid.totalVoxels(),
+                "topology feature voxel count ",
+                topology.featureTotalVoxels,
+                " does not match its ",
+                isForward ? "fine" : "coarse",
+                " domain count ",
+                featureGrid.totalVoxels());
+    TORCH_CHECK(topology.outputTotalVoxels == outputGrid.totalVoxels(),
+                "topology output voxel count ",
+                topology.outputTotalVoxels,
+                " does not match its ",
+                isForward ? "coarse" : "fine",
+                " domain count ",
+                outputGrid.totalVoxels());
+    TORCH_CHECK(topology.totalPairs >= 0,
+                "topology total pair count must be nonnegative, got ",
+                topology.totalPairs);
+
+    ConvolutionGeometry const geometry(topology.kernelSize, topology.stride);
+    TORCH_CHECK(topology.kernelVolume == geometry.kernelVolume(),
+                "topology kernel volume ",
+                topology.kernelVolume,
+                " does not match geometry volume ",
+                geometry.kernelVolume());
+
+    auto checkIndexTensor = [&](torch::Tensor const &tensor, char const *name) {
+        TORCH_CHECK(tensor.defined(), name, " must be defined");
+        TORCH_CHECK(tensor.dim() == 1, name, " must be one-dimensional");
+        TORCH_CHECK(tensor.scalar_type() == torch::kInt32, name, " must have int32 dtype");
+        TORCH_CHECK(tensor.device() == fineGrid.device(),
+                    name,
+                    " must be on grid device ",
+                    fineGrid.device(),
+                    ", got ",
+                    tensor.device());
+        TORCH_CHECK(tensor.is_contiguous(), name, " must be contiguous");
+        TORCH_CHECK(tensor.size(0) == topology.totalPairs,
+                    name,
+                    " length ",
+                    tensor.size(0),
+                    " does not match total pair count ",
+                    topology.totalPairs);
+    };
+    checkIndexTensor(topology.gatherIndices, "gather_indices");
+    checkIndexTensor(topology.scatterIndices, "scatter_indices");
+
+    TORCH_CHECK(topology.offsets.defined(), "offsets must be defined");
+    TORCH_CHECK(topology.offsets.dim() == 1, "offsets must be one-dimensional");
+    TORCH_CHECK(topology.offsets.scalar_type() == torch::kInt64, "offsets must have int64 dtype");
+    TORCH_CHECK(topology.offsets.device().is_cpu(), "offsets must be stored on CPU");
+    TORCH_CHECK(topology.offsets.is_contiguous(), "offsets must be contiguous");
+    TORCH_CHECK(topology.offsets.size(0) == topology.kernelVolume + 1,
+                "offset length ",
+                topology.offsets.size(0),
+                " does not match kernel volume + 1 (",
+                topology.kernelVolume + 1,
+                ")");
+
+    auto offsets = topology.offsets.accessor<int64_t, 1>();
+    TORCH_CHECK(offsets[0] == 0, "offsets must start at zero, got ", offsets[0]);
+    for (int64_t tap = 0; tap < topology.kernelVolume; ++tap) {
+        TORCH_CHECK(offsets[tap] <= offsets[tap + 1],
+                    "offsets must be monotone at tap ",
+                    tap,
+                    ": ",
+                    offsets[tap],
+                    " > ",
+                    offsets[tap + 1]);
+    }
+    TORCH_CHECK(offsets[topology.kernelVolume] == topology.totalPairs,
+                "final offset ",
+                offsets[topology.kernelVolume],
+                " does not match total pair count ",
+                topology.totalPairs);
+
+    auto gatherHost  = topology.gatherIndices.cpu().contiguous();
+    auto scatterHost = topology.scatterIndices.cpu().contiguous();
+    auto gather      = gatherHost.accessor<int32_t, 1>();
+    auto scatter     = scatterHost.accessor<int32_t, 1>();
+    for (int64_t pair = 0; pair < topology.totalPairs; ++pair) {
+        TORCH_CHECK(gather[pair] >= 0 && gather[pair] < topology.featureTotalVoxels,
+                    "gather index out of range at pair ",
+                    pair,
+                    ": ",
+                    gather[pair]);
+        TORCH_CHECK(scatter[pair] >= 0 && scatter[pair] < topology.outputTotalVoxels,
+                    "scatter index out of range at pair ",
+                    pair,
+                    ": ",
+                    scatter[pair]);
+    }
+
+    auto fineCoordinatesHost   = topologyValidationCoordinates(fineGrid).cpu().contiguous();
+    auto coarseCoordinatesHost = topologyValidationCoordinates(coarseGrid).cpu().contiguous();
+    auto fineCoordinates       = fineCoordinatesHost.accessor<int32_t, 2>();
+    auto coarseCoordinates     = coarseCoordinatesHost.accessor<int32_t, 2>();
+    using CoordinateKey        = std::tuple<int32_t, int32_t, int32_t, int32_t>;
+    using EdgeKey              = std::tuple<int64_t, int64_t, int64_t>;
+
+    std::map<CoordinateKey, int64_t> fineIndexByCoordinate;
+    for (int64_t fineIndex = 0; fineIndex < fineGrid.totalVoxels(); ++fineIndex) {
+        CoordinateKey const key{fineCoordinates[fineIndex][0],
+                                fineCoordinates[fineIndex][1],
+                                fineCoordinates[fineIndex][2],
+                                fineCoordinates[fineIndex][3]};
+        TORCH_CHECK(std::get<0>(key) >= 0 && std::get<0>(key) < fineGrid.batchSize(),
+                    "fine coordinate lookup was not populated at flat index ",
+                    fineIndex);
+        TORCH_CHECK(fineIndexByCoordinate.emplace(key, fineIndex).second,
+                    "fine grid contains duplicate batch/coordinate entries");
+    }
+
+    std::set<EdgeKey> actualEdges;
+    for (int64_t tap = 0; tap < topology.kernelVolume; ++tap) {
+        for (int64_t pair = offsets[tap]; pair < offsets[tap + 1]; ++pair) {
+            int64_t const fineIndex   = isForward ? gather[pair] : scatter[pair];
+            int64_t const coarseIndex = isForward ? scatter[pair] : gather[pair];
+            TORCH_CHECK(fineCoordinates[fineIndex][0] == coarseCoordinates[coarseIndex][0],
+                        "edge crosses batch domains at pair ",
+                        pair);
+            nanovdb::Coord const fineCoordinate(fineCoordinates[fineIndex][1],
+                                                fineCoordinates[fineIndex][2],
+                                                fineCoordinates[fineIndex][3]);
+            nanovdb::Coord const coarseCoordinate(coarseCoordinates[coarseIndex][1],
+                                                  coarseCoordinates[coarseIndex][2],
+                                                  coarseCoordinates[coarseIndex][3]);
+            TORCH_CHECK(fineCoordinate ==
+                            geometry.fineFromCoarse(coarseCoordinate, geometry.tapCoord(tap)),
+                        "edge does not satisfy canonical fine/coarse geometry at pair ",
+                        pair,
+                        ", tap ",
+                        tap);
+            TORCH_CHECK(actualEdges.emplace(fineIndex, coarseIndex, tap).second,
+                        "duplicate fine/coarse/tap edge at pair ",
+                        pair);
+        }
+    }
+
+    std::set<EdgeKey> expectedEdges;
+    for (int64_t coarseIndex = 0; coarseIndex < coarseGrid.totalVoxels(); ++coarseIndex) {
+        int32_t const batch = coarseCoordinates[coarseIndex][0];
+        TORCH_CHECK(batch >= 0 && batch < coarseGrid.batchSize(),
+                    "coarse coordinate lookup was not populated at flat index ",
+                    coarseIndex);
+        nanovdb::Coord const coarseCoordinate(coarseCoordinates[coarseIndex][1],
+                                              coarseCoordinates[coarseIndex][2],
+                                              coarseCoordinates[coarseIndex][3]);
+        for (int64_t tap = 0; tap < topology.kernelVolume; ++tap) {
+            nanovdb::Coord const fineCoordinate =
+                geometry.fineFromCoarse(coarseCoordinate, geometry.tapCoord(tap));
+            CoordinateKey const fineKey{
+                batch, fineCoordinate[0], fineCoordinate[1], fineCoordinate[2]};
+            auto const fineEntry = fineIndexByCoordinate.find(fineKey);
+            if (fineEntry != fineIndexByCoordinate.end()) {
+                expectedEdges.emplace(fineEntry->second, coarseIndex, tap);
+            }
+        }
+    }
+    TORCH_CHECK(actualEdges == expectedEdges,
+                "stored topology edge set does not equal the complete canonical relation: got ",
+                actualEdges.size(),
+                " edges, expected ",
+                expectedEdges.size());
 }
 
 // =============================================================================
@@ -499,10 +732,14 @@ struct gs_default_conv_op {
 };
 
 // =============================================================================
-// Backward convolution (forward direction)
+// Backward convolution (shared by forward and transposed entry points)
+//
+// The topology arrays are already oriented for execution. Direction is
+// endpoint metadata validated by the wrappers below; this executor neither
+// reapplies convolution geometry nor swaps gather/scatter indices.
 // =============================================================================
 
-struct gs_default_conv_backward_op {
+struct gs_default_backward_op {
     template <typename Tag>
         requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
     static std::tuple<torch::Tensor, torch::Tensor>
@@ -586,92 +823,17 @@ struct gs_default_conv_backward_op {
             torch::Tensor, torch::Tensor, torch::Tensor, GatherScatterDefaultTopology const &)>;
 };
 
-// =============================================================================
-// Backward convolution (transposed direction)
-// =============================================================================
-
-struct gs_default_conv_transpose_backward_op {
-    template <typename Tag>
-        requires with_type<Tag, torch::DeviceType> && with_type<Tag, torch::ScalarType>
-    static std::tuple<torch::Tensor, torch::Tensor>
-    op(Tag tg,
-       torch::Tensor grad_output,
-       torch::Tensor features,
-       torch::Tensor weights,
-       GatherScatterDefaultTopology const &topo) {
-        constexpr auto dev = tag_get<torch::DeviceType>(Tag{});
-
-        auto guard = make_device_guard(tag<dev>{}, features);
-
-        int64_t const F     = topo.featureTotalVoxels;
-        int64_t const O     = topo.outputTotalVoxels;
-        int64_t const K     = topo.kernelVolume;
-        int64_t const C_in  = weights.size(1);
-        int64_t const C_out = weights.size(0);
-        int64_t const TP    = topo.totalPairs;
-
-        auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
-        if (W.scalar_type() != features.scalar_type()) {
-            W = W.to(features.scalar_type());
-        }
-
-        auto grad_features = torch::zeros({F, C_in}, features.options());
-        auto grad_W_flat   = torch::zeros({K, C_in, C_out}, features.options());
-
-        if (O == 0 || K == 0 || TP == 0) {
-            auto ks           = topo.kernelSize;
-            auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                    .permute({4, 3, 0, 1, 2})
-                                    .contiguous();
-            return {grad_features, grad_weights};
-        }
-
-        auto off_acc = topo.offsets.accessor<int64_t, 1>();
-
-        int64_t const max_n = maxPairsPerOffset(topo.offsets, K);
-        auto feat_buf       = torch::empty({max_n, C_in}, features.options());
-        auto grad_buf       = torch::empty({max_n, C_out}, features.options());
-        auto grad_feat_buf  = torch::empty({max_n, C_in}, features.options());
-
-        for (int64_t k = 0; k < K; ++k) {
-            int64_t const start = off_acc[k];
-            int64_t const end   = off_acc[k + 1];
-            int64_t const n_k   = end - start;
-
-            if (n_k == 0)
-                continue;
-
-            auto gi_k = topo.gatherIndices.slice(0, start, end);
-            auto si_k = topo.scatterIndices.slice(0, start, end);
-            auto fb_k = feat_buf.slice(0, 0, n_k);
-            auto gb_k = grad_buf.slice(0, 0, n_k);
-            auto gf_k = grad_feat_buf.slice(0, 0, n_k);
-
-            gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
-            gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
-
-            mmOutSafe(gf_k, gb_k, W[k].t());
-            gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
-
-            auto gw_k = grad_W_flat[k];
-            mmOutSafe(gw_k, fb_k.t(), gb_k);
-        }
-
-        auto ks           = topo.kernelSize;
-        auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                .permute({4, 3, 0, 1, 2})
-                                .contiguous();
-
-        return {grad_features, grad_weights};
-    }
-
-    using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
-    using subspaces  = coverage<space>;
-    using dispatcher = dispatch_table<
-        space,
-        std::tuple<torch::Tensor, torch::Tensor>(
-            torch::Tensor, torch::Tensor, torch::Tensor, GatherScatterDefaultTopology const &)>;
-};
+static std::tuple<torch::Tensor, torch::Tensor>
+executeGatherScatterDefaultBackward(torch::Tensor gradOutput,
+                                    torch::Tensor features,
+                                    torch::Tensor weights,
+                                    GatherScatterDefaultTopology const &topology,
+                                    torch::ScalarType workingType) {
+    static auto const table =
+        dispatch_table_from_op<gs_default_backward_op>("gather_scatter_default_shared_backward");
+    auto const device = features.device().type();
+    return table.select(dispatch_set{device, workingType})(gradOutput, features, weights, topology);
+}
 
 // =============================================================================
 // Type-erased entry points
@@ -715,11 +877,7 @@ gatherScatterDefaultSparseConvBackward(torch::Tensor grad_output,
     if (grad_output.scalar_type() != working_st)
         grad_output = grad_output.to(working_st);
 
-    static auto const table = dispatch_table_from_op<gs_default_conv_backward_op>(
-        "gather_scatter_default_sparse_conv_backward");
-
-    auto const dev = features.device().type();
-    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
+    return executeGatherScatterDefaultBackward(grad_output, features, weights, topo, working_st);
 }
 
 torch::Tensor
@@ -762,11 +920,7 @@ gatherScatterDefaultSparseConvTransposeBackward(torch::Tensor grad_output,
     if (grad_output.scalar_type() != working_st)
         grad_output = grad_output.to(working_st);
 
-    static auto const table = dispatch_table_from_op<gs_default_conv_transpose_backward_op>(
-        "gather_scatter_default_sparse_conv_transpose_backward");
-
-    auto const dev = features.device().type();
-    return table.select(dispatch_set{dev, working_st})(grad_output, features, weights, topo);
+    return executeGatherScatterDefaultBackward(grad_output, features, weights, topo, working_st);
 }
 
 } // namespace ops

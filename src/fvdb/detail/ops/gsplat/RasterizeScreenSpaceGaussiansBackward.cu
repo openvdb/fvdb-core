@@ -5,6 +5,8 @@
 #include <fvdb/detail/utils/AccessorHelpers.cuh>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
+#include <fvdb/detail/utils/cuda/GradientReduction.h>
+#include <fvdb/detail/utils/cuda/LocalGradient.h>
 #include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/WarpReduce.cuh>
@@ -33,44 +35,39 @@ struct RasterizeBackwardArgs {
     constexpr static bool IS_CHUNKED = (NUM_CHANNELS != NUM_SHARED_CHANNELS);
     bool mAbsGrad;
 
-    // These are either a packed tensor accessor or a jagged tensor accessor, depending on the
-    // mode (dense or sparse, respectively). In sparse mode, they have dimensions {C, [AP_i, X]},
-    // where AP_i is the number of active pixels in the i-th camera image and X is [], null, or
-    // [NUM_CHANNELS]. In dense mode, they have dimensions {1, [C, H, W, X]}
-    fvdb::JaggedRAcc64<ScalarType, 2> mRenderedAlphas; // {1, [C, H, W, 1]} or {C, [AP_i, 1]}
-    fvdb::JaggedRAcc64<int32_t, 1> mLastGaussianIds;   // {1, [C, H, W]} or {C, [AP_i]}
-    fvdb::JaggedRAcc64<ScalarType, 2>
-        mDLossDRenderedFeatures; // {1, [C, H, W, NUM_CHANNELS]} or {C, [numPixels, NUM_CHANNELS]}
-    fvdb::JaggedRAcc64<ScalarType, 2>
-        mDLossDRenderedAlphas;   // {1, [C, H, W, 1]} or {C, [numPixels, 1]}
+    // Pixel inputs are flattened across cameras. P is C * H * W in dense mode, or the total
+    // number of active pixels in sparse mode.
+    fvdb::TorchRAcc64<ScalarType, 2> mRenderedAlphas;         // [P, 1]
+    fvdb::TorchRAcc64<int32_t, 1> mLastGaussianIds;           // [P]
+    fvdb::TorchRAcc64<ScalarType, 2> mDLossDRenderedFeatures; // [P, NUM_CHANNELS]
+    fvdb::TorchRAcc64<ScalarType, 2> mDLossDRenderedAlphas;   // [P, 1]
 
-    VectorAccessor mOutDLossDMeans2dAbs; // [C, N, 2] or [nnz, 2]
-    VectorAccessor mOutDLossDMeans2d;    // [C, N, 2] or [nnz, 2]
-    VectorAccessor mOutDLossDConics;     // [C, N, 3] or [nnz, 3]
-    VectorAccessor mOutDLossDFeatures;   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-    ScalarAccessor mOutDLossDOpacities;  // [C, N] or [nnz]
+    VectorAccessor mOutDLossDMeans2dAbs;                      // [C, N, 2] or [nnz, 2]
+    VectorAccessor mOutDLossDMeans2d;                         // [C, N, 2] or [nnz, 2]
+    VectorAccessor mOutDLossDConics;                          // [C, N, 3] or [nnz, 3]
+    VectorAccessor mOutDLossDFeatures;  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+    ScalarAccessor mOutDLossDOpacities; // [C, N] or [nnz]
 
     RasterizeBackwardArgs(
-        const torch::Tensor &means2d,    // [C, N, 2] or [nnz, 2]
-        const torch::Tensor &conics,     // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &opacities,  // [C, N] or [nnz]
-        const torch::Tensor &features,   // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+        const torch::Tensor &means2d,   // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &conics,    // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &opacities, // [C, N] or [nnz]
+        const torch::Tensor &features,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
         const at::optional<torch::Tensor> &backgrounds, // [C, NUM_CHANNELS]
         const at::optional<torch::Tensor> &masks,       // [C, numTilesH, numTilesW]
         const RenderWindow2D &renderWindow,
         const uint32_t tileSize,
         const uint32_t blockOffset,
-        const torch::Tensor &tileOffsets,          // [C, numTilesH, numTilesW]
-        const torch::Tensor &tileGaussianIds,      // [totalIntersections]
-        const fvdb::JaggedTensor &renderedAlphas,  // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
-        const fvdb::JaggedTensor &lastGaussianIds, // {C, [AP_i]} or {1, [C, H, W]}
-        const fvdb::JaggedTensor
-            &dLossDRenderedFeatures, // {C, [AP_i, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
-        const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP_i, 1]} or {1, [C, H, W, 1]}
-        const torch::Tensor &outDLossDMeans2d,          // [C, N, 2] or [nnz, 2]
-        const torch::Tensor &outDLossDConics,           // [C, N, 3] or [nnz, 3]
-        const torch::Tensor &outDLossDFeatures,  // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
-        const torch::Tensor &outDLossDOpacities, // [C, N] or [nnz]
+        const torch::Tensor &tileOffsets,            // [C, numTilesH, numTilesW]
+        const torch::Tensor &tileGaussianIds,        // [totalIntersections]
+        const torch::Tensor &renderedAlphas,         // [P, 1]
+        const torch::Tensor &lastGaussianIds,        // [P]
+        const torch::Tensor &dLossDRenderedFeatures, // [P, NUM_CHANNELS]
+        const torch::Tensor &dLossDRenderedAlphas,   // [P, 1]
+        const torch::Tensor &outDLossDMeans2d,       // [C, N, 2] or [nnz, 2]
+        const torch::Tensor &outDLossDConics,        // [C, N, 3] or [nnz, 3]
+        const torch::Tensor &outDLossDFeatures,      // [C, N, NUM_CHANNELS] or [nnz, NUM_CHANNELS]
+        const torch::Tensor &outDLossDOpacities,     // [C, N] or [nnz]
         const std::optional<torch::Tensor> &outDLossDMeans2dAbs,        // [C, N, 2] or [nnz, 2]
         const std::optional<torch::Tensor> &activeTiles = std::nullopt, // [AT]
         const std::optional<torch::Tensor> &tilePixelMask =
@@ -93,12 +90,12 @@ struct RasterizeBackwardArgs {
                      tilePixelCumsum,
                      pixelMap),
           mAbsGrad(outDLossDMeans2dAbs.has_value()),
-          mRenderedAlphas(initJaggedAccessor<ScalarType, 2>(renderedAlphas, "renderedAlphas")),
-          mLastGaussianIds(initJaggedAccessor<int32_t, 1>(lastGaussianIds, "lastGaussianIds")),
+          mRenderedAlphas(initAccessor<ScalarType, 2>(renderedAlphas, "renderedAlphas")),
+          mLastGaussianIds(initAccessor<int32_t, 1>(lastGaussianIds, "lastGaussianIds")),
           mDLossDRenderedFeatures(
-              initJaggedAccessor<ScalarType, 2>(dLossDRenderedFeatures, "dLossDRenderedFeatures")),
+              initAccessor<ScalarType, 2>(dLossDRenderedFeatures, "dLossDRenderedFeatures")),
           mDLossDRenderedAlphas(
-              initJaggedAccessor<ScalarType, 2>(dLossDRenderedAlphas, "dLossDRenderedAlphas")),
+              initAccessor<ScalarType, 2>(dLossDRenderedAlphas, "dLossDRenderedAlphas")),
           mOutDLossDMeans2dAbs(initAccessor<ScalarType, CommonArgs::NUM_OUTER_DIMS + 1>(
               outDLossDMeans2dAbs, means2d.options(), "outDLossDMeans2dAbs")),
           mOutDLossDMeans2d(initAccessor<ScalarType, CommonArgs::NUM_OUTER_DIMS + 1>(
@@ -165,45 +162,20 @@ struct RasterizeBackwardArgs {
                               "Bad size for outDLossDOpacities");
         }
 
-        if (commonArgs.mIsSparse) {
-            // just check that the number of cameras and number of pixels are correct
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mRenderedAlphas.numTensors(),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mRenderedAlphas.elementCount(),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mLastGaussianIds.numTensors(),
-                              "Bad size for lastGaussianIds");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mLastGaussianIds.elementCount(),
-                              "Bad size for lastGaussianIds");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedFeatures.numTensors(),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) ==
-                                  mDLossDRenderedFeatures.elementCount(),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(commonArgs.mNumCameras == mDLossDRenderedAlphas.numTensors(),
-                              "Bad size for dLossDRenderedAlphas");
-            TORCH_CHECK_VALUE(commonArgs.mPixelMap.size(0) == mDLossDRenderedAlphas.elementCount(),
-                              "Bad size for dLossDRenderedAlphas");
-        } else {
-            auto const tensorSize =
-                commonArgs.mNumCameras * commonArgs.renderHeight() * commonArgs.renderWidth();
-            TORCH_CHECK_VALUE(tensorSize == mRenderedAlphas.data().size(0),
-                              "Bad size for renderedAlphas");
-            TORCH_CHECK_VALUE(1 == mRenderedAlphas.data().size(1), "Bad size for renderedAlphas");
-
-            TORCH_CHECK_VALUE(tensorSize == mLastGaussianIds.data().size(0),
-                              "Bad size for lastGaussianIds");
-
-            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedFeatures.data().size(0),
-                              "Bad size for dLossDRenderedFeatures");
-            TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.data().size(1),
-                              "Bad size for dLossDRenderedFeatures");
-
-            TORCH_CHECK_VALUE(tensorSize == mDLossDRenderedAlphas.data().size(0),
-                              "Bad size for dLossDRenderedAlphas");
-            TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.data().size(1),
-                              "Bad size for dLossDRenderedAlphas");
-        }
+        const int64_t numPixels =
+            commonArgs.mIsSparse
+                ? commonArgs.mPixelMap.size(0)
+                : commonArgs.mNumCameras * commonArgs.renderHeight() * commonArgs.renderWidth();
+        TORCH_CHECK_VALUE(numPixels == mRenderedAlphas.size(0), "Bad size for renderedAlphas");
+        TORCH_CHECK_VALUE(1 == mRenderedAlphas.size(1), "Bad size for renderedAlphas");
+        TORCH_CHECK_VALUE(numPixels == mLastGaussianIds.size(0), "Bad size for lastGaussianIds");
+        TORCH_CHECK_VALUE(numPixels == mDLossDRenderedFeatures.size(0),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(NUM_CHANNELS == mDLossDRenderedFeatures.size(1),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(numPixels == mDLossDRenderedAlphas.size(0),
+                          "Bad size for dLossDRenderedAlphas");
+        TORCH_CHECK_VALUE(1 == mDLossDRenderedAlphas.size(1), "Bad size for dLossDRenderedAlphas");
     }
 
     /// @brief Read the alpha value for a pixel
@@ -211,7 +183,7 @@ struct RasterizeBackwardArgs {
     /// @return The alpha value for the pixel
     __device__ ScalarType
     readAlpha(uint64_t pixelIndex) {
-        return mRenderedAlphas.data()[pixelIndex][0];
+        return mRenderedAlphas[pixelIndex][0];
     }
 
     /// @brief Read the last ID for a pixel
@@ -219,7 +191,7 @@ struct RasterizeBackwardArgs {
     /// @return The last ID for the pixel
     __device__ int32_t
     readLastId(uint64_t pixelIndex) {
-        return mLastGaussianIds.data()[pixelIndex];
+        return mLastGaussianIds[pixelIndex];
     }
 
     /// @brief Read the gradient of the loss with respect to the rendered alpha for a pixel
@@ -227,7 +199,7 @@ struct RasterizeBackwardArgs {
     /// @return The gradient of the loss with respect to the rendered alpha for the pixel
     __device__ ScalarType
     readDLossDRenderedAlpha(uint64_t pixelIndex) {
-        return mDLossDRenderedAlphas.data()[pixelIndex][0];
+        return mDLossDRenderedAlphas[pixelIndex][0];
     }
 
     /// @brief Read the gradient of the loss with respect to the rendered features for a pixel
@@ -235,7 +207,7 @@ struct RasterizeBackwardArgs {
     /// @return The gradient of the loss with respect to the rendered features for the pixel
     __device__ ScalarType
     readDLossDRenderedFeature(uint64_t pixelIndex, uint32_t channel) {
-        return mDLossDRenderedFeatures.data()[pixelIndex][channel];
+        return mDLossDRenderedFeatures[pixelIndex][channel];
     }
 
     // Fetch the features for a Gaussian into shared memory
@@ -326,13 +298,13 @@ struct RasterizeBackwardArgs {
         auto dLossDFeaturesGaussianPtr = getAccessorPointer<ScalarType>(mOutDLossDFeatures, g);
         if constexpr (IS_CHUNKED) {
             for (uint32_t k = 0; k < numChannels; ++k) {
-                atomicAdd_system(dLossDFeaturesGaussianPtr + channelStart + k,
-                                 featureGradientContribution[k]);
+                atomicAdd(dLossDFeaturesGaussianPtr + channelStart + k,
+                          featureGradientContribution[k]);
             }
         } else {
 #pragma unroll NUM_CHANNELS
             for (uint32_t k = 0; k < NUM_CHANNELS; ++k) {
-                atomicAdd_system(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
+                atomicAdd(dLossDFeaturesGaussianPtr + k, featureGradientContribution[k]);
             }
         }
     }
@@ -351,29 +323,24 @@ struct RasterizeBackwardArgs {
         const vec2t &pixelMean2dAbsGradientContribution,
         const ScalarType pixelOpacityGradientContribution) {
         auto *dLossDConicsGaussianPtr = getAccessorPointer<vec3t>(mOutDLossDConics, g);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](0),
-                         pixelConicGradientContribution[0]);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](1),
-                         pixelConicGradientContribution[1]);
-        atomicAdd_system(&dLossDConicsGaussianPtr->operator[](2),
-                         pixelConicGradientContribution[2]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](0), pixelConicGradientContribution[0]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](1), pixelConicGradientContribution[1]);
+        atomicAdd(&dLossDConicsGaussianPtr->operator[](2), pixelConicGradientContribution[2]);
 
-        auto *dLossDMeans2DGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
-        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](0),
-                         pixelMean2dGradientContribution[0]);
-        atomicAdd_system(&dLossDMeans2DGaussianPtr->operator[](1),
-                         pixelMean2dGradientContribution[1]);
+        auto *dLossDMeans2dGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2d, g);
+        atomicAdd(&dLossDMeans2dGaussianPtr->operator[](0), pixelMean2dGradientContribution[0]);
+        atomicAdd(&dLossDMeans2dGaussianPtr->operator[](1), pixelMean2dGradientContribution[1]);
 
         if (mAbsGrad) {
             auto *dLossDMeans2dAbsGaussianPtr = getAccessorPointer<vec2t>(mOutDLossDMeans2dAbs, g);
-            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](0),
-                             pixelMean2dAbsGradientContribution[0]);
-            atomicAdd_system(&dLossDMeans2dAbsGaussianPtr->operator[](1),
-                             pixelMean2dAbsGradientContribution[1]);
+            atomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](0),
+                      pixelMean2dAbsGradientContribution[0]);
+            atomicAdd(&dLossDMeans2dAbsGaussianPtr->operator[](1),
+                      pixelMean2dAbsGradientContribution[1]);
         }
 
         auto *dLossDOpacitiesGaussianPtr = get1DAccessorPointer<ScalarType>(mOutDLossDOpacities, g);
-        atomicAdd_system(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
+        atomicAdd(dLossDOpacitiesGaussianPtr, pixelOpacityGradientContribution);
     }
 
     /// @brief Accumulate the features of this Gaussian into the accumulated features
@@ -610,8 +577,8 @@ struct RasterizeBackwardArgs {
         const uint32_t cameraId,
         const uint32_t row,
         const uint32_t col,
-        const int32_t firstGaussianIdInBlock,
-        const int32_t lastGaussianIdInBlock,
+        const int64_t firstGaussianIdInBlock,
+        const int64_t lastGaussianIdInBlock,
         const uint32_t blockSize,
         const bool pixelIsActive,
         const uint32_t activePixelIndex) {
@@ -631,7 +598,7 @@ struct RasterizeBackwardArgs {
         // Only access memory if the pixel is active (within image bounds)
         ScalarType finalTransmittance  = ScalarType{1};
         ScalarType dLossDRenderedAlpha = ScalarType{0};
-        int32_t lastGaussianId         = 0;
+        int32_t lastIntersectionOffset = -1;
 
         if (pixelIsActive) {
             // this is the T AFTER the last gaussian in this pixel
@@ -641,8 +608,8 @@ struct RasterizeBackwardArgs {
             // pixel
             dLossDRenderedAlpha = readDLossDRenderedAlpha(pixIdx);
 
-            // ID of the last Gaussian to contribute to this pixel
-            lastGaussianId = readLastId(pixIdx);
+            // Tile-relative offset of the last Gaussian intersection to contribute to this pixel.
+            lastIntersectionOffset = readLastId(pixIdx);
         }
 
         namespace cg = cooperative_groups;
@@ -650,12 +617,12 @@ struct RasterizeBackwardArgs {
         const cg::thread_block_tile<WARP_TILE_SIZE> warp =
             cg::tiled_partition<WARP_TILE_SIZE>(block);
 
-        const int32_t lastGaussianIdInWarp = warpMax(lastGaussianId, warp);
+        const int32_t lastIntersectionOffsetInWarp = warpMax(lastIntersectionOffset, warp);
 
         // Process Gaussians in batches of block size (i.e. one Gaussian per thread in the block)
-        const uint32_t tidx = threadIdx.y * blockDim.x + threadIdx.x;
-        const uint32_t numBatches =
-            (lastGaussianIdInBlock - firstGaussianIdInBlock + blockSize - 1) / blockSize;
+        const uint32_t tidx            = threadIdx.y * blockDim.x + threadIdx.x;
+        const int64_t numIntersections = lastGaussianIdInBlock - firstGaussianIdInBlock;
+        const int64_t numBatches       = (numIntersections + blockSize - 1) / blockSize;
 
         constexpr size_t NUM_CHUNKS =
             (NUM_CHANNELS + NUM_SHARED_CHANNELS - 1) / NUM_SHARED_CHANNELS;
@@ -685,18 +652,18 @@ struct RasterizeBackwardArgs {
                 dLossDRenderedFeature[k] = ScalarType{0};
             }
 
-            for (uint32_t b = 0; b < numBatches; ++b) {
+            for (int64_t b = 0; b < numBatches; ++b) {
                 // resync all threads before writing next batch of shared mem
                 __syncthreads();
 
                 // Each thread fetches one gaussian into shared memory.
                 // Gaussians are stored in shared memory locations in order of decreasing
                 // distance from the camera. Gaussians are processed in batches of size
-                // blockSize (i.e. one Gaussian per thread in the block), and batchEnd is the
-                // index of the last gaussian. NOTE: These values can be negative so must be
-                // int32 instead of uint32
-                const int32_t batchEnd = lastGaussianIdInBlock - 1 - blockSize * b;
-                const int32_t idx      = batchEnd - tidx;
+                // blockSize (i.e. one Gaussian per thread in the block). batchEndOffset is relative
+                // to the tile's first intersection. NOTE: These values can be negative so must be
+                // signed instead of unsigned.
+                const int64_t batchEndOffset = numIntersections - 1 - blockSize * b;
+                const int64_t idx            = firstGaussianIdInBlock + batchEndOffset - tidx;
                 if (idx >= firstGaussianIdInBlock) {
                     const int32_t g =
                         commonArgs.mTileGaussianIds[idx]; // Gaussian index in [C * N] or [nnz]
@@ -718,8 +685,15 @@ struct RasterizeBackwardArgs {
                 // 0 index is the furthest back gaussian in the batch
                 // For each Gaussian which contributes to this pixel, compute this pixel's
                 // gradient contribution to that Gaussian
-                const int32_t batchSize = min(blockSize, batchEnd + 1 - firstGaussianIdInBlock);
-                for (uint32_t t = max(0, batchEnd - lastGaussianIdInWarp); t < batchSize; ++t) {
+                const int64_t remaining = batchEndOffset + 1;
+                const uint32_t batchSize =
+                    static_cast<uint32_t>(remaining < blockSize ? remaining : blockSize);
+                const int64_t firstT64 = batchEndOffset > lastIntersectionOffsetInWarp
+                                             ? batchEndOffset - lastIntersectionOffsetInWarp
+                                             : 0;
+                const uint32_t firstT =
+                    firstT64 < batchSize ? static_cast<uint32_t>(firstT64) : batchSize;
+                for (uint32_t t = firstT; t < batchSize; ++t) {
                     // (row, col) coordinates are relative to the specified image origin which may
                     // be a crop so we need to add the origin to get the absolute pixel coordinates
                     const ScalarType px =
@@ -727,7 +701,7 @@ struct RasterizeBackwardArgs {
                     const ScalarType py =
                         row + ScalarType(commonArgs.renderOriginY()) + ScalarType{0.5};
 
-                    bool valid = pixelIsActive && (batchEnd - t <= lastGaussianId);
+                    bool valid = pixelIsActive && (batchEndOffset - t <= lastIntersectionOffset);
 
                     const auto [gaussianIsValid, delta, expMinusSigma, alpha] = [&]() {
                         if (valid) {
@@ -849,8 +823,8 @@ rasterizeGaussiansBackward(
         return;
     }
 
-    int32_t firstGaussianIdInBlock;
-    int32_t lastGaussianIdInBlock;
+    int64_t firstGaussianIdInBlock;
+    int64_t lastGaussianIdInBlock;
     cuda::std::tie(firstGaussianIdInBlock, lastGaussianIdInBlock) =
         commonArgs.tileGaussianRange(cameraId, tileRow, tileCol);
 
@@ -891,11 +865,10 @@ callRasterizeBackwardWithTemplatedSharedChannels(
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,           // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
-    const fvdb::JaggedTensor
-        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
-    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const torch::Tensor &renderedAlphas,            // [C, H, W, 1] or [P, 1]
+    const torch::Tensor &lastGaussianIds,           // [C, H, W] or [P]
+    const torch::Tensor &dLossDRenderedFeatures,    // [C, H, W, NUM_CHANNELS] or [P, NUM_CHANNELS]
+    const torch::Tensor &dLossDRenderedAlphas,      // [C, H, W, 1] or [P, 1]
     bool absGrad, // True if we are computing the gradient of the absolute gradient of the means2d
     at::cuda::CUDAStream stream,
     const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
@@ -922,28 +895,16 @@ callRasterizeBackwardWithTemplatedSharedChannels(
                                outDLossDOpacities);
     }
 
-    // tileOffsets can be 3D (dense) or 1D (sparse)
-    const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
-    // Get C from tileOffsets for dense mode
-    // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t HW = renderWindow.pixelCountPerCamera();
-
-    auto [reshapedRenderedAlphas,
-          reshapedLastGaussianIds,
-          reshapedDLossDRenderedFeatures,
-          reshapedDLossDRenderedAlphas] = [&]() {
-        if (!activeTiles.has_value()) {
-            // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
-            return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
-        }
-        return std::make_tuple(
-            renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
-    }();
+    // Keep flattening after the empty-work return; sparse inputs are already flat.
+    const auto reshapedRenderedAlphas =
+        activeTiles.has_value() ? renderedAlphas : renderedAlphas.view({-1, 1});
+    const auto reshapedLastGaussianIds =
+        activeTiles.has_value() ? lastGaussianIds : lastGaussianIds.view({-1});
+    const auto reshapedDLossDRenderedFeatures =
+        activeTiles.has_value() ? dLossDRenderedFeatures
+                                : dLossDRenderedFeatures.view({-1, NUM_CHANNELS});
+    const auto reshapedDLossDRenderedAlphas =
+        activeTiles.has_value() ? dLossDRenderedAlphas : dLossDRenderedAlphas.view({-1, 1});
 
     RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
         means2d,
@@ -1007,11 +968,10 @@ callRasterizeBackwardWithCorrectSharedChannels(
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,           // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
-    const fvdb::JaggedTensor
-        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
-    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
+    const torch::Tensor &renderedAlphas,            // [C, H, W, 1] or [P, 1]
+    const torch::Tensor &lastGaussianIds,           // [C, H, W] or [P]
+    const torch::Tensor &dLossDRenderedFeatures,    // [C, H, W, NUM_CHANNELS] or [P, NUM_CHANNELS]
+    const torch::Tensor &dLossDRenderedAlphas,      // [C, H, W, 1] or [P, 1]
     const bool absGrad,
     const int64_t numSharedSharedChannelsOverride,
     const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
@@ -1160,82 +1120,91 @@ callRasterizeBackwardPrivateUse1(
     const uint32_t tileSize,
     const torch::Tensor &tileOffsets,               // [C, numTilesH, numTilesW]
     const torch::Tensor &tileGaussianIds,           // [totalIntersections]
-    const fvdb::JaggedTensor &renderedAlphas,       // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    const fvdb::JaggedTensor &lastGaussianIds,      // {C, [AP]} or {1, [C, H, W]}
-    const fvdb::JaggedTensor
-        &dLossDRenderedFeatures, // {C, [AP, NUM_CHANNELS]} or {1, [C, H, W, NUM_CHANNELS]}
-    const fvdb::JaggedTensor &dLossDRenderedAlphas, // {C, [AP, 1]} or {1, [C, H, W, 1]}
-    bool absGrad, // True if we are computing the gradient of the absolute gradient of the means2d
+    const torch::Tensor &renderedAlphas,            // [C, H, W, 1] or [P, 1]
+    const torch::Tensor &lastGaussianIds,           // [C, H, W] or [P]
+    const torch::Tensor &dLossDRenderedFeatures,    // [C, H, W, NUM_CHANNELS] or [P, NUM_CHANNELS]
+    const torch::Tensor &dLossDRenderedAlphas,      // [C, H, W, 1] or [P, 1]
+    bool absGrad,
     const std::optional<torch::Tensor> &activeTiles     = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelMask   = std::nullopt,
     const std::optional<torch::Tensor> &tilePixelCumsum = std::nullopt,
     const std::optional<torch::Tensor> &pixelMap        = std::nullopt) {
     TORCH_CHECK(tileSize > 0, "Tile size must be greater than 0");
 
-    torch::Tensor outDLossDMeans2d   = torch::empty_like(means2d);
-    torch::Tensor outDLossDConics    = torch::empty_like(conics);
-    torch::Tensor outDLossDFeatures  = torch::empty_like(features);
-    torch::Tensor outDLossDOpacities = torch::empty_like(opacities);
-    torch::Tensor outDLossDMeans2dAbs;
-    if (absGrad) {
-        outDLossDMeans2dAbs = torch::empty_like(means2d);
-    }
-
     // Just return empty tensors if there are no gaussians, cameras, or intersections
     if (means2d.numel() == 0 || tileGaussianIds.numel() == 0) {
-        return std::make_tuple(outDLossDMeans2dAbs,
-                               outDLossDMeans2d,
-                               outDLossDConics,
-                               outDLossDFeatures,
-                               outDLossDOpacities);
+        return std::make_tuple(absGrad ? torch::zeros_like(means2d) : torch::Tensor(),
+                               torch::zeros_like(means2d),
+                               torch::zeros_like(conics),
+                               torch::zeros_like(features),
+                               torch::zeros_like(opacities));
     }
 
-    // tileOffsets can be 3D (dense) or 1D (sparse)
+    // Keep flattening after the empty-work return; sparse inputs are already flat.
+    const auto reshapedRenderedAlphas =
+        activeTiles.has_value() ? renderedAlphas : renderedAlphas.view({-1, 1});
+    const auto reshapedLastGaussianIds =
+        activeTiles.has_value() ? lastGaussianIds : lastGaussianIds.view({-1});
+    const auto reshapedDLossDRenderedFeatures =
+        activeTiles.has_value() ? dLossDRenderedFeatures
+                                : dLossDRenderedFeatures.view({-1, NUM_CHANNELS});
+    const auto reshapedDLossDRenderedAlphas =
+        activeTiles.has_value() ? dLossDRenderedAlphas : dLossDRenderedAlphas.view({-1, 1});
+
+    // These managed outputs are populated from contiguous, device-local gradient shards after the
+    // raster kernels complete. Keep them contiguous so each device can publish one flat range.
+    torch::Tensor outDLossDMeans2d   = torch::empty(means2d.sizes(), means2d.options());
+    torch::Tensor outDLossDConics    = torch::empty(conics.sizes(), conics.options());
+    torch::Tensor outDLossDFeatures  = torch::empty(features.sizes(), features.options());
+    torch::Tensor outDLossDOpacities = torch::empty(opacities.sizes(), opacities.options());
+    torch::Tensor outDLossDMeans2dAbs;
+    if (absGrad) {
+        outDLossDMeans2dAbs = torch::empty(means2d.sizes(), means2d.options());
+    }
+
+    // tileOffsets can be 3D (dense) or 1D (sparse).
     const bool tileOffsetsAreSparse = tileOffsets.dim() == 1;
-    // Get C from tileOffsets for dense mode
-    // For sparse mode, C is unused, only used for output sizing for dense mode
-    const uint32_t C  = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
-    const uint32_t HW = renderWindow.pixelCountPerCamera();
+    const uint32_t C                = tileOffsetsAreSparse ? 0 : tileOffsets.size(0);
+    const int64_t tileExtentH       = renderWindow.tileExtentH(tileSize);
+    const int64_t tileExtentW       = renderWindow.tileExtentW(tileSize);
+    const int64_t tilesPerCamera    = tileExtentH * tileExtentW;
+    // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims.
+    const int64_t tileCount =
+        activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
+    // Use the forward pass's full-width tile rows for both input prefetch and rasterization.
+    // Sparse active-tile lists retain their flat partition; empty images need nonzero alignment.
+    const int64_t tileAlignment = activeTiles.has_value() || tileCount == 0 ? 1 : tileExtentW;
+    std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures, dLossDRenderedAlphas};
 
-    auto [reshapedRenderedAlphas,
-          reshapedLastGaussianIds,
-          reshapedDLossDRenderedFeatures,
-          reshapedDLossDRenderedAlphas] = [&]() {
-        if (!activeTiles.has_value()) {
-            // Dense mode. Reshape the JaggedTensor inputs to match sparse mode
-            return std::make_tuple(
-                fvdb::JaggedTensor(renderedAlphas.jdata().view({C * HW, 1})),
-                fvdb::JaggedTensor(lastGaussianIds.jdata().view({C * HW})),
-                fvdb::JaggedTensor(dLossDRenderedFeatures.jdata().view({C * HW, NUM_CHANNELS})),
-                fvdb::JaggedTensor(dLossDRenderedAlphas.jdata().view({C * HW, 1})));
-        }
-        return std::make_tuple(
-            renderedAlphas, lastGaussianIds, dLossDRenderedFeatures, dLossDRenderedAlphas);
-    }();
-
-    const uint32_t tileExtentH    = renderWindow.tileExtentH(tileSize);
-    const uint32_t tileExtentW    = renderWindow.tileExtentW(tileSize);
-    const uint32_t tilesPerCamera = tileExtentH * tileExtentW;
-    // Compute tile count: for sparse mode use activeTiles, for dense mode compute from image dims
-    uint32_t tileCount = activeTiles.has_value() ? activeTiles.value().size(0) : C * tilesPerCamera;
-    std::vector<torch::Tensor> tileTensors = {dLossDRenderedFeatures.jdata(),
-                                              dLossDRenderedAlphas.jdata()};
-
-    std::vector<cudaEvent_t> events(c10::cuda::device_count());
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreate(&events[deviceId], cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+    std::vector<torch::Tensor> outTensors = {
+        outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
+    if (absGrad) {
+        outTensors.emplace_back(outDLossDMeans2dAbs);
     }
 
+    std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
+    // Keep each device's current compute stream unchanged through allocation, rasterization,
+    // reduction, and release: the owning tensors enqueue their frees on their allocation streams.
+    std::vector<torch::Tensor> outDLossDMeans2dLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDConicsLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDFeaturesLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDOpacitiesLocals(c10::cuda::device_count());
+    std::vector<torch::Tensor> outDLossDMeans2dAbsLocals(c10::cuda::device_count());
+
+    // Prefetch inputs after prior work, then make the current streams wait for those inputs.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
+        auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
+        prefetchStreams[deviceId] = c10::cuda::getStreamFromPool(false, deviceId);
 
-        uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        cudaEvent_t prefetchEvent;
+        C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
+
+        int64_t deviceTileOffset, deviceTileCount;
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             std::vector<void *> prefetchPointers;
             std::vector<size_t> prefetchSizes;
@@ -1248,36 +1217,31 @@ callRasterizeBackwardPrivateUse1(
                                               tileSize};
             appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
 
-            const uint32_t cameraOffset = deviceTileOffset / tilesPerCamera;
-            const uint32_t cameraCount =
-                cuda::ceil_div(deviceTileOffset + deviceTileCount, tilesPerCamera) - cameraOffset;
-            std::vector<torch::Tensor> tensors = {
-                outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
-            if (absGrad) {
-                tensors.emplace_back(outDLossDMeans2dAbs);
-            }
-            appendPerCameraPrefetchRanges(
-                prefetchPointers, prefetchSizes, tensors, cameraOffset, cameraCount);
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, stream);
-
-            // Zero the outputs of the operator that need to be accumulated.
-            tensors = {outDLossDMeans2d, outDLossDConics, outDLossDFeatures, outDLossDOpacities};
-            if (absGrad) {
-                tensors.emplace_back(outDLossDMeans2dAbs);
-            }
-            perCameraMemsetAsync(tensors, cameraOffset, cameraCount, 0, stream);
+            memPrefetchBatchAsync(
+                prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
         }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
+        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStreams[deviceId]));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
+        C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 
+    // Launch rasterization on every device before submitting output prefetches.
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) = deviceChunk(tileCount, deviceId);
+        std::tie(deviceTileOffset, deviceTileCount) =
+            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+
+        outDLossDMeans2dLocals[deviceId]   = makeLocalGradient(means2d, deviceId, stream);
+        outDLossDConicsLocals[deviceId]    = makeLocalGradient(conics, deviceId, stream);
+        outDLossDFeaturesLocals[deviceId]  = makeLocalGradient(features, deviceId, stream);
+        outDLossDOpacitiesLocals[deviceId] = makeLocalGradient(opacities, deviceId, stream);
+        if (absGrad) {
+            outDLossDMeans2dAbsLocals[deviceId] = makeLocalGradient(means2d, deviceId, stream);
+        }
+
         if (deviceTileCount) {
             RasterizeBackwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED> args(
                 means2d,
@@ -1295,11 +1259,11 @@ callRasterizeBackwardPrivateUse1(
                 reshapedLastGaussianIds,
                 reshapedDLossDRenderedFeatures,
                 reshapedDLossDRenderedAlphas,
-                outDLossDMeans2d,
-                outDLossDConics,
-                outDLossDFeatures,
-                outDLossDOpacities,
-                absGrad ? std::make_optional(outDLossDMeans2dAbs) : std::nullopt,
+                outDLossDMeans2dLocals[deviceId],
+                outDLossDConicsLocals[deviceId],
+                outDLossDFeaturesLocals[deviceId],
+                outDLossDOpacitiesLocals[deviceId],
+                absGrad ? std::make_optional(outDLossDMeans2dAbsLocals[deviceId]) : std::nullopt,
                 activeTiles,
                 tilePixelMask,
                 tilePixelCumsum,
@@ -1329,6 +1293,61 @@ callRasterizeBackwardPrivateUse1(
             C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
     }
+
+    // Rasterization writes to device-local buffers prior to the cross-device reduction so it
+    // can be overlapped with output prefetching.
+    // Reuse the input prefetch streams to preserve their waits and ordering.
+    std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto prefetchStream = prefetchStreams[deviceId];
+        std::vector<void *> prefetchPointers;
+        std::vector<size_t> prefetchSizes;
+        for (const torch::Tensor &outTensor: outTensors) {
+            int64_t elementOffset, elementCount;
+            std::tie(elementOffset, elementCount) = deviceChunk(outTensor.numel(), deviceId);
+            if (elementCount > 0) {
+                prefetchPointers.emplace_back(outTensor.data_ptr<ScalarType>() + elementOffset);
+                prefetchSizes.emplace_back(elementCount * sizeof(ScalarType));
+            }
+        }
+        memDiscardAndPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
+
+        // Output copies wait on these events after all reductions have been queued.
+        C10_CUDA_CHECK(
+            cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId], cudaEventDisableTiming));
+        C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
+    }
+
+    // Queue every reduction before waiting so they can all overlap with output prefetching.
+    reduceGradientShards(outDLossDMeans2dLocals);
+    reduceGradientShards(outDLossDConicsLocals);
+    reduceGradientShards(outDLossDFeaturesLocals);
+    reduceGradientShards(outDLossDOpacitiesLocals);
+    if (absGrad) {
+        reduceGradientShards(outDLossDMeans2dAbsLocals);
+    }
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+        C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
+    }
+
+    copyGradientShards<ScalarType>(outDLossDMeans2dLocals, outDLossDMeans2d);
+    copyGradientShards<ScalarType>(outDLossDConicsLocals, outDLossDConics);
+    copyGradientShards<ScalarType>(outDLossDFeaturesLocals, outDLossDFeatures);
+    copyGradientShards<ScalarType>(outDLossDOpacitiesLocals, outDLossDOpacities);
+    if (absGrad) {
+        copyGradientShards<ScalarType>(outDLossDMeans2dAbsLocals, outDLossDMeans2dAbs);
+    }
+
+    // Enqueue frees after the reductions and output copies, before merging the compute streams.
+    outDLossDMeans2dLocals.clear();
+    outDLossDConicsLocals.clear();
+    outDLossDFeaturesLocals.clear();
+    outDLossDOpacitiesLocals.clear();
+    outDLossDMeans2dAbsLocals.clear();
 
     mergeStreams();
 
@@ -1612,6 +1631,21 @@ dispatchRasterizeScreenSpaceGaussiansSparseBwd<torch::kCUDA>(
     uint32_t colorDim   = features.size(-1);
     const bool isPacked = means2d.dim() == 2;
 
+    // Validate the jagged camera structure before passing only the flat pixel data to the
+    // launch helpers. Packed Gaussians do not encode the camera count, so use renderedAlphas.
+    if (means2d.numel() != 0 && tileGaussianIds.numel() != 0) {
+        const auto numSparseCameras = renderedAlphas.num_tensors();
+        if (!isPacked) {
+            TORCH_CHECK_VALUE(means2d.size(0) == numSparseCameras, "Bad size for renderedAlphas");
+        }
+        TORCH_CHECK_VALUE(numSparseCameras == lastGaussianIds.num_tensors(),
+                          "Bad size for lastGaussianIds");
+        TORCH_CHECK_VALUE(numSparseCameras == dLossDRenderedFeatures.num_tensors(),
+                          "Bad size for dLossDRenderedFeatures");
+        TORCH_CHECK_VALUE(numSparseCameras == dLossDRenderedAlphas.num_tensors(),
+                          "Bad size for dLossDRenderedAlphas");
+    }
+
 #define CALL_BWD_SPARSE_CUDA(N)                                                     \
     case N: {                                                                       \
         if (isPacked) {                                                             \
@@ -1626,10 +1660,10 @@ dispatchRasterizeScreenSpaceGaussiansSparseBwd<torch::kCUDA>(
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
-                renderedAlphas,                                                     \
-                lastGaussianIds,                                                    \
-                dLossDRenderedFeatures,                                             \
-                dLossDRenderedAlphas,                                               \
+                renderedAlphas.jdata(),                                             \
+                lastGaussianIds.jdata(),                                            \
+                dLossDRenderedFeatures.jdata(),                                     \
+                dLossDRenderedAlphas.jdata(),                                       \
                 absGrad,                                                            \
                 numSharedChannelsOverride,                                          \
                 activeTiles,                                                        \
@@ -1648,10 +1682,10 @@ dispatchRasterizeScreenSpaceGaussiansSparseBwd<torch::kCUDA>(
                 tileSize,                                                           \
                 tileOffsets,                                                        \
                 tileGaussianIds,                                                    \
-                renderedAlphas,                                                     \
-                lastGaussianIds,                                                    \
-                dLossDRenderedFeatures,                                             \
-                dLossDRenderedAlphas,                                               \
+                renderedAlphas.jdata(),                                             \
+                lastGaussianIds.jdata(),                                            \
+                dLossDRenderedFeatures.jdata(),                                     \
+                dLossDRenderedAlphas.jdata(),                                       \
                 absGrad,                                                            \
                 numSharedChannelsOverride,                                          \
                 activeTiles,                                                        \
@@ -1762,6 +1796,9 @@ rasterizeScreenSpaceGaussiansBwd(const torch::Tensor &means2d,
                                  const int64_t numSharedChannelsOverride,
                                  const at::optional<torch::Tensor> &backgrounds,
                                  const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.scalar_type() == torch::kInt32, "lastIds must have dtype int32");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansBwd<DeviceTag>(means2d,
@@ -1808,6 +1845,10 @@ rasterizeScreenSpaceGaussiansSparseBwd(const fvdb::JaggedTensor &pixelsToRender,
                                        const int64_t numSharedChannelsOverride,
                                        const at::optional<torch::Tensor> &backgrounds,
                                        const at::optional<torch::Tensor> &masks) {
+    TORCH_CHECK_VALUE(tileOffsets.scalar_type() == torch::kInt64,
+                      "tileOffsets must have dtype int64");
+    TORCH_CHECK_VALUE(lastIds.jdata().scalar_type() == torch::kInt32,
+                      "lastIds must have dtype int32");
     const RenderWindow2D renderWindow{imageWidth, imageHeight, imageOriginW, imageOriginH};
     return FVDB_DISPATCH_KERNEL(means2d.device(), [&]() {
         return dispatchRasterizeScreenSpaceGaussiansSparseBwd<DeviceTag>(pixelsToRender,

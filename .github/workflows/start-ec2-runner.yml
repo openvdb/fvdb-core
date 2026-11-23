@@ -1,0 +1,400 @@
+# Copyright Contributors to the OpenVDB Project
+# SPDX-License-Identifier: Apache-2.0
+#
+# Start a self-hosted EC2 runner, retrying with backoff when the region has no
+# capacity for the requested instance type.
+#
+# Every workflow that needs an EC2 runner calls this instead of inlining the
+# machulav action, so the retry policy (attempt count, backoff, the AZ sweep,
+# the pinned action SHA) lives in exactly one place and cannot drift between
+# tests.yml, cu130.yml, cu132.yml, publish.yml and nightly-publish.yml.
+#
+# Security note: this workflow mints a runner-registration token from the
+# fvdb-ec2-runners GitHub App (Administration: write on this repository), so it
+# deliberately has no `actions/checkout` and no local actions -- see
+# .github/scripts/check_runner_token_policy.py, which enforces that. The App's
+# private key is a secret of the ci-aws environment that this job declares;
+# callers forward it with `secrets: inherit`, which the same check allows only
+# into this repository's own workflows.
+#
+# Every caller on the way here passes `secrets: inherit`. GitHub only gives a
+# reusable workflow's jobs the secrets of an environment they declare (here
+# the runner App key in ci-aws) when each caller above them uses `secrets: inherit`;
+# without it the key arrives empty. Verified in openvdb/fvdb-ok-to-test-sandbox.
+name: Start EC2 Runner
+
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: EC2 instance type to launch, e.g. m6a.8xlarge or g6.xlarge.
+        type: string
+        required: true
+      az-config:
+        description: >-
+          JSON array of availability-zone configs, tried in order by the action
+          within a single attempt. Usually needs.versions.outputs.aws-*-az-config.
+        type: string
+        required: true
+      aws-role:
+        description: IAM role to assume via OIDC (needs.versions.outputs.aws-runner-role).
+        type: string
+        required: true
+      aws-region:
+        description: AWS region to launch in.
+        type: string
+        required: true
+      runner-label:
+        description: >-
+          Explicit runner label. Callers should pass a label that is unique per
+          run and per start job (e.g. cu130-build-<run_id>-<run_attempt>) and
+          hand the same literal to stop-ec2-runner.yml: it is tagged onto the
+          instance as RunnerLabel, so teardown can still find the instance when
+          this job was cancelled mid-flight and produced no outputs. Leave empty
+          to let the action generate one (no tag-based recovery then).
+        type: string
+        required: false
+        default: ''
+      aws-resource-tags:
+        description: >-
+          JSON array of extra EC2 tags to apply to the instance. RunnerLabel (when
+          runner-label is set), GitHubRunId and GitHubRepository are added
+          automatically unless already present.
+        type: string
+        required: false
+        default: ''
+      stagger-seconds:
+        description: >-
+          Upper bound (inclusive) on a random delay before the first attempt.
+          Matrix fan-outs set this so N simultaneous registrations do not hit the
+          GitHub API rate limit at the same instant. 0 disables the delay.
+        type: number
+        required: false
+        default: 0
+      fallback-instance-type:
+        description: >-
+          Second instance type to try when the primary is out of capacity in
+          every AZ. Draws on a different capacity pool, so attempt 2 uses it
+          immediately rather than waiting out a backoff. Leave empty to retry
+          the primary type on every attempt (the previous behaviour).
+        type: string
+        required: false
+        default: ''
+      backoff-seconds:
+        description: >-
+          Seconds to wait after the first failed attempt. The second wait is
+          twice this, so the default gives 90s then 180s between three attempts.
+        type: number
+        required: false
+        default: 90
+    outputs:
+      label:
+        description: Runner label to pass as `runs-on` in the job being provisioned.
+        value: ${{ jobs.start.outputs.label }}
+      ec2-instance-id:
+        description: Instance id, to be handed back to stop-ec2-runner.yml.
+        value: ${{ jobs.start.outputs.ec2-instance-id }}
+
+permissions:
+  id-token: write # Required for AWS OIDC
+
+jobs:
+  start:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    # The runner role (aws.runner_role in versions.json) trusts only OIDC
+    # tokens whose subject names the ci-aws environment, and a job's token
+    # names an environment only if the job declares one. ci-aws has no
+    # required reviewers; its deployment-branch policy limits which refs can
+    # start a runner. Approval of external PRs happens earlier, in
+    # approval-gate.yml.
+    #
+    # deployment: false keeps the environment (its deployment-branch policy
+    # still applies and the OIDC subject still names ci-aws) but records no
+    # deployment, so PRs are not filled with "deployed to ci-aws" events.
+    # Both were verified in openvdb/fvdb-test.
+    environment:
+      name: ci-aws
+      deployment: false
+    # Taken from the attempt that actually SUCCEEDED -- see the select step
+    # below for why "first non-empty" is not the same thing.
+    outputs:
+      label: ${{ steps.select.outputs.label }}
+      ec2-instance-id: ${{ steps.select.outputs.ec2-instance-id }}
+    steps:
+      - name: Stagger job start to avoid API rate limits
+        if: inputs.stagger-seconds > 0
+        env:
+          STAGGER: ${{ inputs.stagger-seconds }}
+        run: |
+          DELAY=$((RANDOM % (STAGGER + 1)))
+          echo "Delaying start by ${DELAY}s to spread out runner registrations."
+          sleep "${DELAY}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+          # 900s is the STS minimum. The session only has to outlive one
+          # launch attempt, so a leaked session is useful for 15 minutes
+          # instead of the default hour.
+          role-duration-seconds: 900
+
+      # The runner action needs a token that can register and remove this
+      # repository's self-hosted runners (Administration: write). It comes from
+      # the fvdb-ec2-runners GitHub App: minted for this job, limited to this
+      # repository, and revoked when the job ends. The App's private key is a
+      # secret of the ci-aws environment, so only jobs that declare ci-aws, on
+      # refs its deployment-branch policy allows, can read it.
+      - name: Mint a runner-registration token
+        id: runner-app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RUNNER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RUNNER_APP_KEY }}
+          permission-administration: write
+
+      # Every instance gets a RunnerLabel tag (when the caller supplied a label)
+      # and a GitHubRunId tag, on top of whatever the caller passed. The tag is
+      # the ONLY handle stop-ec2-runner.yml has when this job's outputs are
+      # empty -- which is exactly what happens when the run is cancelled while
+      # an attempt is in flight: the instance has launched but the select step
+      # below never runs. Caller-supplied keys win on collision.
+      - name: Compose EC2 resource tags
+        id: tags
+        env:
+          CALLER_TAGS: ${{ inputs.aws-resource-tags || '[]' }}
+          RUNNER_LABEL: ${{ inputs.runner-label }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAGS=$(jq -c -n \
+            --argjson caller "${CALLER_TAGS}" \
+            --arg label "${RUNNER_LABEL}" \
+            --arg run_id "${RUN_ID}" \
+            --arg repo "${REPO}" '
+            ($caller | map(.Key)) as $have
+            | $caller
+              + (if ($label != "" and (($have | index("RunnerLabel")) == null))
+                 then [{"Key": "RunnerLabel", "Value": $label}] else [] end)
+              + (if (($have | index("GitHubRunId")) == null)
+                 then [{"Key": "GitHubRunId", "Value": $run_id}] else [] end)
+              + (if (($have | index("GitHubRepository")) == null)
+                 then [{"Key": "GitHubRepository", "Value": $repo}] else [] end)')
+          echo "Tags: ${TAGS}"
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Start EC2 runner (attempt 1)
+        id: a1
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          ec2-instance-type: ${{ inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
+
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 1
+        if: steps.a1.outcome == 'failure' && steps.a1.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a1.outputs.label }}
+          ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
+
+      # Only wait when attempt 2 will re-ask the SAME pool. With a fallback type
+      # configured it targets a different one, so waiting buys nothing.
+      - name: Back off before attempt 2
+        if: steps.a1.outcome == 'failure' && inputs.fallback-instance-type == ''
+        env:
+          BACKOFF: ${{ inputs.backoff-seconds }}
+        run: |
+          echo "::warning::Runner start attempt 1 found no capacity; retrying in ${BACKOFF}s."
+          sleep "${BACKOFF}"
+
+      # Each 15-minute session covers one attempt and its clean-up. Three
+      # attempts plus the back-off waits can outlast a single session, so
+      # every retry starts with a fresh one.
+      - name: Refresh AWS credentials for attempt 2
+        if: steps.a1.outcome == 'failure'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+          role-duration-seconds: 900
+
+      - name: Start EC2 runner (attempt 2)
+        id: a2
+        if: steps.a1.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          # The fallback type when one is configured, so this attempt draws on a
+          # different capacity pool rather than re-asking the pool that just said no.
+          ec2-instance-type: ${{ inputs.fallback-instance-type || inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
+
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 2
+        if: steps.a2.outcome == 'failure' && steps.a2.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a2.outputs.label }}
+          ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
+
+      - name: Back off before attempt 3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        env:
+          BACKOFF: ${{ inputs.backoff-seconds }}
+        run: |
+          echo "::warning::Runner start attempt 2 found no capacity; retrying in $((BACKOFF * 2))s."
+          sleep "$((BACKOFF * 2))"
+
+      - name: Refresh AWS credentials for attempt 3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+          role-duration-seconds: 900
+
+      - name: Start EC2 runner (attempt 3)
+        id: a3
+        if: steps.a1.outcome == 'failure' && steps.a2.outcome == 'failure'
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: start
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          ec2-instance-type: ${{ inputs.instance-type }}
+          availability-zones-config: ${{ inputs.az-config }}
+          # Empty label => the action generates a unique one (its documented
+          # behaviour). aws-resource-tags is NOT so forgiving: the action does a
+          # bare JSON.parse() on it, which throws on '', so default to '[]'.
+          label: ${{ inputs.runner-label }}
+          aws-resource-tags: ${{ steps.tags.outputs.tags }}
+
+      # The action publishes its outputs as soon as the instance launches, i.e.
+      # BEFORE it waits for the runner to register. So a failed attempt can still
+      # have left an instance running -- terminate it rather than leak it.
+      - name: Clean up the instance left behind by attempt 3
+        if: steps.a3.outcome == 'failure' && steps.a3.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a3.outputs.label }}
+          ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
+
+      # A cancel can land after the last session expired; the terminate steps
+      # below need a live one.
+      - name: Refresh AWS credentials for cancel clean-up
+        if: cancelled()
+        continue-on-error: true
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ inputs.aws-role }}
+          aws-region: ${{ inputs.aws-region }}
+          role-duration-seconds: 900
+
+      # If the run is cancelled (e.g. a new push to the same PR with
+      # cancel-in-progress) while an attempt is in flight, GitHub kills that
+      # step after the instance has launched but before the runner registered.
+      # The select step below then never runs, the job's outputs stay empty and
+      # the caller's stop job has no id to terminate. Terminate any attempt that
+      # launched an instance and did not fail (the in-flight one, or one that
+      # succeeded just before the cancel landed) while we still know which it
+      # is. Attempts that FAILED were already cleaned up above.
+      - name: Terminate the instance left behind by a cancelled attempt 1
+        if: cancelled() && steps.a1.outcome != 'failure' && steps.a1.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a1.outputs.label }}
+          ec2-instance-id: ${{ steps.a1.outputs.ec2-instance-id }}
+
+      - name: Terminate the instance left behind by a cancelled attempt 2
+        if: cancelled() && steps.a2.outcome != 'failure' && steps.a2.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a2.outputs.label }}
+          ec2-instance-id: ${{ steps.a2.outputs.ec2-instance-id }}
+
+      - name: Terminate the instance left behind by a cancelled attempt 3
+        if: cancelled() && steps.a3.outcome != 'failure' && steps.a3.outputs.ec2-instance-id != ''
+        continue-on-error: true
+        uses: machulav/ec2-github-runner@343a1b2ae682e681c3cec9a235d882da17ff04ef # v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ steps.runner-app-token.outputs.token }}
+          label: ${{ steps.a3.outputs.label }}
+          ec2-instance-id: ${{ steps.a3.outputs.ec2-instance-id }}
+
+      # Pick the outputs of the attempt that succeeded. This must key on the
+      # step OUTCOME, not on which output is non-empty: an attempt whose
+      # instance launched but never registered a runner fails with its outputs
+      # already populated, so "first non-empty" would hand back a dead label --
+      # the dependent job would then queue against a runner that never appears
+      # instead of failing fast.
+      - name: Select the successful attempt
+        id: select
+        env:
+          INSTANCE_TYPE: ${{ inputs.instance-type }}
+          FALLBACK_TYPE: ${{ inputs.fallback-instance-type }}
+          A1_OUTCOME: ${{ steps.a1.outcome }}
+          A1_LABEL: ${{ steps.a1.outputs.label }}
+          A1_ID: ${{ steps.a1.outputs.ec2-instance-id }}
+          A2_OUTCOME: ${{ steps.a2.outcome }}
+          A2_LABEL: ${{ steps.a2.outputs.label }}
+          A2_ID: ${{ steps.a2.outputs.ec2-instance-id }}
+          A3_OUTCOME: ${{ steps.a3.outcome }}
+          A3_LABEL: ${{ steps.a3.outputs.label }}
+          A3_ID: ${{ steps.a3.outputs.ec2-instance-id }}
+        run: |
+          if [ "${A1_OUTCOME}" = "success" ]; then
+            LABEL="${A1_LABEL}"; ID="${A1_ID}"; WON=1
+          elif [ "${A2_OUTCOME}" = "success" ]; then
+            LABEL="${A2_LABEL}"; ID="${A2_ID}"; WON=2
+          elif [ "${A3_OUTCOME}" = "success" ]; then
+            LABEL="${A3_LABEL}"; ID="${A3_ID}"; WON=3
+          else
+            TRIED="${INSTANCE_TYPE}"
+            [ -n "${FALLBACK_TYPE}" ] && TRIED="${INSTANCE_TYPE} and ${FALLBACK_TYPE}"
+            echo "::error::Could not obtain ${TRIED} after 3 attempts across every configured availability zone; the region is likely out of capacity for these instance types."
+            exit 1
+          fi
+          echo "Runner provisioned on attempt ${WON}: ${LABEL} (${ID})"
+          if [ "${WON}" = "2" ] && [ -n "${FALLBACK_TYPE}" ]; then
+            echo "::notice::Primary ${INSTANCE_TYPE} was unavailable in every AZ; used fallback ${FALLBACK_TYPE}."
+          fi
+          echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
+          echo "ec2-instance-id=${ID}" >> "$GITHUB_OUTPUT"

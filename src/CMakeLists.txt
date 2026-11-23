@@ -1,7 +1,7 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.25 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
 
 project(fvdb LANGUAGES CXX CUDA)
 
@@ -22,10 +22,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_torch.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_tinyply.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_cutlass.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_nanovdb.cmake)
-include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_blosc.cmake)
-
-# zlib is required for NANOVDB_USE_ZIP (reading ZIP-compressed .nvdb files).
-find_package(ZLIB REQUIRED)
 
 # Enable testing at this level so CTest discovers tests from all subdirectories
 enable_testing()
@@ -49,9 +45,9 @@ set(FVDB_CPP_FILES
     fvdb/Config.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
+    fvdb/detail/utils/cuda/LocalGradient.cpp
     fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
-    fvdb/TorchDeviceBuffer.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
     fvdb/FVDB.cpp
@@ -60,7 +56,10 @@ set(FVDB_CPP_FILES
 
 set(FVDB_CU_FILES
     fvdb/GridBatchData.cu
+    fvdb/GridStorage.cu
+    fvdb/detail/utils/nanovdb/GridAssembly.cu
     fvdb/detail/GridBatchDataFactory.cu
+    fvdb/detail/VbmCache.cu
     fvdb/detail/io/SaveNanoVDB.cu
     fvdb/detail/ops/ActiveGridCoords.cu
     fvdb/detail/ops/ActiveVoxelsInBoundsMask.cu
@@ -91,7 +90,10 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/CubesInGrid.cu
     fvdb/detail/ops/AvgPool.cu
     fvdb/detail/ops/MaxPool.cu
+    fvdb/detail/ops/gsplat/CopyImageToDevice.cu
     fvdb/detail/ops/GridEdgeNetwork.cu
+    fvdb/detail/ops/gsplat/FusedL1.cu
+    fvdb/detail/ops/gsplat/FusedL1SSIM.cu
     fvdb/detail/ops/gsplat/FusedSSIM.cu
     fvdb/detail/ops/gsplat/ComputeGaussianNanInfMask.cu
     fvdb/detail/ops/gsplat/AddNoiseToGaussianMeans.cu
@@ -118,6 +120,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/Inject.cu
     fvdb/detail/ops/IntegrateTSDF.cu
     fvdb/detail/ops/jagged/JaggedSort.cu
+    fvdb/detail/ops/JaggedStructureCheck.cu
     fvdb/detail/ops/JaggedTensorIndex.cu
     fvdb/detail/ops/JCat0.cu
     fvdb/detail/ops/JIdxForGrid.cu
@@ -125,7 +128,6 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/JOffsetsFromJIdx.cu
     fvdb/detail/ops/MarchingCubes.cu
     fvdb/detail/ops/MortonHilbertFromIjk.cu
-    fvdb/detail/ops/NearestIjkForPoints.cu
     fvdb/detail/ops/PointsInGrid.cu
     fvdb/detail/ops/PopulateGridMetadata.cu
     fvdb/detail/ops/RayImplicitIntersection.cu
@@ -170,12 +172,13 @@ set_target_properties(
 
 target_include_directories(fvdb PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-    $<BUILD_INTERFACE:${nanovdb_SOURCE_DIR}/nanovdb>
     $<BUILD_INTERFACE:${nvtx3_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${NANOVDB_EDITOR_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
 target_include_directories(fvdb PRIVATE
     ${tinyply_SOURCE_DIR}/source)
+
+# Expose nvcc's toolkit include paths, including CCCL, to host C++ sources.
+target_include_directories(fvdb SYSTEM PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})
 
 # Needed by Torch for CUDA extensions
 set(TORCH_CUDA_COMMON_FLAGS
@@ -195,8 +198,6 @@ target_compile_options(fvdb PRIVATE
     "-Wno-stringop-overflow"
     "-Wno-maybe-uninitialized"
     "-fdiagnostics-color=always"
-    "-DNANOVDB_USE_BLOSC"
-    "-DNANOVDB_USE_ZIP"
     "-fvisibility=default"
     "-Wall"
     "-Werror"
@@ -209,15 +210,23 @@ target_compile_options(fvdb PRIVATE
     "-Werror=all-warnings"
     "--threads=$ENV{NVCC_THREADS}"
     "-Xcompiler=-Wall,-Werror,-Wno-maybe-uninitialized"
-    "-DNANOVDB_USE_BLOSC"
-    "-DNANOVDB_USE_ZIP"
     ${TORCH_CUDA_COMMON_FLAGS}
     >
     $<$<AND:$<BOOL:${FVDB_LINEINFO}>,$<COMPILE_LANGUAGE:CUDA>>:-lineinfo>)
 
+# Header-only NVTX v3 loads its injection library with dlopen. Consumers of fvdb
+# headers emit those calls, and glibc < 2.34 keeps dlopen in libdl.
+#
+# NanoVDB's include paths and NANOVDB_USE_* definitions are PUBLIC within the
+# build, so fVDB's own TUs and the bindings compile nanovdb/io/IO.h the same
+# way. Its libraries (nanovdb_blosc, zlib) are PRIVATE, so libfvdb.so holds the
+# only copy, and --exclude-libs keeps nanovdb_blosc's symbols out of its
+# exports, where they could bind to another NanoVDB library's copy.
 target_link_libraries(fvdb
-    PUBLIC torch
-    PRIVATE tinyply cutlass blosc::blosc ZLIB::ZLIB dispatch)
+    PUBLIC torch $<BUILD_INTERFACE:$<COMPILE_ONLY:NanoVDB::nanovdb>> nanovdb_editor::public_headers
+           ${CMAKE_DL_LIBS}
+    PRIVATE $<BUILD_INTERFACE:NanoVDB::nanovdb> tinyply cutlass dispatch)
+target_link_options(fvdb PRIVATE "LINKER:--exclude-libs,libnanovdb_blosc.a")
 
 # ----------------------------------------------------------------------------
 # Precompiled headers (host C++ only)
@@ -266,7 +275,7 @@ if(FVDB_INSTALL_DEV)
     install(FILES ${_FVDB_PUBLIC_HEADERS}
         DESTINATION include/fvdb)
 
-    install(DIRECTORY ${nanovdb_SOURCE_DIR}/nanovdb/nanovdb/
+    install(DIRECTORY ${FVDB_NANOVDB_INCLUDE_DIR}/nanovdb/
         DESTINATION include/nanovdb
         FILES_MATCHING PATTERN "*.h")
 

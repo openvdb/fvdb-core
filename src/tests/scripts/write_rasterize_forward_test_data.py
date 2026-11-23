@@ -6,8 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from fvdb_reality_capture import CameraModel, GaussianSplat3d, gaussian_render_jagged
 
-from fvdb import CameraModel, GaussianSplat3d, JaggedTensor, gaussian_render_jagged
+from fvdb import JaggedTensor
 
 device = "cuda:0"
 

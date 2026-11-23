@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 """Functional API for creating GridBatch objects from various sources."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

@@ -73,12 +73,13 @@ plyTypeToTensorDtype(const tinyply::Type &plyType) {
 /// @return A tuple containing two maps: one for scalar metadata and one for tensor metadata.
 /// Each map has keys matching the names of the metadata. The scalar metadata map, contains the
 /// values of the metadata and the tensor map contains the shape of the tensors to load.
-std::tuple<
-    std::unordered_map<std::string, PlyMetadataTypes>,
-    std::unordered_map<std::string, std::tuple<std::shared_ptr<PlyData>, std::vector<int64_t>>>>
+std::tuple<std::unordered_map<std::string, PlyMetadataTypes>,
+           std::unordered_map<std::string,
+                              std::tuple<std::shared_ptr<tinyply::PlyData>, std::vector<int64_t>>>>
 parsePlyMetadataComments(tinyply::PlyFile &plyf) {
     std::unordered_map<std::string, PlyMetadataTypes> retMetadata;
-    std::unordered_map<std::string, std::tuple<std::shared_ptr<PlyData>, std::vector<int64_t>>>
+    std::unordered_map<std::string,
+                       std::tuple<std::shared_ptr<tinyply::PlyData>, std::vector<int64_t>>>
         retTensorMetadata;
     // A metadata comment has the form:
     // <PLY_MAGIC><key>|<type>|<value_or_tensor_shape>
@@ -118,7 +119,7 @@ parsePlyMetadataComments(tinyply::PlyFile &plyf) {
                     std::stoll(value.substr(commaPos + 1, nextComma - commaPos - 1)));
                 commaPos = nextComma;
             }
-            std::shared_ptr<PlyData> tensorData =
+            std::shared_ptr<tinyply::PlyData> tensorData =
                 plyf.request_properties_from_element(key, {"value"});
             TORCH_CHECK(tensorData != nullptr,
                         "Failed to read tensor metadata '" + key +

@@ -30,17 +30,30 @@ enum class SmoothingMode : int32_t {
 /// same per-voxel ordering as the input.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
-/// @param field       Per-voxel signed field: a floating-point JaggedTensor of shape [B, -1].
+/// @param field       Per-voxel signed field with finite values and shape (N,) or (N, 1),
+///                    N == totalVoxels. It must represent the intended inside/outside regions and
+///                    zero crossings. Magnitudes need not be accurate distances, but affect
+///                    convergence, accuracy, and sub-voxel surface location. Invalid shapes and
+///                    NaN/Inf values raise ValueError. Leave no-data voxels inactive. A voxel whose
+///                    value is exactly 0 has a zero frozen sign and is left at 0 by the redistance
+///                    (no-data pass-through), though its signed neighbours see it as an interface.
+///                    The surface is where the field changes sign between ACTIVE voxels; a grid
+///                    whose active values are all one sign has no surface and comes back as the
+///                    constant -/+band*vx. Voxels must be isotropic (a ValueError is raised
+///                    otherwise).
 /// @param band        Narrow-band half-width in voxels. The field is clamped to [-band*vx, band*vx]
-///                    each sweep and the "outside" Dirichlet value for inactive neighbours is
-///                    +band*vx.
+///                    each sweep. Inactive neighbours act as a Dirichlet boundary whose value
+///                    uses the adjacent voxel's frozen sign during redistancing and its current
+///                    sign during smoothing: -band*vx for negative, +band*vx otherwise. An
+///                    IndexGrid has a single background slot, so this is how a narrow band with an
+///                    inactive interior (e.g. the output of rebuild_narrow_band) is kept solid
+///                    rather than hollow.
 /// @param redistanceIters  Number of TVD-RK redistancing sweeps. Pass <= 0 to use the default
 ///                         max(6, round(2.5*band) + 2).
 /// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher).
 /// @param smooth      Number of smoothing passes (0 disables smoothing).
 /// @param smoothing   Which Laplacian flow each smoothing pass applies (mean-curvature or Taubin).
-/// @return A per-voxel SDF: a JaggedTensor of shape [B, -1] with the same dtype, grid, and ordering
-///         as @p field.
+/// @return A new per-voxel SDF JaggedTensor on the same grid/ordering as @p field.
 JaggedTensor reinitializeSdf(const GridBatchData &batchHdl,
                              const JaggedTensor &field,
                              int band,

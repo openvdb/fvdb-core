@@ -4,13 +4,13 @@
 import time
 from typing import List
 
-import fvdb.viz as fviz
 import numpy as np
 import torch
 import viser
-from fvdb.utils.examples import load_dragon_mesh
 
+import fvdb.viz as fviz
 from fvdb import Grid
+from fvdb.utils.examples import load_dragon_mesh
 
 
 class Viewer:

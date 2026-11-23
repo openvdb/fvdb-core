@@ -41,19 +41,19 @@ class DualContourTests(unittest.TestCase):
         self.grid = _dense_cube_grid(self.vx, half=12, device=self.device)
         self.analytic = (self.grid.ijk.float() * self.vx).norm(dim=1) - self.R
         # a clean narrow-band SDF on a pruned band grid (what DC is meant to consume)
-        self.mesh_grid, self.phi = self.grid.retopologize_sdf(self.analytic.clamp(-self.bw, self.bw), band=self.band)
+        self.mesh_grid, self.phi = self.grid.rebuild_narrow_band(self.analytic.clamp(-self.bw, self.bw), band=self.band)
 
-    def test_dc_composes_with_reinitialize_and_retopologize(self):
+    def test_dc_composes_with_reinitialize_and_rebuild_narrow_band(self):
         """Dual contouring composes with the SDF ops that produce its input: meshing the output of
-        ``reinitialize_sdf`` (topology preserved) and of ``retopologize_sdf(pad=True)`` (re-banded /
+        ``reinitialize_sdf`` (topology preserved) and of ``rebuild_narrow_band(pad=True)`` (re-banded /
         pruned grid) both produce non-empty meshes."""
         # reinitialize_sdf keeps topology; the dense cube has a thick band -> DC meshes it
         phi_re = self.grid.reinitialize_sdf(self.analytic.clamp(-self.bw, self.bw), band=self.band)
         v, f, _ = self.grid.dual_contour(phi_re, iso=0.0)
         self.assertGreater(v.shape[0], 0)
         self.assertGreater(f.shape[0], 0)
-        # retopologize with padding then DC
-        g2, phi2 = self.grid.retopologize_sdf(self.analytic.clamp(-self.bw, self.bw), band=self.band, pad=True)
+        # rebuild the narrow band with padding then DC
+        g2, phi2 = self.grid.rebuild_narrow_band(self.analytic.clamp(-self.bw, self.bw), band=self.band, pad=True)
         v2, f2, _ = g2.dual_contour(phi2, iso=0.0)
         self.assertGreater(v2.shape[0], 0)
         self.assertGreater(f2.shape[0], 0)
@@ -79,12 +79,12 @@ class DualContourTests(unittest.TestCase):
             voxel_sizes=vx,
         )
         analytic = (gb.ijk.jdata.float() * vx).norm(dim=1) - self.R
-        gb2, phi_b = gb.retopologize_sdf(gb.jagged_like(analytic.clamp(-self.bw, self.bw)), band=self.band)
+        gb2, phi_b = gb.rebuild_narrow_band(gb.jagged_like(analytic.clamp(-self.bw, self.bw)), band=self.band)
         vb, fb, nb = gb2.dual_contour(phi_b, iso=0.0)
         for i, half in enumerate([12, 10]):
             single = fvdb.Grid.from_points(self._cube_points(vx, half), voxel_size=vx)
             a = (single.ijk.float() * vx).norm(dim=1) - self.R
-            g2, phi_s = single.retopologize_sdf(a.clamp(-self.bw, self.bw), band=self.band)
+            g2, phi_s = single.rebuild_narrow_band(a.clamp(-self.bw, self.bw), band=self.band)
             vs, fs, _ = g2.dual_contour(phi_s, iso=0.0)
             # vertex order is deterministic (stable surface-cell compaction); positions match
             self.assertEqual(vb[i].jdata.shape[0], vs.shape[0])

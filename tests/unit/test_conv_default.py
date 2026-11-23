@@ -12,12 +12,20 @@ to verify correctness of:
   - Strided convolution behavior
 
 Ground truth computation uses utilities from convolution_utils.py.
+
+This legacy suite deliberately uses odd kernel extents, where
+``K // 2 == P_before = floor((K - 1) / 2)``. The canonical even and mixed-axis
+matrix is covered by ``test_conv_semantics.py`` and
+``test_conv_semantics_integration.py``.
 """
 
 import math
 import unittest
 
 import torch
+from parameterized import parameterized
+
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 from fvdb.convolution_plan import _GatherScatterBackend, _GatherScatterConvFn
 from fvdb.types import DeviceIdentifier, resolve_device
 from fvdb.utils.tests import (
@@ -41,9 +49,8 @@ from fvdb.utils.tests.convolution_utils import (
     get_tolerances,
     sort_coords_by_ijk,
 )
-from parameterized import parameterized
 
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
+from . import expand_tests
 
 # =============================================================================
 # Test Class
@@ -51,7 +58,6 @@ from fvdb import ConvolutionPlan, GridBatch, JaggedTensor
 
 
 class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
-
     VOLUME_SHAPE = (71, 34, 58)
     KERNEL_SIZE = (3, 5, 7)
     SINGLE_VOLUME_SHAPE = (5, 7, 9)
@@ -250,7 +256,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
                     )
                     self.assertEqual(got_coord, expected_coord)
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward convolution of a single impulse against dense ground truth.
@@ -321,7 +327,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
         )
         torch.testing.assert_close(gt_convolved, dense_output, rtol=tols["forward"][0], atol=tols["forward"][1])
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_multiple_impulses_forward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test forward convolution of multiple isolated impulses.
@@ -390,7 +396,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
     # Backward Pass Tests
     # =========================================================================
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_single_impulse_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """
         Test backward pass of sparse convolution against dense ground truth.
@@ -698,7 +704,7 @@ class TestConvDefault(DisableTF32Mixin, unittest.TestCase):
             cluster_coords=cluster_coords,
         )
 
-    @parameterized.expand(ALL_DEVICE_DTYPE_COMBOS)
+    @expand_tests(ALL_DEVICE_DTYPE_COMBOS)
     def test_strided_conv_large_stride_forward_backward(self, device: DeviceIdentifier, dtype: torch.dtype):
         """Test forward and backward for larger stride (3,3,3) with full device/dtype coverage."""
         device_resolved = resolve_device(device)

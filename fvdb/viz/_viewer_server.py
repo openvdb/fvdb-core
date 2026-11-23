@@ -3,6 +3,7 @@
 #
 from __future__ import annotations
 
+import atexit
 import uuid
 import warnings
 import webbrowser
@@ -25,6 +26,22 @@ def _get_viewer_server_cpp() -> ViewerCpp:
     if _viewer_server_cpp is None:
         raise RuntimeError("Viewer server is not initialized. Call fvdb.viz.init() first.")
     return _viewer_server_cpp
+
+
+def shutdown() -> None:
+    """
+    Deterministically join the editor render thread.
+    """
+    server = _viewer_server_cpp
+    if server is None:
+        return
+    try:
+        server.stop()
+    except Exception:
+        pass
+
+
+atexit.register(shutdown)
 
 
 def init(
@@ -204,8 +221,12 @@ def wait_for_interrupt():
     """
     Block execution until the viewer is interrupted by the user.
 
-    This function blocks the current thread until the viewer receives an interrupt signal (via Ctrl-C).
-    Use this to keep a script running while interacting with the viewer.
+    This function blocks the current thread until the viewer receives an
+    interrupt signal (via Ctrl-C). Use this to keep a script running while
+    interacting with the viewer.
     """
     viewer_server = _get_viewer_server_cpp()
-    viewer_server.wait_for_interrupt()
+    try:
+        viewer_server.wait_for_interrupt()
+    finally:
+        shutdown()
