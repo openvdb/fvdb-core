@@ -17,7 +17,7 @@ jobs:
     name: Python docstrings (Ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
@@ -30,7 +30,7 @@ jobs:
     name: Python code style (Ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
@@ -44,7 +44,7 @@ jobs:
     name: C++ code style (clang-format)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - uses: DoozyX/clang-format-lint-action@bcb4eb2cb0d707ee4f3e5cc3b456eb075f12cf73 # v0.20
@@ -58,7 +58,7 @@ jobs:
     name: Include guards
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - uses: swahtz/include-guards-check-action@41d1997205f936c50e23272c849398168b72083a # master
@@ -69,7 +69,7 @@ jobs:
     name: SPDX identifiers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - uses: enarx/spdx@d4020ee98e3101dd487c5184f27c6a6fb4f88709 # master
@@ -85,7 +85,7 @@ jobs:
     name: Python types (pyright)
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: Type-check against the _fvdb_cpp stub
@@ -102,7 +102,7 @@ jobs:
     name: Trailing spaces
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: test
@@ -117,7 +117,7 @@ jobs:
     name: Spaces not tabs
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: test
@@ -127,20 +127,19 @@ jobs:
           test $? -eq 1
 
   # fvdb's grid storage is GridStorage over NanoVDB's single-space cuda::Buffer (#770). The
-  # dual-space buffers NanoVDB is removing (DeviceBuffer, UnifiedBuffer) and fvdb's own
-  # deprecated TorchDeviceBuffer shim must not creep back into the library; the shim's own
-  # files and their build entries are the only places allowed to name them.
+  # dual-space buffers NanoVDB removed (DeviceBuffer, UnifiedBuffer) and fvdb's removed
+  # TorchDeviceBuffer shim must not creep back into the library.
   no-dual-space-buffers:
     name: No dual-space NanoVDB buffers
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: test
       run: |
           set +e
-          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/' ':!src/fvdb/TorchDeviceBuffer.h' ':!src/fvdb/TorchDeviceBuffer.cu' ':!src/tests/TorchDeviceBufferTest.cu' ':!src/CMakeLists.txt' ':!src/tests/CMakeLists.txt'
+          git grep -n -E 'TorchDeviceBuffer|TorchStorageResource|cuda::DeviceBuffer|cuda::UnifiedBuffer|cuda/DeviceBuffer\.h|cuda/UnifiedBuffer\.h|DualDeviceBuffer|DualUnifiedBuffer' -- 'src/'
           test $? -eq 1
 
   # env/ holds several conda environments that each pin python, cuda-version and
@@ -158,7 +157,7 @@ jobs:
     name: Shared toolchain pins agree
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         persist-credentials: false
     - name: Enforce shared toolchain pins

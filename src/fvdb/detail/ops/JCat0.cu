@@ -21,7 +21,8 @@ computeTensorSizes(const JOffsetsType *__restrict__ const *__restrict__ offsets,
                    TorchRAcc64<JOffsetsType, 1> outTensorSizes) {
     int32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (idx > outTensorSizes.size(0) - 1) {
+    // One thread per tensor. outTensorSizes has num_tensors + 1 entries and starts zeroed.
+    if (idx >= outTensorSizes.size(0) - 1) {
         return;
     }
 
@@ -31,11 +32,6 @@ computeTensorSizes(const JOffsetsType *__restrict__ const *__restrict__ offsets,
         tensorSize += offsets[i][idx + 1] - offsets[i][idx];
     }
     outTensorSizes[idx + 1] = tensorSize;
-
-    // One thread will write out the zero in the begining
-    if (idx == 0) {
-        outTensorSizes[0] = 0;
-    }
 }
 
 template <typename IdxT>
@@ -78,11 +74,10 @@ computeIndexPutArg(
     const JOffsetsType elementOffsetInTensor =
         idx - tensorOffsetIn; // Which element in the tensor we are copying
 
-    outSelIdx[idx] =
-        elementOffsetInTensor +
-        tensorOffsetOut; // Which element in the output the current input element will go to
-    outJIdx[elementOffsetInTensor] =
-        jidx;            // Which tensor the current element belongs to in the output
+    // Which element in the output the current input element will go to
+    const JOffsetsType outIdx = elementOffsetInTensor + tensorOffsetOut;
+    outSelIdx[idx]            = outIdx;
+    outJIdx[outIdx]           = jidx; // Which tensor the current element belongs to in the output
 }
 
 JaggedTensor
@@ -116,14 +111,17 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
 
     thrust::device_vector<JOffsetsType *> offsets_d = offsets;
     torch::Tensor outJOffsets =
-        torch::empty({vec[0].joffsets().size(0)},
+        torch::zeros({vec[0].joffsets().size(0)},
                      torch::TensorOptions().dtype(JOffsetsScalarType).device(torch::kCUDA));
-    const int64_t numBlocksCalcTensorSizes = GET_BLOCKS(outJOffsets.size(0), DEFAULT_BLOCK_DIM);
-    computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM, 0, stream>>>(
-        thrust::raw_pointer_cast(offsets_d.data()),
-        offsets_d.size(),
-        outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>());
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    const int64_t numTensors               = outJOffsets.size(0) - 1;
+    const int64_t numBlocksCalcTensorSizes = GET_BLOCKS(numTensors, DEFAULT_BLOCK_DIM);
+    if (numBlocksCalcTensorSizes > 0) {
+        computeTensorSizes<<<numBlocksCalcTensorSizes, DEFAULT_BLOCK_DIM, 0, stream>>>(
+            thrust::raw_pointer_cast(offsets_d.data()),
+            offsets_d.size(),
+            outJOffsets.packed_accessor64<JOffsetsType, 1, torch::RestrictPtrTraits>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
     torch::cumsum_out(outJOffsets, outJOffsets, 0);
 
     auto outShape          = spliceShape({totalElements}, vec[0].jdata());
@@ -151,6 +149,9 @@ jCat0CUDA(const std::vector<JaggedTensor> &vec) {
             "computeIndexPutArg",
             AT_WRAP([&] {
                 const int64_t numElements = jt.jdata().size(0);
+                if (numElements == 0) {
+                    return;
+                }
                 const int64_t numBlocksComputeIndexPutArg =
                     GET_BLOCKS(numElements, DEFAULT_BLOCK_DIM);
                 computeIndexPutArg<<<numBlocksComputeIndexPutArg, DEFAULT_BLOCK_DIM, 0, stream>>>(
@@ -199,7 +200,7 @@ jCat0CPU(const std::vector<JaggedTensor> &vec) {
     torch::Tensor outJdata =
         torch::empty(shape, torch::TensorOptions().device(device).dtype(dtype));
     torch::Tensor outJoffsets =
-        torch::empty({numOffsets}, torch::TensorOptions().device(device).dtype(JOffsetsScalarType));
+        torch::zeros({numOffsets}, torch::TensorOptions().device(device).dtype(JOffsetsScalarType));
     torch::Tensor outJidx =
         torch::empty({totalElements}, torch::TensorOptions().device(device).dtype(JIdxScalarType));
     torch::Tensor outJLidx         = vec[0].jlidx();

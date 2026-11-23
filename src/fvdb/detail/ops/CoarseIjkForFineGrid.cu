@@ -76,8 +76,8 @@ dispatchCoarseIJKForFineGrid<torch::kCUDA>(const GridBatchData &batchHdl,
 
     forEachVoxelCUDA<1024>(1, batchHdl, cb);
 
-    return JaggedTensor::from_data_offsets_and_list_ids(
-        outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx(), batchHdl.batchSize());
 }
 
 template <>
@@ -110,8 +110,8 @@ dispatchCoarseIJKForFineGrid<torch::kPrivateUse1>(const GridBatchData &batchHdl,
 
     forEachVoxelPrivateUse1(1, batchHdl, cb);
 
-    return JaggedTensor::from_data_offsets_and_list_ids(
-        outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIJK, batchHdl.voxelOffsets(), batchHdl.jlidx(), batchHdl.batchSize());
 }
 
 } // namespace

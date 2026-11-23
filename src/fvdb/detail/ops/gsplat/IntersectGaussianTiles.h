@@ -13,6 +13,7 @@ namespace detail {
 namespace ops {
 
 /// @brief Compute the intersection of 2D Gaussians with image tiles for efficient rasterization
+/// @note Packed cameraIds must be sorted in nondecreasing order for the multi-GPU backend.
 /// @return tile offsets and Gaussian IDs
 std::tuple<torch::Tensor, torch::Tensor> intersectGaussianTiles(
     const torch::Tensor &means2d,                 // [C, N, 2] or [M, 2]

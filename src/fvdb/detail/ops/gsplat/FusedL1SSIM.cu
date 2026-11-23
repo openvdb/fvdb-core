@@ -565,21 +565,13 @@ forwardTiles(const torch::Tensor &img1,
              float C2,
              int blockOffset,
              int blockCount,
-             float *loss,
+             float *loss_tiles,
              cudaStream_t stream,
              bool normalize_target) {
-    if (!blockCount) {
-        C10_CUDA_CHECK(cudaMemsetAsync(loss, 0, sizeof(float), stream));
-        return;
-    }
     const int B  = img1.size(0);
     const int CH = img1.size(1);
     const int H  = img1.size(2);
     const int W  = img1.size(3);
-    // Keep tile contributions on the GPU that produced them.
-    auto tile_losses = torch::empty(
-        {blockCount}, img1.options().device(torch::kCUDA, c10::cuda::current_device()));
-    auto *loss_tiles = tile_losses.data_ptr<float>();
 
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
@@ -606,7 +598,6 @@ forwardTiles(const torch::Tensor &img1,
                    at::kFloat,
                    at::kByte);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    FVDB_CUB_WRAPPER_ASYNC(stream, cub::DeviceReduce::Sum, loss_tiles, loss, blockCount);
 }
 
 void
@@ -622,9 +613,6 @@ backwardTiles(const torch::Tensor &img1,
               int blockCount,
               cudaStream_t stream,
               bool normalize_target) {
-    if (!blockCount) {
-        return;
-    }
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
     AT_DISPATCH_V2(img2.scalar_type(),
@@ -676,6 +664,7 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
 
     auto stream          = c10::cuda::getCurrentCUDAStream(img1.device().index());
     const int blockCount = B * ((H + BLOCK_Y - 1) / BLOCK_Y) * ((W + BLOCK_X - 1) / BLOCK_X);
+    auto tile_losses     = torch::empty({blockCount}, img1.options());
     forwardTiles(img1,
                  img2,
                  dm_dmu1,
@@ -686,9 +675,14 @@ fusedL1SSIMCUDA(const torch::Tensor &img1,
                  static_cast<float>(C2),
                  0,
                  blockCount,
-                 loss.data_ptr<float>(),
+                 tile_losses.data_ptr<float>(),
                  stream,
                  normalize_target);
+    FVDB_CUB_WRAPPER(cub::DeviceReduce::Sum,
+                     tile_losses.data_ptr<float>(),
+                     loss.data_ptr<float>(),
+                     blockCount,
+                     stream);
     return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
 
@@ -719,9 +713,20 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
-        const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        partial_losses.push_back(torch::empty({1}, img1.options().device(torch::kCUDA, deviceId)));
+        auto stream         = c10::cuda::getCurrentCUDAStream(deviceId);
+        const auto chunk    = imageBlockChunk(B, H, W, deviceId);
+        float *partial_loss = nullptr;
+        C10_CUDA_CHECK(cudaMallocAsync(&partial_loss, sizeof(float), stream));
+        // The CUDA device is only metadata for NCCL; from_blob does not allocate storage.
+        partial_losses.push_back(
+            torch::from_blob(partial_loss, {1}, img1.options().device(torch::kCUDA, deviceId)));
+        if (!chunk.blockCount) {
+            C10_CUDA_CHECK(cudaMemsetAsync(partial_loss, 0, sizeof(float), stream));
+            continue;
+        }
+        // Keep tile contributions on the GPU that produced them.
+        float *loss_tiles = nullptr;
+        C10_CUDA_CHECK(cudaMallocAsync(&loss_tiles, chunk.blockCount * sizeof(float), stream));
         forwardTiles(img1,
                      img2,
                      dm_dmu1,
@@ -732,13 +737,22 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
                      static_cast<float>(C2),
                      chunk.blockOffset,
                      chunk.blockCount,
-                     partial_losses.back().data_ptr<float>(),
+                     loss_tiles,
                      stream,
                      normalize_target);
+        FVDB_CUB_WRAPPER_ASYNC(
+            stream, cub::DeviceReduce::Sum, loss_tiles, partial_loss, chunk.blockCount);
+        C10_CUDA_CHECK(cudaFreeAsync(loss_tiles, stream));
     }
     auto nccl_loss =
         torch::from_blob(loss.data_ptr<float>(), {1}, partial_losses.front().options());
     torch::cuda::nccl::reduce(partial_losses, nccl_loss);
+    // Release each scalar on its producing stream after NCCL has consumed it.
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaFreeAsync(partial_losses[deviceId].data_ptr<float>(), stream));
+    }
     mergeStreams();
     return std::make_tuple(loss, dm_dmu1, dm_dsigma1_sq, dm_dsigma12);
 }
@@ -802,6 +816,9 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
+        if (!chunk.blockCount) {
+            continue;
+        }
         backwardTiles(img1,
                       img2,
                       grad_loss,

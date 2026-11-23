@@ -139,23 +139,6 @@ convertPaddedToNestedJaggedTensorImpl(const fvdb::JaggedTensor &srcIds,
     const torch::Device device    = countsPerPixel.device();
     const auto options            = srcIds.jdata().options();
 
-    // Handle empty case
-    if (totalCount == 0) {
-        torch::Tensor emptyData = torch::empty({0}, options.dtype(torch::kInt32));
-        torch::Tensor emptyWeights =
-            torch::empty({0}, options.dtype(c10::CppTypeToScalarType<ScalarType>::value));
-        torch::Tensor emptyIndices =
-            torch::empty({0}, torch::TensorOptions().dtype(fvdb::JIdxScalarType).device(device));
-        torch::Tensor emptyListIds = torch::empty(
-            {0, 2}, torch::TensorOptions().dtype(fvdb::JLIdxScalarType).device(device));
-
-        auto emptyIdsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
-            emptyData, emptyIndices, emptyListIds, outputNumPixels);
-        auto emptyWeightsJagged = fvdb::JaggedTensor::from_data_indices_and_list_ids(
-            emptyWeights, emptyIndices.clone(), emptyListIds.clone(), outputNumPixels);
-        return std::make_tuple(emptyIdsJagged, emptyWeightsJagged);
-    }
-
     // Compute sample offsets via cumsum
     torch::Tensor sampleOffsets =
         torch::cat({torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64).device(device)),
@@ -184,8 +167,10 @@ convertPaddedToNestedJaggedTensorImpl(const fvdb::JaggedTensor &srcIds,
         outWeightsData, sampleOffsets, outIndices.clone(), outListIds.clone(), numCameras);
 
     // Copy from padded source to variable-size destination
-    copyPaddedJaggedToJagged(srcIds, outIdsJagged, sampleOffsets, maxSamplesPerPixel);
-    copyPaddedJaggedToJagged(srcWeights, outWeightsJagged, sampleOffsets, maxSamplesPerPixel);
+    if (totalCount > 0) {
+        copyPaddedJaggedToJagged(srcIds, outIdsJagged, sampleOffsets, maxSamplesPerPixel);
+        copyPaddedJaggedToJagged(srcWeights, outWeightsJagged, sampleOffsets, maxSamplesPerPixel);
+    }
 
     return std::make_tuple(outIdsJagged, outWeightsJagged);
 }
@@ -224,13 +209,13 @@ convertPaddedToNestedJaggedTensor(const fvdb::JaggedTensor &srcIds,
     bool isUniformDistribution = false;
     if (isSparseMode) {
         torch::Tensor diffs   = cameraOffsets.slice(0, 1) - cameraOffsets.slice(0, 0, -1);
-        isUniformDistribution = (diffs == diffs[0]).all().item<bool>();
+        isUniformDistribution = diffs.numel() == 0 || (diffs == diffs[0]).all().item<bool>();
     } else {
         isUniformDistribution = true;
     }
 
     if (isUniformDistribution) {
-        const auto pixelsPerCamera = outputNumPixels / numCameras;
+        const auto pixelsPerCamera = numCameras > 0 ? outputNumPixels / numCameras : 0;
         return convertPaddedToNestedJaggedTensorImpl<ScalarType>(srcIds,
                                                                  srcWeights,
                                                                  countsPerPixel,
@@ -708,9 +693,11 @@ launchRasterizeContributingGaussianIdsForwardKernel(
     auto listIds = torch::empty(
         {0, 1}, torch::TensorOptions().dtype(JLIdxScalarType).device(means2d.device()));
 
-    auto outIds = JaggedTensor::from_data_offsets_and_list_ids(outIdsData, offsets, listIds);
-    auto outWeights =
-        JaggedTensor::from_data_offsets_and_list_ids(outWeightsData, offsets, listIds);
+    const int64_t numTensors = offsets.size(0) - 1;
+    auto outIds              = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outIdsData, offsets, listIds, numTensors);
+    auto outWeights = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        outWeightsData, offsets, listIds, numTensors);
 
     // Each pixel in each tile will cache a gaussian consisting of:
     //   - int32_t  gaussian_id; -- 4 bytes
@@ -868,8 +855,8 @@ dispatchIdentifyContributingGaussians<torch::kCUDA>(
                                                  .dtype(fvdb::JLIdxScalarType)
                                                  .device(numContributingGaussians.device()));
 
-        numContributingGaussiansJagged.emplace(JaggedTensor::from_data_offsets_and_list_ids(
-            numContributingGaussians.flatten(), offsets, listIds));
+        numContributingGaussiansJagged.emplace(JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+            numContributingGaussians.flatten(), offsets, listIds, C));
     }
 
     return AT_DISPATCH_V2(

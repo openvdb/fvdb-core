@@ -67,12 +67,16 @@ bind_jagged_tensor(py::module &m) {
                     py::arg("data"),
                     py::arg("indices"),
                     py::arg("list_ids"),
-                    py::arg("num_tensors"))
+                    py::arg("num_tensors"),
+                    py::kw_only(),
+                    py::arg("num_outer_lists") = std::nullopt)
         .def_static("from_data_offsets_and_list_ids",
                     &fvdb::JaggedTensor::from_data_offsets_and_list_ids,
                     py::arg("data"),
                     py::arg("offsets"),
-                    py::arg("list_ids"))
+                    py::arg("list_ids"),
+                    py::kw_only(),
+                    py::arg("num_outer_lists") = std::nullopt)
 
         .def_property_readonly("is_cuda",
                                &fvdb::JaggedTensor::is_cuda,
@@ -630,15 +634,8 @@ bind_jagged_tensor(py::module &m) {
 
                     const torch::Tensor jlidx   = THPVariable_Unpack(t[3].ptr());
                     const int64_t numOuterLists = t[4].cast<int64_t>();
-                    if (jlidx.numel() != 0 && jlidx.size(1) == 1) {
-                        TORCH_CHECK(
-                            numOuterLists == joffsets.size(0),
-                            "Invalid pickle format: numOuterLists does not match joffsets size");
-                    }
-                    TORCH_CHECK(jlidx.size(0) == 0 || jlidx.size(0) == (joffsets.size(0) - 1),
-                                "Invalid pickle format: jlidx size does not match joffsets size");
                     return fvdb::JaggedTensor::from_data_offsets_and_list_ids(
-                        jdata, joffsets, jlidx);
+                        jdata, joffsets, jlidx, numOuterLists);
                 } else {
                     TORCH_CHECK(
                         false, "Invalid JaggedTensor pickle version (got version = ", version, ")");

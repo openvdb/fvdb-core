@@ -33,9 +33,9 @@ namespace ops {
 /// @param[in] eps2d 2D projection epsilon for numerical stability
 /// @param[in] radii Output radii from forward pass [M]
 /// @param[in] conics Output conics from forward pass [M, 3]
-/// @param[out] dLossDMeans2d Gradients with respect to projected 2D means [M, 2]
-/// @param[out] dLossDDepths Gradients with respect to depths [M]
-/// @param[out] dLossDConics Gradients with respect to conics [M, 3]
+/// @param[in] dLossDMeans2d Gradients with respect to projected 2D means [M, 2]
+/// @param[in] dLossDDepths Gradients with respect to depths [M] (optional; absent means zero)
+/// @param[in] dLossDConics Gradients with respect to conics [M, 3]
 /// @param[in] worldToCamMatricesRequiresGrad Whether viewmats requires gradient
 /// @param[in] ortho Whether orthographic projection was used in forward pass
 ///
@@ -58,11 +58,11 @@ projectGaussiansAnalyticJaggedBwd(const torch::Tensor &gSizes,             // [B
                                   const uint32_t imageWidth,
                                   const uint32_t imageHeight,
                                   const float eps2d,
-                                  const torch::Tensor &radii,         // [N]
-                                  const torch::Tensor &conics,        // [N, 3]
-                                  const torch::Tensor &dLossDMeans2d, // [N, 2]
-                                  const torch::Tensor &dLossDDepths,  // [N]
-                                  const torch::Tensor &dLossDConics,  // [N, 3]
+                                  const torch::Tensor &radii,                      // [N]
+                                  const torch::Tensor &conics,                     // [N, 3]
+                                  const torch::Tensor &dLossDMeans2d,              // [N, 2]
+                                  const at::optional<torch::Tensor> &dLossDDepths, // [N] optional
+                                  const torch::Tensor &dLossDConics,               // [N, 3]
                                   const bool worldToCamMatricesRequiresGrad,
                                   const bool ortho);
 

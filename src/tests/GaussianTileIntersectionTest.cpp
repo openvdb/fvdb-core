@@ -3,12 +3,154 @@
 
 #include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
 #include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
+#include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/gsplat/GaussianIntersectionRange.h>
 
 #include <torch/types.h>
 
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <numeric>
+#include <vector>
+
+namespace {
+
+// Enumerate tile ownership independently of the range helper's camera boundary arithmetic.
+void
+checkGaussianRange(const int64_t keyStart,
+                   const int64_t keyEnd,
+                   const uint32_t totalTiles,
+                   const std::vector<int32_t> &cameraIds,
+                   const fvdb::detail::ops::GaussianIntersectionRange range) {
+    SCOPED_TRACE(::testing::Message() << "tile keys [" << keyStart << ", " << keyEnd
+                                      << "), tiles per camera " << totalTiles);
+    ASSERT_LE(range.offset, cameraIds.size());
+    ASSERT_LE(range.count, cameraIds.size() - range.offset);
+    std::vector<uint32_t> expected;
+    for (uint32_t gaussian = 0; gaussian < cameraIds.size(); ++gaussian) {
+        bool overlaps = false;
+        for (uint32_t tile = 0; tile < totalTiles; ++tile) {
+            const int64_t key = int64_t{cameraIds[gaussian]} * totalTiles + tile;
+            overlaps |= key >= keyStart && key < keyEnd;
+        }
+        if (overlaps) {
+            expected.push_back(gaussian);
+        }
+    }
+    std::vector<uint32_t> actual(range.count);
+    std::iota(actual.begin(), actual.end(), range.offset);
+    EXPECT_EQ(actual, expected);
+}
+
+} // namespace
+
+TEST(GaussianIntersectionRangeTest, DenseRangesMatchTileEnumeration) {
+    for (const uint32_t numCameras: {1u, 3u, 5u}) {
+        for (const uint32_t totalTiles: {1u, 3u, 9u}) {
+            for (const uint32_t numGaussians: {0u, 1u, 7u, 257u}) {
+                std::vector<int32_t> cameraIds;
+                for (uint32_t camera = 0; camera < numCameras; ++camera) {
+                    cameraIds.insert(cameraIds.end(), numGaussians, camera);
+                }
+                const int64_t totalKeys = numCameras * totalTiles;
+                // All half-open intervals include exact camera boundaries, partial cameras,
+                // the final tile and empty ranges, including an empty range within a camera.
+                for (int64_t begin = 0; begin <= totalKeys; ++begin) {
+                    for (int64_t end = begin; end <= totalKeys; ++end) {
+                        checkGaussianRange(begin,
+                                           end,
+                                           totalTiles,
+                                           cameraIds,
+                                           fvdb::detail::ops::gaussianRangeForTileKeys(
+                                               begin, end, totalTiles, numGaussians));
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, PackedRangesMatchTileEnumeration) {
+    // Missing leading, middle and trailing cameras; repeated IDs; and completely empty inputs.
+    for (const std::vector<int32_t> &cameraIds:
+         {std::vector<int32_t>{}, {0}, {4}, {1, 1, 3, 3, 3}, {0, 2, 2, 4}}) {
+        for (const uint32_t totalTiles: {1u, 3u, 9u}) {
+            const int64_t totalKeys = 5 * totalTiles;
+            for (int64_t begin = 0; begin <= totalKeys; ++begin) {
+                for (int64_t end = begin; end <= totalKeys; ++end) {
+                    checkGaussianRange(
+                        begin,
+                        end,
+                        totalTiles,
+                        cameraIds,
+                        fvdb::detail::ops::gaussianRangeForTileKeys(
+                            begin, end, totalTiles, cameraIds.size(), cameraIds.data()));
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, DevicePartitionsCoverEachIntersectionExactlyOnce) {
+    for (const bool packed: {false, true}) {
+        for (const uint32_t numCameras: {1u, 3u, 5u}) {
+            std::vector<int32_t> cameraIds;
+            for (uint32_t camera = 0; camera < numCameras; ++camera) {
+                cameraIds.insert(cameraIds.end(), packed ? camera % 3 : 3, camera);
+            }
+            for (const uint32_t totalTiles: {1u, 3u, 7u}) {
+                const int64_t totalKeys = numCameras * totalTiles;
+                for (const int deviceCount: {1, 2, 3, 4, 8}) {
+                    SCOPED_TRACE(::testing::Message()
+                                 << "packed " << packed << ", cameras " << numCameras << ", tiles "
+                                 << totalTiles << ", devices " << deviceCount);
+                    std::vector<int> visits(cameraIds.size() * totalTiles, 0);
+                    for (int device = 0; device < deviceCount; ++device) {
+                        // Explicit device count exercises production partitioning on the CPU,
+                        // including uneven splits and more devices than tile keys.
+                        const auto [keyStart, keyCount] =
+                            fvdb::detail::deviceAlignedChunk(1, totalKeys, device, deviceCount);
+                        const auto range = fvdb::detail::ops::gaussianRangeForTileKeys(
+                            keyStart,
+                            keyStart + keyCount,
+                            totalTiles,
+                            packed ? cameraIds.size() : 3,
+                            packed ? cameraIds.data() : nullptr);
+                        checkGaussianRange(
+                            keyStart, keyStart + keyCount, totalTiles, cameraIds, range);
+                        for (uint32_t gaussian = range.offset;
+                             gaussian < range.offset + range.count;
+                             ++gaussian) {
+                            for (uint32_t tile = 0; tile < totalTiles; ++tile) {
+                                const size_t key =
+                                    static_cast<size_t>(cameraIds[gaussian]) * totalTiles + tile;
+                                if (key >= keyStart && key < keyStart + keyCount) {
+                                    ++visits[gaussian * totalTiles + tile];
+                                }
+                            }
+                        }
+                    }
+                    EXPECT_EQ(visits, std::vector<int>(visits.size(), 1));
+                }
+            }
+        }
+    }
+}
+
+TEST(GaussianIntersectionRangeTest, TileKeysUse64BitArithmetic) {
+    const uint32_t totalTiles = 1u << 30;
+    const int64_t boundary    = int64_t{4} * totalTiles;
+    const auto dense =
+        fvdb::detail::ops::gaussianRangeForTileKeys(boundary - 1, boundary + 1, totalTiles, 7);
+    EXPECT_EQ(dense.offset, 21u);
+    EXPECT_EQ(dense.count, 14u);
+    const int32_t cameraIds[] = {0, 3, 3, 4, 5};
+    const auto packed         = fvdb::detail::ops::gaussianRangeForTileKeys(
+        boundary - 1, boundary + 1, totalTiles, 5, cameraIds);
+    EXPECT_EQ(packed.offset, 1u);
+    EXPECT_EQ(packed.count, 3u);
+}
 
 class GaussianTileIntersectionTest : public ::testing::Test {
   protected:

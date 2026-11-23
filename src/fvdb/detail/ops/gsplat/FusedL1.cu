@@ -166,14 +166,8 @@ forwardL1Tiles(const torch::Tensor &img1,
                const torch::Tensor &img2,
                int blockOffset,
                int blockCount,
-               float *loss,
+               float *partial_sums,
                cudaStream_t stream) {
-    if (!blockCount) {
-        C10_CUDA_CHECK(cudaMemsetAsync(loss, 0, sizeof(float), stream));
-        return;
-    }
-    auto partial_sums = torch::empty(
-        {blockCount}, img1.options().device(torch::kCUDA, c10::cuda::current_device()));
     dim3 grid(blockCount);
     dim3 block(BLOCK_X, BLOCK_Y);
     fusedL1Kernel<<<grid, block, 0, stream>>>(blockOffset,
@@ -183,10 +177,8 @@ forwardL1Tiles(const torch::Tensor &img1,
                                               img1.size(1),
                                               img1.const_data_ptr<float>(),
                                               img2.const_data_ptr<float>(),
-                                              partial_sums.data_ptr<float>());
+                                              partial_sums);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    FVDB_CUB_WRAPPER_ASYNC(
-        stream, cub::DeviceReduce::Sum, partial_sums.const_data_ptr<float>(), loss, blockCount);
 }
 
 } // namespace
@@ -209,7 +201,13 @@ fusedL1CUDA(const torch::Tensor &img1, const torch::Tensor &img2) {
     }
     const int blockCount = ((W + BLOCK_X - 1) / BLOCK_X) * ((H + BLOCK_Y - 1) / BLOCK_Y) * B;
     auto loss            = torch::empty({}, img1.options());
-    forwardL1Tiles(img1, img2, 0, blockCount, loss.data_ptr<float>(), stream);
+    auto partial_sums    = torch::empty({blockCount}, img1.options());
+    forwardL1Tiles(img1, img2, 0, blockCount, partial_sums.data_ptr<float>(), stream);
+    FVDB_CUB_WRAPPER(cub::DeviceReduce::Sum,
+                     partial_sums.data_ptr<float>(),
+                     loss.data_ptr<float>(),
+                     blockCount,
+                     stream);
     return loss;
 }
 
@@ -277,18 +275,32 @@ fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
-        const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        partial_losses.push_back(torch::empty({1}, img1.options().device(torch::kCUDA, deviceId)));
-        forwardL1Tiles(img1,
-                       img2,
-                       chunk.blockOffset,
-                       chunk.blockCount,
-                       partial_losses.back().data_ptr<float>(),
-                       stream);
+        const auto chunk    = imageBlockChunk(B, H, W, deviceId);
+        float *partial_loss = nullptr;
+        C10_CUDA_CHECK(cudaMallocAsync(&partial_loss, sizeof(float), stream));
+        // The CUDA device is only metadata for NCCL; from_blob does not allocate storage.
+        partial_losses.push_back(
+            torch::from_blob(partial_loss, {1}, img1.options().device(torch::kCUDA, deviceId)));
+        if (!chunk.blockCount) {
+            C10_CUDA_CHECK(cudaMemsetAsync(partial_loss, 0, sizeof(float), stream));
+            continue;
+        }
+        float *partial_sums = nullptr;
+        C10_CUDA_CHECK(cudaMallocAsync(&partial_sums, chunk.blockCount * sizeof(float), stream));
+        forwardL1Tiles(img1, img2, chunk.blockOffset, chunk.blockCount, partial_sums, stream);
+        FVDB_CUB_WRAPPER_ASYNC(
+            stream, cub::DeviceReduce::Sum, partial_sums, partial_loss, chunk.blockCount);
+        C10_CUDA_CHECK(cudaFreeAsync(partial_sums, stream));
     }
     auto nccl_loss =
         torch::from_blob(loss.data_ptr<float>(), {1}, partial_losses.front().options());
     torch::cuda::nccl::reduce(partial_losses, nccl_loss);
+    // Release each scalar on its producing stream after NCCL has consumed it.
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+        C10_CUDA_CHECK(cudaFreeAsync(partial_losses[deviceId].data_ptr<float>(), stream));
+    }
     mergeStreams();
     return loss;
 }

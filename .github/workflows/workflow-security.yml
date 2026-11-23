@@ -32,14 +32,14 @@ jobs:
       # Exact tool versions so the gate is deterministic. Bump deliberately;
       # new releases may surface new findings that fail unrelated PRs.
       ZIZMOR_VERSION: "1.26.1"
-      ACTIONLINT_VERSION: "v1.7.7"
+      ACTIONLINT_VERSION: "v1.7.12"
       PYYAML_VERSION: "6.0.3"
       PYTEST_VERSION: "9.0.3"
     steps:
       # 1. Trusted tree from BASE: the policy script lives here and is never
       #    overwritten by the PR.
       - name: Checkout base (trusted)
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -64,19 +64,21 @@ jobs:
           echo "Scanning PR workflow files:"
           ls -1 .github/workflows
 
-      # 3a. Repo-specific policy: the admin runner token may only reach
-      #     machulav/ec2-github-runner -- either as that action's github-token
-      #     input, or forwarded by name to a local reusable workflow that this
-      #     same scan covers (never via secrets: inherit). The policy script
+      # 3a. Repo-specific policy: the runner GitHub App key may only be used
+      #     by actions/create-github-app-token in a job that declares the
+      #     ci-aws environment, and the token it mints may only reach
+      #     machulav/ec2-github-runner's github-token input. secrets: inherit
+      #     is allowed only into local reusable workflows, and no workflow may
+      #     reference any other secret. The policy script
       #     and its tests run from the trusted base checkout (not the PR).
       #     Rules 2-4 scan the overlaid PR workflow files; the Rule 1 leak check
       #     runs against the PR head commit tree (read-only) so it also catches
-      #     runner-token references the PR adds outside .github/workflows.
+      #     references to the key that the PR adds outside .github/workflows.
       - name: Enforce EC2 runner token policy
         run: |
           set -euo pipefail
           python3 -m pip install --quiet "pyyaml==${PYYAML_VERSION}" "pytest==${PYTEST_VERSION}"
-          python3 -m pytest .github/scripts/test_check_runner_token_policy.py -q
+          python3 -m pytest .github/scripts/test_check_runner_token_policy.py .github/scripts/test_publish_simple_index.py .github/scripts/test_verify_package_index.py -q
           leak_ref_args=()
           if [ "${GITHUB_EVENT_NAME}" = "pull_request_target" ]; then
             leak_ref_args=(--leak-check-ref FETCH_HEAD)

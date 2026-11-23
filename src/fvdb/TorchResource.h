@@ -108,6 +108,16 @@ struct TorchResource : nanovdb::cuda::SyncFromAsync<TorchResource> {
         }
         c10::cuda::CUDACachingAllocator::raw_delete(p);
     }
+
+    /// @brief Stateless, so every instance can free what any other allocated.
+    friend bool
+    operator==(const TorchResource &, const TorchResource &) {
+        return true;
+    }
+    friend bool
+    operator!=(const TorchResource &, const TorchResource &) {
+        return false;
+    }
 };
 
 static_assert(nanovdb::cuda::is_async_resource<TorchResource>::value,

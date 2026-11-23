@@ -3,9 +3,27 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
+
+std::shared_ptr<detail::VbmCache>
+GridBatchData::makeVbmCache() {
+    return std::make_shared<detail::VbmCache>();
+}
+
+const detail::BatchVbm &
+GridBatchData::vbm() const {
+    return mVbmCache->acquire(*this);
+}
+
+detail::GridVbm
+GridBatchData::vbmAt(int64_t bi) const {
+    bi = negativeToPositiveIndexWithRangecheck(bi);
+    mVbmCache->acquire(*this);
+    return mVbmCache->gridVbm(bi);
+}
 
 // -----------------------------------------------------------------------
 // Methods that dereference mStorage
@@ -347,7 +365,8 @@ GridBatchData::jaggedTensor(const torch::Tensor &data) const {
     checkDevice(data);
     TORCH_CHECK(data.dim() >= 1, "Data have more than one dimensions");
     TORCH_CHECK(data.size(0) == totalVoxels(), "Data size mismatch");
-    return JaggedTensor::from_data_offsets_and_list_ids(data, voxelOffsets(), jlidx());
+    return JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        data, voxelOffsets(), jlidx(), batchSize());
 }
 
 torch::Tensor

@@ -167,8 +167,8 @@ TEST(GridStorageTest, DeviceProtoCarriesDeviceAndStream) {
     EXPECT_EQ(proto.resource().device(), kCuda0);
 
     // What the builders do with it: allocate the output through the proto's resource.
-    auto out = nanovdb::cuda::detail::createDeviceStorage<DeviceGridBuffer>(
-        4096, &proto, 0, side.stream());
+    auto out =
+        nanovdb::cuda::detail::createDeviceStorage<DeviceGridBuffer>(4096, &proto, side.stream());
     EXPECT_EQ(out.size_bytes(), 4096u);
     EXPECT_NE(out.data(), nullptr);
     EXPECT_EQ(out.stream(), side.stream());
@@ -430,6 +430,55 @@ TEST(GridStorageTest, GridStoragePartsSharesEmptyAndRepeats) {
     GridStorage lone = one.merge();
     EXPECT_EQ(lone.gridCount(), 1u);
     EXPECT_EQ(lone.device(), kCuda0);
+}
+
+TEST(GridStorageTest, GridStoragePartsReplicatesUniformRepeats) {
+    initTorchCudaAllocator();
+    const auto stream = c10::cuda::getCurrentCUDAStream(0).stream();
+    // 257 copies: the header kernel spans two blocks and the last doubling copy is partial.
+    constexpr uint32_t kCount = 257;
+    for (const bool empty: {false, true}) {
+        SCOPED_TRACE(empty ? "empty grid" : "float grid");
+        std::vector<HostHandle> hostParts;
+        for (uint32_t i = 0; i < kCount; ++i) {
+            hostParts.push_back(
+                empty ? fvdb::detail::createEmptyGridStorage(torch::kCPU).hostHandle().copy()
+                      : makeFloatGrid(4, 1.0f));
+        }
+        HostHandle expected = nanovdb::mergeGrids(hostParts);
+        for (uint32_t i = 0; i < expected.gridCount(); ++i) {
+            const_cast<nanovdb::GridData *>(expected.gridData(i))->mChecksum.disable();
+        }
+
+        fvdb::detail::GridStorageParts parts(kCuda0, stream, 1);
+        if (empty) {
+            parts.addEmpty();
+        } else {
+            parts.add(GridStorage(makeFloatGrid(4, 1.0f)).to(kCuda0, stream));
+        }
+        for (uint32_t i = 1; i < kCount; ++i) {
+            parts.addRepeat(0);
+        }
+        GridStorage merged = parts.merge();
+
+        ASSERT_EQ(merged.gridCount(), kCount);
+        EXPECT_EQ(merged.device(), kCuda0);
+        EXPECT_EQ(merged.stream(), stream);
+        EXPECT_EQ(merged.bufferSize(), expected.bufferSize());
+        for (uint32_t i = 0; i < kCount; ++i) {
+            EXPECT_EQ(merged.gridOffset(i), i * expected.gridSize(0));
+            EXPECT_EQ(merged.gridType(i), expected.gridType(i));
+        }
+        std::vector<uint8_t> expectedBytes(expected.bufferSize());
+        std::memcpy(expectedBytes.data(), expected.data(), expected.bufferSize());
+        EXPECT_EQ(deviceBytesOf(merged), expectedBytes);
+
+        auto bytes = merged.deviceHandle().buffer().copy(stream);
+        ASSERT_NO_THROW({
+            DeviceHandle reparsed(std::move(bytes));
+            EXPECT_EQ(reparsed.gridCount(), kCount);
+        });
+    }
 }
 
 TEST(GridStorageTest, MakeDeviceHandleFromLayoutChecksExtent) {
