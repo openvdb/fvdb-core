@@ -1241,15 +1241,15 @@ meshChunk(const GridBatchData &batchHdl,
             torch::Tensor blockOfCellBuf = denseRelabel(clusterKeyBuf, numBlocks);
             // a block is "flat" when the mean magnitude of its cells' unit normals (i.e. how
             // aligned they are) clears cos(threshold); flat blocks then collapse to one vertex. The
-            // scatter-add and per-block reduction are index_add_ + bincount + a vectorized
-            // comparison.
+            // scatter-adds and per-block reduction are index_add_ + a vectorized comparison
+            // (index_add_ rather than bincount, which reads the maximum back to the host).
             torch::Tensor blockNormalSum =
                 torch::zeros({numBlocks, 3}, opts.f32)
                     .index_add_(0, blockOfCellBuf, cellNormalBuf.view({-1, 3}));
             torch::Tensor blockCellCount =
-                torch::bincount(blockOfCellBuf, /*weights=*/{}, numBlocks)
-                    .clamp_min(1)
-                    .to(torch::kFloat32);
+                torch::zeros({numBlocks}, opts.f32)
+                    .index_add_(0, blockOfCellBuf, torch::ones({numSurfaceCells}, opts.f32))
+                    .clamp_min(1);
             const float flatCosThreshold =
                 (float)std::cos(adaptivity * 60.0 * nanovdb::math::pi<double>() / 180.0);
             torch::Tensor blockFlatBuf =
@@ -1370,16 +1370,20 @@ meshChunk(const GridBatchData &batchHdl,
         numTriangles, vertexBuf.data_ptr<float>(), refNormalBuf.data_ptr<float>(), triangles);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 
-    // prune unreferenced (free-point) vertices and reindex the triangles. torch::unique_dim over
-    // the flattened triangle indices returns, in ascending order, the referenced vertex ids and
-    // (via return_inverse) the triangles already reindexed into [0, numKeptVertices) -- the same
-    // merge idiom MarchingCubes uses. Compacting the vertices/normals is then a single index_select
-    // gather. The kept vertices stay grouped by grid, so subtracting each grid's first kept vertex
-    // turns the chunk-wide indices into grid-local ones.
-    auto unique = torch::unique_dim(triangleBuf, 0, /*sorted=*/true, /*return_inverse=*/true);
-    torch::Tensor keptVertexIds  = std::get<0>(unique).to(torch::kInt64); // ascending; host sync
+    // prune unreferenced (free-point) vertices and reindex the triangles: flag the vertices some
+    // triangle references, and number the flagged ones in order with an exclusive prefix sum. This
+    // gives the same ascending numbering as a sorted unique of the triangle indices without a sort;
+    // only the kept count (from nonzero) is read back. Compacting the vertices/normals is then a
+    // single index_select gather. The kept vertices stay grouped by grid, so subtracting each
+    // grid's first kept vertex turns the chunk-wide indices into grid-local ones.
+    const torch::Tensor triangleIndices = triangleBuf.to(torch::kInt64);
+    torch::Tensor referenced =
+        torch::zeros({numVertices}, opts.i64).index_fill_(0, triangleIndices, 1);
+    torch::Tensor newIndex      = torch::cumsum(referenced, 0) - referenced; // exclusive prefix sum
+    torch::Tensor keptVertexIds = torch::nonzero(referenced).flatten();      // ascending; host sync
     const int64_t numOutVertices = keptVertexIds.size(0);
-    torch::Tensor chunkTriangles = std::get<1>(unique).to(torch::kInt64).view({numTriangles, 3});
+    torch::Tensor chunkTriangles =
+        newIndex.index_select(0, triangleIndices).view({numTriangles, 3});
 
     ChunkMesh mesh;
     mesh.vertices = vertexBuf.view({numVertices, 3}).index_select(0, keptVertexIds);
@@ -1393,8 +1397,9 @@ meshChunk(const GridBatchData &batchHdl,
     } else {
         mesh.vertexGrid   = vertexGrid.index_select(0, keptVertexIds);
         mesh.triangleGrid = mesh.vertexGrid.index_select(0, chunkTriangles.select(1, 0));
-        torch::Tensor gridVertexCount = torch::bincount(mesh.vertexGrid, /*weights=*/{}, numGrids);
-        torch::Tensor gridVertexBase  = torch::cumsum(gridVertexCount, 0) - gridVertexCount;
+        // each grid's first kept vertex (the kept vertices are sorted by grid)
+        torch::Tensor gridVertexBase =
+            torch::searchsorted(mesh.vertexGrid, torch::arange(numGrids, opts.i64));
         mesh.triangles =
             chunkTriangles - gridVertexBase.index_select(0, mesh.triangleGrid).unsqueeze(1);
     }
@@ -1486,19 +1491,26 @@ dualContour(const GridBatchData &batchHdl,
                           const torch::TensorOptions &options) {
         return list.empty() ? torch::empty(emptyShape, options) : torch::cat(list, 0);
     };
-    torch::Tensor allVertices = catOrEmpty(vertexList, {0, 3}, opts.f32);
-    torch::Tensor allNormals  = catOrEmpty(normalList, {0, 3}, opts.f32);
-    torch::Tensor allFaces    = catOrEmpty(faceList, {0, 3}, opts.i64);
-    torch::Tensor vertexBatchIdx =
-        catOrEmpty(vertexGridList, {0}, opts.i64).to(fvdb::JIdxScalarType);
-    torch::Tensor faceBatchIdx = catOrEmpty(faceGridList, {0}, opts.i64).to(fvdb::JIdxScalarType);
+    torch::Tensor allVertices  = catOrEmpty(vertexList, {0, 3}, opts.f32);
+    torch::Tensor allNormals   = catOrEmpty(normalList, {0, 3}, opts.f32);
+    torch::Tensor allFaces     = catOrEmpty(faceList, {0, 3}, opts.i64);
+    torch::Tensor vertexGrid   = catOrEmpty(vertexGridList, {0}, opts.i64);
+    torch::Tensor triangleGrid = catOrEmpty(faceGridList, {0}, opts.i64);
 
-    JaggedTensor retVertices = JaggedTensor::from_data_indices_and_list_ids(
-        allVertices, vertexBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    JaggedTensor retFaces = JaggedTensor::from_data_indices_and_list_ids(
-        allFaces, faceBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
-    JaggedTensor retNormals = JaggedTensor::from_data_indices_and_list_ids(
-        allNormals, vertexBatchIdx, batchHdl.jlidx(), batchHdl.batchSize());
+    // per-grid offsets: vertices and triangles are sorted by grid, so grid g starts at the first
+    // element whose grid is >= g. The structure is correct by construction, so the unchecked
+    // constructor skips the validation kernel and its host sync.
+    const torch::Tensor gridIds = torch::arange(numGrids + 1, opts.i64);
+    torch::Tensor vertexOffsets =
+        torch::searchsorted(vertexGrid, gridIds).to(fvdb::JOffsetsScalarType);
+    torch::Tensor triangleOffsets =
+        torch::searchsorted(triangleGrid, gridIds).to(fvdb::JOffsetsScalarType);
+    JaggedTensor retVertices = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        allVertices, vertexOffsets, batchHdl.jlidx(), numGrids);
+    JaggedTensor retFaces = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        allFaces, triangleOffsets, batchHdl.jlidx(), numGrids);
+    JaggedTensor retNormals = JaggedTensor::from_data_offsets_and_list_ids_unsafe(
+        allNormals, vertexOffsets, batchHdl.jlidx(), numGrids);
     return {retVertices, retFaces, retNormals};
 }
 
