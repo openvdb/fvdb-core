@@ -33,8 +33,12 @@
 #include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
 
+// CuTe after torch/types.h, as in PredGatherIGemm.cu, for CCCL include order.
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#include <cute/arch/copy_sm75.hpp>
+#include <cute/arch/copy_sm80.hpp>
+#include <cute/arch/mma_sm80.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -89,11 +93,11 @@ struct TapToRow {
 };
 
 // =============================================================================
-// PTX helpers
+// Tensor-core and async-copy instructions (CuTe arch atoms)
 // =============================================================================
 //
-// SM80 instructions. Architectures below SM80 compile empty stubs; the host
-// never launches these kernels there (maskedIGemmSupports checks the device).
+// SM80 instructions. Architectures below SM80 compile CuTe's invalid-path stubs; the host never
+// launches these kernels there (maskedIGemmSupports checks the device).
 
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 800
 #define FVDB_MIGEMM_SM80 1
@@ -101,92 +105,44 @@ struct TapToRow {
 #define FVDB_MIGEMM_SM80 0
 #endif
 
-__device__ __forceinline__ uint32_t
-smemAddr(void const *p) {
-    return static_cast<uint32_t>(__cvta_generic_to_shared(p));
-}
-
 // 16-byte async copy; zero-fills the destination when pred is false.
 __device__ __forceinline__ void
-cpAsync16(uint32_t dst, void const *src, bool pred) {
-#if FVDB_MIGEMM_SM80
-    int const bytes = pred ? 16 : 0;
-    asm volatile(
-        "cp.async.cg.shared.global [%0], [%1], 16, %2;\n" ::"r"(dst), "l"(src), "r"(bytes));
-#endif
+cpAsync16(void *dst, void const *src, bool pred) {
+    cute::SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>::copy(
+        *static_cast<cute::uint128_t const *>(src), *static_cast<cute::uint128_t *>(dst), pred);
+}
+
+// Four 8x8 16-bit tiles from shared memory, plain or transposed.
+__device__ __forceinline__ void
+ldsm4(uint32_t (&r)[4], void const *src) {
+    cute::SM75_U32x4_LDSM_N::copy(
+        *static_cast<cute::uint128_t const *>(src), r[0], r[1], r[2], r[3]);
 }
 
 __device__ __forceinline__ void
-cpAsyncCommit() {
-#if FVDB_MIGEMM_SM80
-    asm volatile("cp.async.commit_group;\n" ::);
-#endif
+ldsm4T(uint32_t (&r)[4], void const *src) {
+    cute::SM75_U16x8_LDSM_T::copy(
+        *static_cast<cute::uint128_t const *>(src), r[0], r[1], r[2], r[3]);
 }
 
-template <int N>
-__device__ __forceinline__ void
-cpAsyncWait() {
-#if FVDB_MIGEMM_SM80
-    asm volatile("cp.async.wait_group %0;\n" ::"n"(N));
-#endif
-}
-
-__device__ __forceinline__ void
-ldsm4(uint32_t (&r)[4], uint32_t addr) {
-#if FVDB_MIGEMM_SM80
-    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];\n"
-                 : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3])
-                 : "r"(addr));
-#endif
-}
-
-__device__ __forceinline__ void
-ldsm4T(uint32_t (&r)[4], uint32_t addr) {
-#if FVDB_MIGEMM_SM80
-    asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];\n"
-                 : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3])
-                 : "r"(addr));
-#endif
-}
-
-template <typename T> struct Mma;
-
-template <> struct Mma<__half> {
-    __device__ __forceinline__ static void
-    run(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
-#if FVDB_MIGEMM_SM80
-        asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 "
-                     "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};\n"
-                     : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
-                     : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
-#endif
-    }
+// c += a * b on one m16n8 tile. float32 runs as TF32 (m16n8k8) with operands rounded after loading.
+template <typename T> struct MmaAtom;
+template <> struct MmaAtom<__half> {
+    using type = cute::SM80_16x8x16_F32F16F16F32_TN;
+};
+template <> struct MmaAtom<__nv_bfloat16> {
+    using type = cute::SM80_16x8x16_F32BF16BF16F32_TN;
+};
+template <> struct MmaAtom<float> {
+    using type = cute::SM80_16x8x8_F32TF32TF32F32_TN;
 };
 
-template <> struct Mma<__nv_bfloat16> {
-    __device__ __forceinline__ static void
-    run(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
-#if FVDB_MIGEMM_SM80
-        asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 "
-                     "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};\n"
-                     : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
-                     : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
-#endif
-    }
-};
-
-// float32 runs as TF32: m16n8k8 with operands rounded to TF32 after loading.
-template <> struct Mma<float> {
-    __device__ __forceinline__ static void
-    run(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
-#if FVDB_MIGEMM_SM80
-        asm volatile("mma.sync.aligned.m16n8k8.row.col.f32.tf32.tf32.f32 "
-                     "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};\n"
-                     : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
-                     : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
-#endif
-    }
-};
+template <typename T>
+__device__ __forceinline__ void
+mma(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
+    MmaAtom<T>::type::fma(
+        c[0], c[1], c[2], c[3], a[0], a[1], a[2], a[3], b0, b1, c[0], c[1], c[2], c[3]);
+}
 
 // Per-element-type tile constants. Every k-tile row is 64 bytes (four 16-byte
 // chunks), so shared-memory layouts and ldmatrix addressing match across types,
@@ -346,9 +302,9 @@ mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) 
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt) {
                 float t[4] = {0.f, 0.f, 0.f, 0.f};
-                Mma<T>::run(t, as[mt], bf[nt][0], bf[nt][1]);
-                Mma<T>::run(t, af[mt], bs[nt][0], bs[nt][1]);
-                Mma<T>::run(t, af[mt], bf[nt][0], bf[nt][1]);
+                mma<T>(t, as[mt], bf[nt][0], bf[nt][1]);
+                mma<T>(t, af[mt], bs[nt][0], bs[nt][1]);
+                mma<T>(t, af[mt], bf[nt][0], bf[nt][1]);
 #pragma unroll
                 for (int e = 0; e < 4; ++e)
                     acc[mt][nt][e] += t[e];
@@ -358,7 +314,7 @@ mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) 
         for (int mt = 0; mt < MT; ++mt)
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt)
-                Mma<T>::run(acc[mt][nt], af[mt], bf[nt][0], bf[nt][1]);
+                mma<T>(acc[mt][nt], af[mt], bf[nt][0], bf[nt][1]);
     }
 }
 
@@ -543,7 +499,7 @@ maskedIGemmKernel(T const *__restrict__ A,
 #pragma unroll
         for (int i = 0; i < A_CHUNKS; ++i) {
             bool const ok = aOk[i] && aKOk;
-            cpAsync16(smemAddr(a + aDst + i * A_RSTEP * BK), ok ? aPtr[i] : A, ok);
+            cpAsync16(a + aDst + i * A_RSTEP * BK, ok ? aPtr[i] : A, ok);
             aPtr[i] += BK;
         }
         T *b = sB + stage * B_STAGE;
@@ -551,18 +507,16 @@ maskedIGemmKernel(T const *__restrict__ A,
         for (int i = 0; i < B_CHUNKS; ++i) {
             if constexpr (!B_TILED) {
                 bool const ok = bColOk[i] && k0 + bRow[i] < Kc;
-                cpAsync16(smemAddr(b + bDst[i]), ok ? bPtr + bSrc[i] : W, ok);
+                cpAsync16(b + bDst[i], ok ? bPtr + bSrc[i] : W, ok);
             } else {
                 int const r = bR + i * B_RSTEP;
                 if constexpr (B_KMAJOR) {
                     bool const ok = n0 + r < Nc && k0 + bCh * CE < Kc;
-                    cpAsync16(
-                        smemAddr(b + r * BK + swz4(r, bCh) * CE), ok ? bPtr + i * bStep : W, ok);
+                    cpAsync16(b + r * BK + swz4(r, bCh) * CE, ok ? bPtr + i * bStep : W, ok);
                 } else {
                     bool const ok = bNOk && k0 + r < Kc;
-                    cpAsync16(smemAddr(b + r * BN + swzRow<T, BN>(r, bCh) * CE),
-                              ok ? bPtr + i * bStep : W,
-                              ok);
+                    cpAsync16(
+                        b + r * BN + swzRow<T, BN>(r, bCh) * CE, ok ? bPtr + i * bStep : W, ok);
                 }
             }
         }
@@ -590,16 +544,16 @@ maskedIGemmKernel(T const *__restrict__ A,
     for (int s = 0; s < STAGES - 1; ++s) {
         if (s < nIter)
             load(s);
-        cpAsyncCommit();
+        cute::cp_async_fence();
     }
 
     for (int it = 0; it < nIter; ++it) {
-        cpAsyncWait<STAGES - 2>();
+        cute::cp_async_wait<STAGES - 2>();
         __syncthreads();
         int const next = it + STAGES - 1;
         if (next < nIter)
             load(next % STAGES);
-        cpAsyncCommit();
+        cute::cp_async_fence();
 
         T const *a = sA + (it % STAGES) * A_STAGE;
         T const *b = sB + (it % STAGES) * B_STAGE;
@@ -612,7 +566,7 @@ maskedIGemmKernel(T const *__restrict__ A,
             for (int mt = 0; mt < MT; ++mt) {
                 int const r  = wm0 + mt * 16 + (lane & 15);
                 int const ch = kk * 2 + (lane >> 4);
-                ldsm4(af[mt], smemAddr(a + r * BK + swz4(r, ch) * CE));
+                ldsm4(af[mt], a + r * BK + swz4(r, ch) * CE);
 #pragma unroll
                 for (int e = 0; e < 4; ++e)
                     af[mt][e] = prepIf<T, PRECISE>(af[mt][e]);
@@ -624,7 +578,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                 if constexpr (B_KMAJOR) {
                     int const nr = wn0 + np * 16 + (lane & 7) + ((lane >> 4) & 1) * 8;
                     int const ch = kk * 2 + ((lane >> 3) & 1);
-                    ldsm4(t, smemAddr(b + nr * BK + swz4(nr, ch) * CE));
+                    ldsm4(t, b + nr * BK + swz4(nr, ch) * CE);
                 } else if constexpr (sizeof(T) == 4) {
                     // ldmatrix cannot transpose 32-bit data; read N-major fragments
                     // element-wise: b0 = B[t][g], b1 = B[t + 4][g].
@@ -642,7 +596,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                 } else {
                     int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
                     int const ch = (wn0 + np * 16) / CE + (lane >> 4);
-                    ldsm4T(t, smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE));
+                    ldsm4T(t, b + kr * BN + swzRow<T, BN>(kr, ch) * CE);
                 }
                 bf[2 * np][0]     = prepIf<T, PRECISE>(t[0]);
                 bf[2 * np][1]     = prepIf<T, PRECISE>(t[1]);
@@ -652,7 +606,7 @@ maskedIGemmKernel(T const *__restrict__ A,
             mmaTiles<T, PRECISE>(acc, af, bf);
         }
     }
-    cpAsyncWait<0>();
+    cute::cp_async_wait<0>();
 
     // ---- Epilogue: each output row is owned by exactly one tile ----
 #pragma unroll
@@ -802,7 +756,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 int const src = slot[kr];
                 bool const ok = src >= 0 && m0 + ch * CE < Ci;
                 T const *g    = X + (ok ? int64_t(src) * Ci + m0 + ch * CE : 0);
-                cpAsync16(smemAddr(a + kr * BM + swzRow<T, BM>(kr, ch) * CE), g, ok);
+                cpAsync16(a + kr * BM + swzRow<T, BM>(kr, ch) * CE, g, ok);
             }
         }
 #pragma unroll
@@ -814,7 +768,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 int const o   = slot[BK + kr];
                 bool const ok = o >= 0 && n0 + ch * CE < Co;
                 T const *g    = dY + (ok ? int64_t(o) * Co + n0 + ch * CE : 0);
-                cpAsync16(smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE), g, ok);
+                cpAsync16(b + kr * BN + swzRow<T, BN>(kr, ch) * CE, g, ok);
             }
         }
     };
@@ -874,16 +828,16 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
     for (int s = 0; s < STAGES - 1; ++s) {
         if (s < nIter)
             load(s, s);
-        cpAsyncCommit();
+        cute::cp_async_fence();
     }
 
     for (int it = 0; it < nIter; ++it) {
-        cpAsyncWait<STAGES - 2>();
+        cute::cp_async_wait<STAGES - 2>();
         __syncthreads();
         int const next = it + STAGES - 1;
         if (next < nIter)
             load(next % STAGES, next);
-        cpAsyncCommit();
+        cute::cp_async_fence();
 
         // Indices for step it + STAGES reuse the slot of step it, whose loads were issued
         // long ago. Fetch now, store after the MMAs so the fetch latency overlaps them.
@@ -917,14 +871,14 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                 for (int mt = 0; mt < MT; ++mt) {
                     int const kr = kk * KSTEP + (lane & 7) + ((lane >> 4) & 1) * 8;
                     int const ch = (wm0 + mt * 16) / CE + ((lane >> 3) & 1);
-                    ldsm4T(af[mt], smemAddr(a + kr * BM + swzRow<T, BM>(kr, ch) * CE));
+                    ldsm4T(af[mt], a + kr * BM + swzRow<T, BM>(kr, ch) * CE);
                 }
 #pragma unroll
                 for (int np = 0; np < NT / 2; ++np) {
                     uint32_t t[4];
                     int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
                     int const ch = (wn0 + np * 16) / CE + (lane >> 4);
-                    ldsm4T(t, smemAddr(b + kr * BN + swzRow<T, BN>(kr, ch) * CE));
+                    ldsm4T(t, b + kr * BN + swzRow<T, BN>(kr, ch) * CE);
                     bf[2 * np][0]     = t[0];
                     bf[2 * np][1]     = t[1];
                     bf[2 * np + 1][0] = t[2];
@@ -937,7 +891,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
         if (warp == 0)
             storeIdx(it + STAGES, pfIn, pfOut);
     }
-    cpAsyncWait<0>();
+    cute::cp_async_wait<0>();
 
     int64_t const tapBase = int64_t(tapToRow(tap)) * Ci * Co;
 #pragma unroll
