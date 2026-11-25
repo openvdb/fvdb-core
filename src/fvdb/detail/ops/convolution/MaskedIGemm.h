@@ -10,7 +10,7 @@
 // mask so tiles skip the taps none of their rows use. The weight gradient
 // reduces over per-tap (input, output) pair lists.
 //
-// Supports any stride and kernel size with volume <= 32, and the transposed
+// Supports any stride and kernel size, and the transposed
 // direction of each, on CUDA with float16, bfloat16 and float32 (computed as TF32)
 // features. The input gradient and the transpose run the same kernel over the
 // reverse map; a submanifold map (same grid, stride 1, odd kernel) is its own

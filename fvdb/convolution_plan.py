@@ -8,7 +8,6 @@ libraries. Like FFT plans, the convolution plan encapsulates a single direction 
 convolution, or transposed convolution, but can represent either.
 """
 
-import math
 import warnings
 from dataclasses import dataclass, field
 from threading import Lock
@@ -462,13 +461,6 @@ def _validate_pred_gather_igemm_grid_admission(source_grid: GridBatch, target_gr
         raise ValueError(f"PredGatherIGemm supports only batch size 1; got {target_grid.grid_count} target grids.")
 
 
-def _validate_masked_igemm_admission(kernel_size: torch.Tensor) -> None:
-    """Admit kernels whose taps fit a 32-bit row mask."""
-    kernel_values = [int(value) for value in kernel_size.tolist()]
-    if math.prod(kernel_values) > 32:
-        raise ValueError(f"masked_igemm requires a kernel volume <= 32; got {kernel_values}.")
-
-
 def _matmul_weight_matrix(weights: torch.Tensor) -> torch.Tensor:
     """Normalize supported identity-convolution weights to ``[C_out, C_in]``."""
     if weights.ndim == 2:
@@ -887,8 +879,6 @@ class ConvolutionPlan:
             )
             if identity_plan is not None:
                 return identity_plan
-            if backend_name == "masked_igemm":
-                _validate_masked_igemm_admission(kernel_size)
         if target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
@@ -994,8 +984,6 @@ class ConvolutionPlan:
             )
             if identity_plan is not None:
                 return identity_plan
-            if backend_name == "masked_igemm":
-                _validate_masked_igemm_admission(kernel_size)
         if target_grid is None:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
@@ -1532,7 +1520,6 @@ class ConvolutionPlan:
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=kernel, stride=step)
 
         if backend_name == "masked_igemm":
-            _validate_masked_igemm_admission(kernel_size)
             if source_grid.device.type == "cuda":
                 # The topology always maps the forward direction, coarse output rows to fine input rows.
                 fine, coarse = (target_grid, source_grid) if transposed else (source_grid, target_grid)

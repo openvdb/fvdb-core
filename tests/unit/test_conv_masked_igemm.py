@@ -234,6 +234,8 @@ class TestMaskedIGemm(unittest.TestCase):
             ("sparse", (3, 5, 1)),
             ("dense", (17, 1, 1)),
             ("sparse", (19, 1, 1)),
+            ("dense", (5, 5, 5)),
+            ("shell", (7, 7, 7)),
         ]
     )
     def test_staged_builder_matches_scan(self, kind, kernel_size):
@@ -260,12 +262,79 @@ class TestMaskedIGemm(unittest.TestCase):
         for name in ("neighbor_map", "row_masks", "pair_in", "pair_out", "pair_offsets"):
             self.assertTrue(torch.equal(getattr(topo, name), getattr(ref, name)), name)
 
-    def test_rejects_unsupported(self):
-        grid = _random_grid(500, 8)
-        with self.assertRaisesRegex(ValueError, "kernel volume"):
-            ConvolutionPlan.from_grid_batch(5, 1, grid, grid, expert_config=CONFIG)
-        with self.assertRaisesRegex(ValueError, "kernel volume"):
-            ConvolutionPlan.from_grid_batch_transposed(4, 2, grid, expert_config=CONFIG)
+    # ---- Kernels of more than 32 taps (multi-word tap masks, chunked neighbor staging) ----
+
+    @parameterized.expand(
+        [
+            ("k5", 5, 1, 64, 64, torch.float16),
+            ("k7", 7, 1, 32, 64, torch.float16),
+            ("k33_boundary", (11, 3, 1), 1, 64, 32, torch.float16),
+            ("k443_even", (4, 4, 3), 1, 64, 64, torch.float16),
+            ("k5_bf16", 5, 1, 64, 128, torch.bfloat16),
+            ("k5_tf32", 5, 1, 64, 96, torch.float32),
+            ("k5_s2", 5, 2, 64, 64, torch.float16),
+            ("k7_s2", 7, 2, 32, 32, torch.float16),
+            ("k5_narrow", 5, 1, 3, 20, torch.float16),
+        ]
+    )
+    def test_wide_kernel(self, _, kernel_size, stride, cin, cout, dtype):
+        grid = _random_grid(2500, 10, batch=2)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid)
+        tol = {torch.float16: 4e-3, torch.bfloat16: 2e-2, torch.float32: 5e-3}[dtype]
+        self._compare_plans(plan, ref_plan, cin, cout, dtype, tol)
+
+    @parameterized.expand([("factory", True), ("from_plan", False)])
+    def test_wide_transpose(self, _, factory):
+        fine = _random_grid(2500, 10, batch=2)
+        coarse = fine.conv_grid(5, 2)
+        if factory:
+            plan = ConvolutionPlan.from_grid_batch_transposed(5, 2, coarse, fine, expert_config=CONFIG)
+            ref_plan = ConvolutionPlan.from_grid_batch_transposed(5, 2, coarse, fine)
+        else:
+            plan = ConvolutionPlan.from_plan_transposed(
+                ConvolutionPlan.from_grid_batch(5, 2, fine, coarse, expert_config=CONFIG)
+            )
+            ref_plan = ConvolutionPlan.from_plan_transposed(ConvolutionPlan.from_grid_batch(5, 2, fine, coarse))
+        self._compare_plans(plan, ref_plan, 64, 32, torch.float16, 4e-3)
+
+    @parameterized.expand([("split2", 2), ("split5", 5)])
+    def test_wide_split_k(self, _, splits):
+        # Split-K starts a CTA's tap walk mid-chunk.
+        os.environ["FVDB_MIGEMM_SPLIT"] = str(splits)
+        try:
+            grid = _random_grid(1500, 8)
+            plan = ConvolutionPlan.from_grid_batch(5, 1, grid, expert_config=CONFIG)
+            ref_plan = ConvolutionPlan.from_grid_batch(5, 1, grid)
+            self._compare_plans(plan, ref_plan, 96, 64, torch.float16, 4e-3)
+        finally:
+            del os.environ["FVDB_MIGEMM_SPLIT"]
+
+    @parameterized.expand([("k5", 5), ("k7", 7), ("k33", (11, 3, 1))])
+    def test_wide_masks_and_order(self, _, kernel_size):
+        grid = _random_grid(2000, 9)
+        topo = _build_topology(grid, grid, kernel_size)
+        nbr = topo.neighbor_map.cpu()
+        n, k = nbr.shape
+        words = (k + 31) // 32
+        masks = topo.row_masks.cpu()
+        self.assertEqual(tuple(masks.shape), (n, words))
+        bits = torch.zeros(n, words * 32, dtype=torch.bool)
+        bits[:, :k] = nbr >= 0
+        packed = (bits.view(n, words, 32).long() << torch.arange(32)).sum(-1)
+        self.assertTrue(torch.equal(masks.long() & 0xFFFFFFFF, packed))
+
+        # Rows run in non-decreasing Gray rank of the whole mask, tap K-1 most significant.
+        def rank(row: int) -> int:
+            m = sum(int(packed[row, w]) << (32 * w) for w in range(words))
+            r = 0
+            while m:
+                r ^= m
+                m >>= 1
+            return r
+
+        ranks = [rank(int(o)) for o in topo.sorted_rows.cpu()]
+        self.assertEqual(ranks, sorted(ranks))
 
     @parameterized.expand(
         [((64, 128),), ((128, 64),), ((192, 256),), ((32, 32),), ((96, 64),), ((64, 96),), ((96, 96),)]
@@ -346,6 +415,8 @@ class TestMaskedIGemm(unittest.TestCase):
             ("strided", 2, 2, False, 64, 64),
             ("transposed", 2, 2, True, 96, 32),
             ("narrow", 3, 1, False, 3, 40),
+            ("wide", 5, 1, False, 64, 64),
+            ("wide_transposed", 5, 2, True, 32, 64),
         ]
     )
     def test_strict_fp32(self, _, kernel_size, stride, transposed, cin, cout):
