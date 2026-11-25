@@ -585,6 +585,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
 
     const auto deviceCount = c10::cuda::device_count();
     TORCH_CHECK(deviceCount > 0, "PrivateUse1 rasterization requires at least one CUDA device");
+    const auto deviceLists =
+        makeDeviceLists(features.size(0), tileExtentH * tileExtentW, tileAlignment, deviceCount);
     std::vector<cudaStream_t> prefetchStreams(deviceCount);
     // Keep each device's current compute stream unchanged through allocation, rasterization,
     // reduction, and release: the owning tensors enqueue their frees on their allocation streams.
@@ -620,8 +622,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         dMeansLocals[deviceId]     = makeLocalGradient(means, deviceId, stream);
         dQuatsLocals[deviceId]     = makeLocalGradient(quats, deviceId, stream);
         dLogScalesLocals[deviceId] = makeLocalGradient(logScales, deviceId, stream);
-        dFeaturesLocals[deviceId]  = makeLocalGradient(features, deviceId, stream);
-        dOpacitiesLocals[deviceId] = makeLocalGradient(opacities, deviceId, stream);
+        dFeaturesLocals[deviceId]  = makeLocalGradient<false>(features, deviceId, stream);
+        dOpacitiesLocals[deviceId] = makeLocalGradient<false>(opacities, deviceId, stream);
 
         if (deviceTileCount > 0) {
             launchBackwardKernel<NUM_CHANNELS, Camera>(means,
@@ -692,39 +694,24 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
     }
 
-    {
-        // Flat reduction shards can write ranges prefetched by other devices. Join every
-        // discard/prefetch before publication, without joining the compute streams.
-        C10_CUDA_CHECK(cudaSetDevice(0));
-        auto prefetchStream = prefetchStreams[0];
-        for (const auto deviceId: c10::irange(1, deviceCount)) {
-            C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, outputPrefetchEvents[deviceId]));
-        }
-        C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[0], prefetchStream));
-    }
-
     // Queue every reduction before waiting so they can all overlap with output prefetching.
-    reduceGradientShards(dMeansLocals);
-    reduceGradientShards(dQuatsLocals);
-    reduceGradientShards(dLogScalesLocals);
-    reduceGradientShards(dFeaturesLocals);
-    reduceGradientShards(dOpacitiesLocals);
+    reduceLocalGradients(dMeansLocals);
+    reduceLocalGradients(dQuatsLocals);
+    reduceLocalGradients(dLogScalesLocals);
+    reduceLocalGradients<false>(dFeaturesLocals, deviceLists);
+    reduceLocalGradients<false>(dOpacitiesLocals, deviceLists);
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[0]));
-    }
-    // The shared completion event must remain valid until every copy stream has waited on it.
-    for (const auto deviceId: c10::irange(deviceCount)) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
         C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
     }
 
-    copyGradientShards<float>(dMeansLocals, dMeans);
-    copyGradientShards<float>(dQuatsLocals, dQuats);
-    copyGradientShards<float>(dLogScalesLocals, dLogScales);
-    copyGradientShards<float>(dFeaturesLocals, dFeatures);
-    copyGradientShards<float>(dOpacitiesLocals, dOpacities);
+    copyLocalGradients(dMeansLocals, dMeans);
+    copyLocalGradients(dQuatsLocals, dQuats);
+    copyLocalGradients(dLogScalesLocals, dLogScales);
+    copyLocalGradients<false>(dFeaturesLocals, dFeatures);
+    copyLocalGradients<false>(dOpacitiesLocals, dOpacities);
 
     // Enqueue frees after the reductions and output copies, before merging the compute streams.
     dMeansLocals.clear();

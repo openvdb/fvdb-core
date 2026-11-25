@@ -1058,7 +1058,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
             }
 
-            reduceGradientShards(dLossDWorldToCamMatricesLocals);
+            reduceLocalGradients(dLossDWorldToCamMatricesLocals);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 if (outputPrefetchEvents[deviceId]) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1067,7 +1067,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
                 }
             }
-            copyGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+            copyLocalGradients(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
 
             // Enqueue frees after reduction and output copies, before merging the compute streams.
             dLossDWorldToCamMatricesLocals.clear();
