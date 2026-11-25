@@ -344,15 +344,32 @@ def _swap_coverage_report(report: ConvolutionCoverageReport) -> ConvolutionCover
     )
 
 
+# Rows per chunk when counting neighbor-map degrees. Reductions over a bool tensor accumulate in
+# int64, so counting a whole [N, K] map at once would allocate 8 bytes per entry.
+_DEGREE_CHUNK_ROWS = 1 << 20
+
+
+def _row_degrees(rows: torch.Tensor) -> torch.Tensor:
+    """Count each row's non-negative entries, a chunk of rows at a time."""
+    if rows.shape[0] == 0:
+        return torch.zeros(0, dtype=torch.int64, device=rows.device)
+    return torch.cat([(chunk >= 0).sum(dim=1) for chunk in rows.split(_DEGREE_CHUNK_ROWS)])
+
+
+def _zero_degree_rows(rows: torch.Tensor) -> int:
+    """Count rows with no non-negative entry, a chunk of rows at a time."""
+    return sum(int((~(chunk >= 0).any(dim=1)).sum().item()) for chunk in rows.split(_DEGREE_CHUNK_ROWS))
+
+
 def _masked_igemm_degrees(topology: _fvdb_cpp.MaskedIGemmTopology) -> tuple[torch.Tensor, torch.Tensor]:
     """Input and output degrees from the neighbor map and its reverse.
 
     A submanifold map stores no reverse because it is symmetric (row o has input i at tap k exactly
     when row i has input o at tap K-1-k), so each voxel's input degree equals its output degree.
     """
-    output_degrees = (topology.neighbor_map >= 0).sum(dim=1)
+    output_degrees = _row_degrees(topology.neighbor_map)
     reverse = topology.reverse_map
-    input_degrees = output_degrees if reverse is None else (reverse >= 0).sum(dim=1)
+    input_degrees = output_degrees if reverse is None else _row_degrees(reverse)
     return input_degrees, output_degrees
 
 
@@ -369,8 +386,7 @@ def _output_zero_count(backend: "_Backend", transposed: bool = False) -> int | N
         if topology.reverse_map is None:
             # Every row of a submanifold map has its center tap.
             return 0
-        rows = topology.reverse_map if transposed else topology.neighbor_map
-        return int(((rows >= 0).sum(dim=1) == 0).sum().item())
+        return _zero_degree_rows(topology.reverse_map if transposed else topology.neighbor_map)
     if isinstance(backend, _GatherScatterBackend):
         topology = backend.topology
     elif isinstance(backend, _PredGatherIGemmBackend):
