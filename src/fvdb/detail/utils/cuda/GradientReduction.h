@@ -51,7 +51,7 @@ reduceGradientShards(const std::vector<torch::Tensor> &localGradients) {
     torch::cuda::nccl::reduce_scatter(paddedGradients, reducedShards);
 }
 
-// Call after queuing the reductions and waiting for output prefetching on the current streams.
+// Call after queuing the reductions on the current streams.
 // Keep the local gradient buffers alive until all output copies have been queued.
 template <typename ScalarType>
 void

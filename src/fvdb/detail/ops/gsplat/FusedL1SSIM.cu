@@ -703,12 +703,6 @@ fusedL1SSIMPrivateUse1(const torch::Tensor &img1,
     auto dm_dsigma1_sq = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
     auto dm_dsigma12   = train ? torch::empty_like(img1) : torch::empty({0}, img1.options());
 
-    std::vector<torch::Tensor> inputs = {img1};
-    std::vector<torch::Tensor> outputs;
-    if (train) {
-        outputs = {dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
-    }
-    prefetchImages(inputs, outputs);
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -810,8 +804,6 @@ fusedL1SSIMBackwardPrivateUse1(const torch::Tensor &img1,
     const int W    = img1.size(3);
     auto grad_img1 = torch::empty_like(img1);
 
-    std::vector<torch::Tensor> outputs = {grad_img1};
-    prefetchImages({}, outputs);
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream      = c10::cuda::getCurrentCUDAStream(deviceId);

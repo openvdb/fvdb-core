@@ -268,7 +268,6 @@ fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
     }
     auto loss = torch::empty({}, img1.options());
 
-    prefetchImages({img1, img2}, {});
     std::vector<torch::Tensor> partial_losses;
     partial_losses.reserve(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -307,7 +306,7 @@ fusedL1PrivateUse1(const torch::Tensor &img1, const torch::Tensor &img2) {
 
 // ------------------------------------------
 // PyTorch Interface (Multi-GPU Backward)
-//   Prefetches and writes image gradients
+//   Writes image gradients
 //   using SSIM's spatial tile ownership.
 // ------------------------------------------
 std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>>
@@ -328,15 +327,6 @@ fusedL1BackwardPrivateUse1(const torch::Tensor &img1,
     if (!img1.numel() || (!need_img1 && !need_img2)) {
         return std::make_tuple(dL_dimg1, dL_dimg2);
     }
-    std::vector<torch::Tensor> inputs = {img1, img2};
-    std::vector<torch::Tensor> outputs;
-    if (dL_dimg1) {
-        outputs.emplace_back(*dL_dimg1);
-    }
-    if (dL_dimg2) {
-        outputs.emplace_back(*dL_dimg2);
-    }
-    prefetchImages(inputs, outputs);
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);

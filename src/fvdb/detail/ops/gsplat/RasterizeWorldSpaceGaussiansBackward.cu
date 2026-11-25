@@ -566,7 +566,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
                 torch::zeros_like(opacities)};
     }
 
-    // Use the forward pass's full-width tile rows for both input prefetch and rasterization.
+    // Use the forward pass's full-width tile rows for rasterization.
     const int64_t tileAlignment = tileExtentW;
 
     // Each GPU accumulates into device-local buffers. The managed outputs are populated after the
@@ -594,13 +594,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     std::vector<torch::Tensor> dFeaturesLocals(deviceCount);
     std::vector<torch::Tensor> dOpacitiesLocals(deviceCount);
 
-    std::vector<torch::Tensor> tileTensors = {
-        renderedAlphas, lastIds, dLossDRenderedFeatures, dLossDRenderedAlphas};
-    if (contiguousMasks.has_value()) {
-        tileTensors.emplace_back(contiguousMasks.value());
-    }
-
-    // Prefetch inputs after prior work, then make the current streams wait for those inputs.
+    // Order output prefetch streams after prior work, before launching rasterization.
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -611,25 +605,6 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
         C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStreams[deviceId], prefetchEvent));
 
-        int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
-        if (deviceTileCount > 0) {
-            std::vector<void *> prefetchPointers;
-            std::vector<size_t> prefetchSizes;
-            const TilePrefetchRange tileRange{deviceTileOffset,
-                                              deviceTileCount,
-                                              tileExtentH,
-                                              tileExtentW,
-                                              imageHeight,
-                                              imageWidth,
-                                              tileSize};
-            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
-            memPrefetchBatchAsync(
-                prefetchPointers, prefetchSizes, deviceId, prefetchStreams[deviceId]);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStreams[deviceId]));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
         C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 
@@ -680,20 +655,33 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     }
 
     // Rasterization writes to device-local buffers, allowing output prefetching to overlap.
-    // Reuse the input prefetch streams to preserve their waits and ordering.
-    const std::vector<torch::Tensor> outTensors = {
-        dMeans, dQuats, dLogScales, dFeatures, dOpacities};
+    // The prefetch streams already wait on the work preceding rasterization.
+    const std::vector<torch::Tensor> gaussianOutputs = {dMeans, dQuats, dLogScales};
+    const std::vector<torch::Tensor> cameraOutputs   = {dFeatures, dOpacities};
     std::vector<cudaEvent_t> outputPrefetchEvents(deviceCount);
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto prefetchStream = prefetchStreams[deviceId];
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
-        for (const torch::Tensor &outTensor: outTensors) {
+        for (const torch::Tensor &outTensor: gaussianOutputs) {
             const auto [elementOffset, elementCount] = deviceChunk(outTensor.numel(), deviceId);
             if (elementCount > 0) {
                 prefetchPointers.emplace_back(outTensor.data_ptr<float>() + elementOffset);
                 prefetchSizes.emplace_back(elementCount * sizeof(float));
+            }
+        }
+        for (const torch::Tensor &outTensor: cameraOutputs) {
+            // SH backward consumes the same Gaussian shard in every camera.
+            int64_t gaussianOffset, gaussianCount;
+            std::tie(gaussianOffset, gaussianCount) = deviceChunk(outTensor.size(1), deviceId);
+            if (gaussianCount > 0) {
+                for (const auto cameraId: c10::irange(outTensor.size(0))) {
+                    prefetchPointers.emplace_back(outTensor.data_ptr<float>() +
+                                                  cameraId * outTensor.stride(0) +
+                                                  gaussianOffset * outTensor.stride(1));
+                    prefetchSizes.emplace_back(gaussianCount * outTensor.stride(1) * sizeof(float));
+                }
             }
         }
         memDiscardAndPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
@@ -702,6 +690,17 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         C10_CUDA_CHECK(
             cudaEventCreateWithFlags(&outputPrefetchEvents[deviceId], cudaEventDisableTiming));
         C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
+    }
+
+    {
+        // Flat reduction shards can write ranges prefetched by other devices. Join every
+        // discard/prefetch before publication, without joining the compute streams.
+        C10_CUDA_CHECK(cudaSetDevice(0));
+        auto prefetchStream = prefetchStreams[0];
+        for (const auto deviceId: c10::irange(1, deviceCount)) {
+            C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, outputPrefetchEvents[deviceId]));
+        }
+        C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[0], prefetchStream));
     }
 
     // Queue every reduction before waiting so they can all overlap with output prefetching.
@@ -713,7 +712,11 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[deviceId]));
+        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, outputPrefetchEvents[0]));
+    }
+    // The shared completion event must remain valid until every copy stream has waited on it.
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
         C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
     }
 

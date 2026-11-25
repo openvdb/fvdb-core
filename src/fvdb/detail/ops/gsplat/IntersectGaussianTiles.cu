@@ -9,8 +9,6 @@
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianIntersectionRange.h>
 
-#include <nanovdb/util/cuda/Util.h>
-
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
@@ -1269,15 +1267,6 @@ intersectGaussianTilesCudaImpl(
     }
 }
 
-namespace {
-
-[[maybe_unused]] __global__ void
-sleepKernel() {
-    __nanosleep(1000000U); // Puts the calling thread to sleep
-}
-
-} // namespace
-
 std::tuple<torch::Tensor, torch::Tensor>
 intersectGaussianTilesPrivateUse1Impl(
     const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
@@ -1609,25 +1598,6 @@ intersectGaussianTilesPrivateUse1Impl(
                 C10_CUDA_CHECK(cudaMallocAsync(&deviceIntersectionKeys[deviceId],
                                                deviceIntersectionCount[deviceId] * sizeof(int64_t),
                                                stream));
-            }
-        }
-
-        // intersectionValues is returned as a managed tensor, so prefetch each device's slice
-        // [intersectionOffset, intersectionOffset + intersectionCount) before the emit and sort.
-        // The temporary keys are already device-local and require no prefetch.
-        for (const auto deviceId: c10::irange(deviceCount)) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-
-            const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
-            const int64_t intersectionCount  = deviceIntersectionCount[deviceId];
-            if (intersectionCount > 0) {
-                sleepKernel<<<1, 1, 0, stream>>>();
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    intersectionValues.data_ptr<int32_t>() + intersectionOffset,
-                    intersectionCount * sizeof(int32_t),
-                    deviceId,
-                    stream));
             }
         }
 

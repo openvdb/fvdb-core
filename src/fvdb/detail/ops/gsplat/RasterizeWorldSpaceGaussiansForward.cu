@@ -4,7 +4,6 @@
 #include <fvdb/detail/ops/gsplat/RasterizeWorldSpaceGaussiansForward.h>
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
-#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeFromWorld.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianRasterizeOptionalInputs.h>
@@ -418,49 +417,9 @@ launchForwardPrivateUse1(const torch::Tensor &means,
     const torch::Tensor contiguousTileGaussianIds = tileGaussianIds.contiguous();
 
     const auto deviceCount = c10::cuda::device_count();
-    std::vector<cudaEvent_t> events(deviceCount);
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-
-    std::vector<torch::Tensor> tileTensors = {
-        contiguousTileOffsets, outFeatures, outAlphas, outLastIds};
-    if (contiguousMasks.has_value()) {
-        tileTensors.emplace_back(contiguousMasks.value());
-    }
-
-    for (const auto deviceId: c10::irange(deviceCount)) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
-
-        int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
-        if (deviceTileCount > 0) {
-            std::vector<void *> prefetchPointers;
-            std::vector<size_t> prefetchSizes;
-            const TilePrefetchRange tileRange{deviceTileOffset,
-                                              deviceTileCount,
-                                              tileExtentH,
-                                              tileExtentW,
-                                              imageHeight,
-                                              imageWidth,
-                                              tileSize};
-            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
-    }
-
-    for (const auto deviceId: c10::irange(deviceCount)) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =

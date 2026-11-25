@@ -4,7 +4,6 @@
 #ifndef FVDB_DETAIL_UTILS_GSPLAT_IMAGEPARTITION_CUH
 #define FVDB_DETAIL_UTILS_GSPLAT_IMAGEPARTITION_CUH
 
-#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 
 #include <torch/types.h>
@@ -44,15 +43,15 @@ imageBlockChunk(int B, int H, int W, int deviceId) {
 }
 
 inline void
-appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
-                          std::vector<size_t> &prefetchSizes,
-                          const torch::TensorList &tensors,
-                          size_t tileRowOffset,
-                          size_t tileRowCount,
-                          int B,
-                          int CH,
-                          int H,
-                          int W) {
+appendImageCopyRanges(std::vector<void *> &copyPointers,
+                      std::vector<size_t> &copySizes,
+                      const torch::TensorList &tensors,
+                      size_t tileRowOffset,
+                      size_t tileRowCount,
+                      int B,
+                      int CH,
+                      int H,
+                      int W) {
     if (!tileRowCount) {
         return;
     }
@@ -63,12 +62,12 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
     TORCH_CHECK(tileRowEnd <= B * tileRowsPerImage, "Invalid image tile-row range");
 
     for (const auto &tensor: tensors) {
-        TORCH_CHECK(tensor.is_contiguous(), "Tensor to prefetch is not contiguous");
+        TORCH_CHECK(tensor.is_contiguous(), "Tensor to copy is not contiguous");
         TORCH_CHECK(tensor.dim() == 4 && tensor.size(0) == B && tensor.size(1) == CH &&
                         tensor.size(2) == H && tensor.size(3) == W,
-                    "Tensor to prefetch does not match the input image shape");
+                    "Tensor to copy does not match the input image shape");
 
-        const size_t firstTensorRange = prefetchPointers.size();
+        const size_t firstTensorRange = copyPointers.size();
         const size_t scalarSize       = c10::elementSize(tensor.scalar_type());
         auto *tensorData              = static_cast<uint8_t *>(tensor.data_ptr());
 
@@ -81,8 +80,7 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
             const size_t lastTileRow =
                 std::min(tileRowEnd, batchTileRowOffset + tileRowsPerImage) - batchTileRowOffset;
 
-            // Prefetch only the rows owned by this device. Halo reads remain demand-driven so
-            // adjacent devices never issue prefetches for overlapping logical ranges.
+            // Copy only the rows owned by this device so logical ranges never overlap.
             const size_t firstRow = firstTileRow * kImageBlockHeight;
             const size_t lastRow =
                 std::min(lastTileRow * kImageBlockHeight, static_cast<size_t>(H));
@@ -94,57 +92,18 @@ appendImagePrefetchRanges(std::vector<void *> &prefetchPointers,
                 auto *pointer          = tensorData + elementOffset * scalarSize;
                 const size_t byteCount = rowCount * static_cast<size_t>(W) * scalarSize;
 
-                if (prefetchPointers.size() > firstTensorRange) {
+                if (copyPointers.size() > firstTensorRange) {
                     auto *previousEnd =
-                        static_cast<uint8_t *>(prefetchPointers.back()) + prefetchSizes.back();
+                        static_cast<uint8_t *>(copyPointers.back()) + copySizes.back();
                     if (previousEnd == pointer) {
-                        prefetchSizes.back() += byteCount;
+                        copySizes.back() += byteCount;
                         continue;
                     }
                 }
-                prefetchPointers.emplace_back(pointer);
-                prefetchSizes.emplace_back(byteCount);
+                copyPointers.emplace_back(pointer);
+                copySizes.emplace_back(byteCount);
             }
         }
-    }
-}
-
-// Prepare preserved inputs and fully overwritten outputs on the image kernels' tile rows.
-// Each current compute stream is ordered after its device's prefetches before returning.
-inline void
-prefetchImages(const torch::TensorList &inputs, const torch::TensorList &outputs) {
-    TORCH_CHECK(!inputs.empty() || !outputs.empty(), "Image prefetch requires at least one image");
-    const auto &image = inputs.empty() ? outputs.front() : inputs.front();
-    const int B       = image.size(0);
-    const int CH      = image.size(1);
-    const int H       = image.size(2);
-    const int W       = image.size(3);
-
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream         = c10::cuda::getCurrentCUDAStream(deviceId);
-        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
-        cudaEvent_t prefetchEvent;
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&prefetchEvent, cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, stream));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
-        const auto chunk = imageBlockChunk(B, H, W, deviceId);
-        if (chunk.blockCount) {
-            std::vector<void *> pointers;
-            std::vector<size_t> sizes;
-            appendImagePrefetchRanges(
-                pointers, sizes, inputs, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            memPrefetchBatchAsync(pointers, sizes, deviceId, prefetchStream);
-
-            pointers.clear();
-            sizes.clear();
-            appendImagePrefetchRanges(
-                pointers, sizes, outputs, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
-            memDiscardAndPrefetchBatchAsync(pointers, sizes, deviceId, prefetchStream);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
-        C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
     }
 }
 
