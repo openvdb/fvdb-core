@@ -151,6 +151,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
+    fvdb/detail/utils/cuda/Utils.cu
 )
 
 # Build library
