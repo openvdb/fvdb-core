@@ -52,9 +52,10 @@ def fused_l1_ssim_loss(
     Computes ``torch.lerp(fused_l1_loss(img1, img2), 1 - ssim(img1, img2),
     ssim_weight)`` using SSIM's default ``same`` padding. Both inputs must be
     nonempty NCHW images with identical shapes. Predictions must be float32 on
-    CUDA or DGX; float32 or uint8 targets must be on the prediction device. When
-    ``normalize_target=True``, target values are divided by 255 inside the
-    forward and backward kernels without allocating a normalized target tensor.
+    CUDA or DGX; float32, uint8, or uint16 targets must be on the prediction device.
+    When ``normalize_target=True``, uint16 target values are divided by 65535;
+    float32 and uint8 target values are divided by 255. Normalization happens inside
+    the forward and backward kernels without allocating a normalized target tensor.
     Noncontiguous inputs are copied to contiguous NCHW storage.
 
     Transfer CPU targets explicitly with
@@ -76,9 +77,10 @@ def fused_l1_ssim_loss(
 
     Args:
         img1: Predicted images of shape ``(B, C, H, W)``.
-        img2: Float32 or uint8 target images with the same shape and device as ``img1``.
+        img2: Float32, uint8, or uint16 target images with the same shape and device as ``img1``.
         ssim_weight: Scalar interpolation weight for the SSIM loss.
-        normalize_target: Divide target values by 255 before computing the loss.
+        normalize_target: Divide uint16 target values by 65535, or float32 and uint8
+            target values by 255, before computing the loss.
             Defaults to ``False``, which uses target values unchanged.
 
     Returns:

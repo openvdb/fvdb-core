@@ -39,7 +39,9 @@
 
 #include <cooperative_groups.h>
 
+#include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 namespace fvdb {
@@ -91,6 +93,14 @@ getPixelValue(const scalar_t *img, int b, int c, int y, int x, int CH, int H, in
         return 0.0f;
     }
     return img[b * CH * H * W + c * H * W + y * W + x];
+}
+
+template <typename scalar_t>
+__device__ __forceinline__ float
+normalizeTarget(float value) {
+    // Float targets retain the existing 8-bit normalization convention.
+    constexpr float divisor = std::is_same_v<scalar_t, uint16_t> ? 65535.0f : 255.0f;
+    return value / divisor;
 }
 
 // ------------------------------------------
@@ -163,7 +173,7 @@ fusedL1SSIMKernel(int localToGlobalOffset,
                     float X = getPixelValue(img1, bIdx, c, gy, gx, CH, H, W);
                     float Y = getPixelValue(img2, bIdx, c, gy, gx, CH, H, W);
                     if (normalize_target) {
-                        Y /= 255.0f;
+                        Y = normalizeTarget<scalar_t>(Y);
                     }
 
                     sTile[local_y][local_x][0] = X;
@@ -398,7 +408,7 @@ fusedL1SSIMBackwardKernel(int localToGlobalOffset,
             p1 = getPixelValue(img1, bIdx, c, pix_y, pix_x, CH, H, W);
             p2 = getPixelValue(img2, bIdx, c, pix_y, pix_x, CH, H, W);
             if (normalize_target) {
-                p2 /= 255.0f;
+                p2 = normalizeTarget<scalar_t>(p2);
             }
         }
 
@@ -523,9 +533,11 @@ checkImages(const torch::Tensor &img1, const torch::Tensor &img2) {
                       "Fused L1/SSIM requires identical image shapes");
     TORCH_CHECK_VALUE(img1.device() == img2.device(),
                       "Fused L1/SSIM requires the target on the prediction device");
-    TORCH_CHECK_VALUE(img1.scalar_type() == torch::kFloat && (img2.scalar_type() == torch::kFloat ||
-                                                              img2.scalar_type() == torch::kUInt8),
-                      "Fused L1/SSIM requires float32 predictions and float32 or uint8 targets");
+    TORCH_CHECK_VALUE(
+        img1.scalar_type() == torch::kFloat &&
+            (img2.scalar_type() == torch::kFloat || img2.scalar_type() == torch::kUInt8 ||
+             img2.scalar_type() == torch::kUInt16),
+        "Fused L1/SSIM requires float32 predictions and float32, uint8, or uint16 targets");
     TORCH_CHECK_VALUE(img1.is_contiguous() && img2.is_contiguous(),
                       "Fused L1/SSIM expects contiguous NCHW storage");
     TORCH_CHECK_VALUE(img1.numel(), "Fused L1/SSIM requires nonempty image batches");
@@ -596,7 +608,8 @@ forwardTiles(const torch::Tensor &img1,
                            normalize_target);
                    }),
                    at::kFloat,
-                   at::kByte);
+                   at::kByte,
+                   at::kUInt16);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
@@ -635,7 +648,8 @@ backwardTiles(const torch::Tensor &img1,
                            normalize_target);
                    }),
                    at::kFloat,
-                   at::kByte);
+                   at::kByte,
+                   at::kUInt16);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
