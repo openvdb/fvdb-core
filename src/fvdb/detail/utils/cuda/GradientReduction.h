@@ -46,8 +46,10 @@ DeviceLists makeDeviceLists(int64_t numCameras,
                             std::optional<int64_t> numActiveTiles = std::nullopt);
 
 // Reduce in place into each device's owned slice of its local gradient buffer.
-// Inputs must come from makeLocalGradient<Flatten>(). Flatten uses deviceChunk(numel, rank);
-// otherwise each camera uses deviceChunk(N, rank) and requires its sorted contributor list.
+// Inputs must come from makeLocalGradient<Flatten>(). Flatten uses partition::range(numel, rank);
+// otherwise each camera uses partition::range(N, rank) and requires its sorted contributor list.
+// Dense local gradients are packed into equal NCCL slots only when balanced ranges have internal
+// padding; restoration to logical offsets is queued on the current streams after reduction.
 // Per-camera reduction uses NCCL reduce-scatter for all-device contributors; all other cameras'
 // send/recv transfers share one NCCL group. Noncontributors must have zero gradients for that
 // camera. cameraOffsets optionally gives each device's first local camera. Its logical tensor

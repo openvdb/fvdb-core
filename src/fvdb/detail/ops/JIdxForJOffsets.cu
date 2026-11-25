@@ -102,7 +102,7 @@ jIdxForJOffsetsPrivateUse1(torch::Tensor joffsets, int64_t numElements) {
 
         size_t deviceJOffsetsStart, deviceJOffsetsCount;
         std::tie(deviceJOffsetsStart, deviceJOffsetsCount) =
-            deviceChunk(joffsets.size(0) - 1, deviceId);
+            partition::range(joffsets.size(0) - 1, deviceId);
         size_t deviceJOffsetsEnd = deviceJOffsetsStart + deviceJOffsetsCount;
 
         for (auto i = deviceJOffsetsStart; i < deviceJOffsetsEnd; ++i) {

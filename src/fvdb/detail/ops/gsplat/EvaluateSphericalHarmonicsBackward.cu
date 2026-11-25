@@ -927,7 +927,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (computeDLossDWorldToCamMatrices) {
                 // Use the compute stream so the captured cleanup stream follows the kernels and
@@ -973,7 +973,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 const dim3 NUM_BLOCKS(GET_BLOCKS(elementCount * D, DEFAULT_BLOCK_DIM), C);
@@ -1039,7 +1039,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 const auto [elementOffset, elementCount] =
-                    deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
+                    partition::range(dLossDWorldToCamMatrices.numel(), deviceId);
                 if (elementCount == 0) {
                     continue;
                 }
@@ -1098,7 +1098,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 std::vector<void *> prefetchPtrs;
@@ -1126,7 +1126,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);

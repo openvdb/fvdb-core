@@ -423,7 +423,7 @@ launchForwardPrivateUse1(const torch::Tensor &means,
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+            partition::aligned_range(tileAlignment, tileCount, deviceId);
         if (deviceTileCount > 0) {
             launchForwardKernel<NUM_CHANNELS, Camera>(means,
                                                       quats,

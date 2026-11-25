@@ -16,7 +16,6 @@
 
 namespace fvdb::detail::ops {
 
-using fvdb::detail::deviceChunk;
 using fvdb::detail::mergeStreams;
 
 // Internal dispatch template (specializations defined below).
@@ -203,7 +202,7 @@ dispatchRelocateGaussians<torch::kPrivateUse1>(const torch::Tensor &logScales,  
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceOffset, deviceSize;
-        std::tie(deviceOffset, deviceSize) = deviceChunk(N, deviceId);
+        std::tie(deviceOffset, deviceSize) = partition::range(N, deviceId);
 
         if (deviceSize > 0) {
             launchGaussianRelocation<float>(logScales.contiguous(),

@@ -707,7 +707,7 @@ launchRasterizeForwardKernels(
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+            partition::aligned_range(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             auto args =
                 RasterizeForwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>(

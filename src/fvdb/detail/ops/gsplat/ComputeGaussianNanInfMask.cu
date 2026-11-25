@@ -182,7 +182,7 @@ dispatchComputeGaussianNanInfMask<torch::kPrivateUse1>(const fvdb::JaggedTensor 
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceOffset, deviceSize;
-        std::tie(deviceOffset, deviceSize) = deviceChunk(N, deviceId);
+        std::tie(deviceOffset, deviceSize) = partition::range(N, deviceId);
 
         const size_t NUM_BLOCKS = GET_BLOCKS(deviceSize, DEFAULT_BLOCK_DIM);
 

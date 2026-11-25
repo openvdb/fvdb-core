@@ -1225,7 +1225,7 @@ callRasterizeBackwardPrivateUse1(
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+            partition::aligned_range(tileAlignment, tileCount, deviceId);
 
         std::optional<int64_t> numLocalCameras;
         if constexpr (!IS_PACKED) {
@@ -1318,7 +1318,8 @@ callRasterizeBackwardPrivateUse1(
             if constexpr (!IS_PACKED) {
                 // Projection and SH backward consume the same Gaussian shard in every camera.
                 int64_t gaussianOffset, gaussianCount;
-                std::tie(gaussianOffset, gaussianCount) = deviceChunk(output.size(1), deviceId);
+                std::tie(gaussianOffset, gaussianCount) =
+                    partition::range(output.size(1), deviceId);
                 if (gaussianCount > 0) {
                     for (const auto cameraId: c10::irange(output.size(0))) {
                         prefetchPointers.emplace_back(output.data_ptr<ScalarType>() +
@@ -1330,7 +1331,7 @@ callRasterizeBackwardPrivateUse1(
                 }
             } else {
                 int64_t elementOffset, elementCount;
-                std::tie(elementOffset, elementCount) = deviceChunk(output.numel(), deviceId);
+                std::tie(elementOffset, elementCount) = partition::range(output.numel(), deviceId);
                 if (elementCount > 0) {
                     prefetchPointers.emplace_back(output.data_ptr<ScalarType>() + elementOffset);
                     prefetchSizes.emplace_back(elementCount * sizeof(ScalarType));

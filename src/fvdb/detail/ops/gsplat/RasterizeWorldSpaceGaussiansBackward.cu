@@ -617,7 +617,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+            partition::aligned_range(tileAlignment, tileCount, deviceId);
 
         dMeansLocals[deviceId]     = makeLocalGradient(means, deviceId, stream);
         dQuatsLocals[deviceId]     = makeLocalGradient(quats, deviceId, stream);
@@ -667,7 +667,8 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         std::vector<void *> prefetchPointers;
         std::vector<size_t> prefetchSizes;
         for (const torch::Tensor &outTensor: gaussianOutputs) {
-            const auto [elementOffset, elementCount] = deviceChunk(outTensor.numel(), deviceId);
+            const auto [elementOffset, elementCount] =
+                partition::range(outTensor.numel(), deviceId);
             if (elementCount > 0) {
                 prefetchPointers.emplace_back(outTensor.data_ptr<float>() + elementOffset);
                 prefetchSizes.emplace_back(elementCount * sizeof(float));
@@ -676,7 +677,7 @@ launchBackwardPrivateUse1(const torch::Tensor &means,
         for (const torch::Tensor &outTensor: cameraOutputs) {
             // SH backward consumes the same Gaussian shard in every camera.
             int64_t gaussianOffset, gaussianCount;
-            std::tie(gaussianOffset, gaussianCount) = deviceChunk(outTensor.size(1), deviceId);
+            std::tie(gaussianOffset, gaussianCount) = partition::range(outTensor.size(1), deviceId);
             if (gaussianCount > 0) {
                 for (const auto cameraId: c10::irange(outTensor.size(0))) {
                     prefetchPointers.emplace_back(outTensor.data_ptr<float>() +

@@ -467,7 +467,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 std::vector<void *> prefetchPtrs;
@@ -529,7 +529,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t deviceProblemOffset, deviceProblemSize;
-            std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+            std::tie(deviceProblemOffset, deviceProblemSize) = partition::range(N, deviceId);
 
             if (worldToCamMatricesRequiresGrad) {
                 dLossDWorldToCamMatricesLocals[deviceId] =
@@ -646,7 +646,7 @@ dispatchProjectGaussiansAnalyticBwd<torch::kPrivateUse1>(
             std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 const auto [elementOffset, elementCount] =
-                    deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
+                    partition::range(dLossDWorldToCamMatrices.numel(), deviceId);
                 if (elementCount == 0) {
                     continue;
                 }

@@ -29,12 +29,13 @@ inline ImageBlockChunk
 imageBlockChunk(int B, int H, int W, int deviceId) {
     // Blocks are flattened with x varying fastest. Split only at full-width tile-row
     // boundaries so each device's NCHW working set can be expressed as compact row ranges.
+    // Balance row counts with the same remainder rule as torch-dgx's image layout copies.
     const size_t blocksPerTileRow = (W + kImageBlockWidth - 1) / kImageBlockWidth;
     const size_t tileRowsPerImage = (H + kImageBlockHeight - 1) / kImageBlockHeight;
     const size_t globalTileRows   = B * tileRowsPerImage;
 
     size_t localTileRowOffset, localTileRowCount;
-    std::tie(localTileRowOffset, localTileRowCount) = deviceChunk(globalTileRows, deviceId);
+    std::tie(localTileRowOffset, localTileRowCount) = partition::range(globalTileRows, deviceId);
 
     return {localTileRowOffset,
             localTileRowCount,

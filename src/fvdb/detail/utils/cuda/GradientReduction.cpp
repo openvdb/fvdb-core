@@ -15,8 +15,76 @@
 namespace fvdb::detail {
 namespace {
 
+// Kernels accumulate in dense logical order. NCCL requires equal-sized rank slots,
+// so pack balanced ranges locally only when padding occurs between nonempty ranks.
+// Restore each reduced range at its logical offset for copyLocalGradients().
+void
+reduceDenseGradients(const std::vector<torch::Tensor> &paddedGradients,
+                     int64_t numElements,
+                     int64_t alignment) {
+    const int64_t paddedNumElements = paddedGradients.front().numel();
+    const int64_t shardSize         = paddedNumElements / c10::cuda::device_count();
+    const bool needsPacking =
+        partition::has_internal_padding(numElements, alignment, c10::cuda::device_count());
+    auto inputs = paddedGradients;
+    std::vector<torch::Tensor> outputs(c10::cuda::device_count());
+    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+        if (needsPacking) {
+            C10_CUDA_CHECK(cudaSetDevice(deviceId));
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            inputs[deviceId] =
+                torch::empty({paddedNumElements}, paddedGradients[deviceId].options());
+            const size_t elementSize = paddedGradients[deviceId].element_size();
+            const auto *source =
+                static_cast<const char *>(paddedGradients[deviceId].const_data_ptr());
+            auto *target = static_cast<char *>(inputs[deviceId].data_ptr());
+            // Copy contiguous ranges, avoiding per-element division in a packing kernel.
+            for (const auto rank: c10::irange(c10::cuda::device_count())) {
+                int64_t offset, count;
+                std::tie(offset, count) = partition::aligned_range(alignment, numElements, rank);
+                auto *slot              = target + rank * shardSize * elementSize;
+                if (count) {
+                    C10_CUDA_CHECK(cudaMemcpyAsync(slot,
+                                                   source + offset * elementSize,
+                                                   count * elementSize,
+                                                   cudaMemcpyDeviceToDevice,
+                                                   stream));
+                }
+                if (count < shardSize) {
+                    C10_CUDA_CHECK(cudaMemsetAsync(
+                        slot + count * elementSize, 0, (shardSize - count) * elementSize, stream));
+                }
+            }
+        }
+        outputs[deviceId] = inputs[deviceId].narrow(0, deviceId * shardSize, shardSize);
+    }
+    torch::cuda::nccl::reduce_scatter(inputs, outputs);
+    if (needsPacking) {
+        for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
+            int64_t offset, count;
+            std::tie(offset, count) = partition::aligned_range(alignment, numElements, deviceId);
+            if (count) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                auto stream              = c10::cuda::getCurrentCUDAStream(deviceId);
+                const size_t elementSize = paddedGradients[deviceId].element_size();
+                auto *target = static_cast<char *>(paddedGradients[deviceId].data_ptr());
+                C10_CUDA_CHECK(cudaMemcpyAsync(target + offset * elementSize,
+                                               outputs[deviceId].const_data_ptr(),
+                                               count * elementSize,
+                                               cudaMemcpyDeviceToDevice,
+                                               stream));
+            }
+        }
+    }
+    // Packing buffers use the current CUDA streams for allocation, reduction, and copies;
+    // the caching allocator keeps them alive until those uses complete.
+}
+
 void
 reduceFlattenedGradients(const std::vector<torch::Tensor> &localGradients) {
+    TORCH_CHECK(static_cast<int64_t>(localGradients.size()) == c10::cuda::device_count() &&
+                    !localGradients.empty(),
+                "Flattened gradients require one local buffer per CUDA device");
     const int64_t numElements = localGradients.front().numel();
     if (numElements == 0) {
         return;
@@ -25,7 +93,6 @@ reduceFlattenedGradients(const std::vector<torch::Tensor> &localGradients) {
     const int64_t shardSize = localGradientShardSize(numElements, c10::cuda::device_count());
     const int64_t paddedNumElements = shardSize * c10::cuda::device_count();
     std::vector<torch::Tensor> paddedGradients(c10::cuda::device_count());
-    std::vector<torch::Tensor> reducedShards(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         const auto &localGradient = localGradients[deviceId];
         TORCH_CHECK(
@@ -39,13 +106,11 @@ reduceFlattenedGradients(const std::vector<torch::Tensor> &localGradients) {
             "Local gradient storage must match the padded reduction size; use makeLocalGradient()");
         // Expose the allocation's zeroed tail without copying or changing the logical gradient.
         paddedGradients[deviceId] = localGradient.as_strided({paddedNumElements}, {1});
-        reducedShards[deviceId] =
-            paddedGradients[deviceId].narrow(0, deviceId * shardSize, shardSize);
     }
 
     // NCCL supports in-place reduce-scatter when each receive buffer is its rank's input slice.
     // Ranks with no logical elements still participate using their zero-filled padded slice.
-    torch::cuda::nccl::reduce_scatter(paddedGradients, reducedShards);
+    reduceDenseGradients(paddedGradients, numElements, 1);
 }
 
 struct GradientTransfer {
@@ -124,7 +189,7 @@ reduceCameraGradients(const std::vector<torch::Tensor> &localGradients,
                         gradient.size(0) <= numCameras - firstCamera,
                     "Local camera range must be within the global camera dimension");
         int64_t gaussianCount;
-        std::tie(std::ignore, gaussianCount) = deviceChunk(numGaussians, deviceId);
+        std::tie(std::ignore, gaussianCount) = partition::range(numGaussians, deviceId);
         const int64_t storageElements =
             gradient.size(0) * cameraSize +
             (numCameras - gradient.size(0)) * gaussianCount * elementsPerGaussian;
@@ -151,7 +216,7 @@ reduceCameraGradients(const std::vector<torch::Tensor> &localGradients,
     std::vector<GradientAccumulation> accumulations;
 
     // Prepare all point-to-point transfers and receive buffers before entering the NCCL group.
-    // Cameras with contributions on every device use reduce-scatter directly.
+    // Cameras with contributions on every device use reduce-scatter with balanced logical ranges.
     for (const auto cameraId: c10::irange(numCameras)) {
         const auto &sources = deviceLists[cameraId];
         if (sources.empty()) {
@@ -159,20 +224,18 @@ reduceCameraGradients(const std::vector<torch::Tensor> &localGradients,
         }
         if (static_cast<int64_t>(sources.size()) == c10::cuda::device_count()) {
             std::vector<torch::Tensor> inputs(c10::cuda::device_count());
-            std::vector<torch::Tensor> outputs(c10::cuda::device_count());
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 const int64_t firstCamera = cameraOffsets.empty() ? 0 : cameraOffsets[deviceId];
                 inputs[deviceId]          = localGradients[deviceId].as_strided(
                     {cameraSize}, {1}, (cameraId - firstCamera) * cameraSize);
-                outputs[deviceId] = inputs[deviceId].narrow(0, deviceId * shardSize, shardSize);
             }
-            torch::cuda::nccl::reduce_scatter(inputs, outputs);
+            reduceDenseGradients(inputs, numGaussians * elementsPerGaussian, elementsPerGaussian);
             continue;
         }
 
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             int64_t gaussianOffset, gaussianCount;
-            std::tie(gaussianOffset, gaussianCount) = deviceChunk(numGaussians, deviceId);
+            std::tie(gaussianOffset, gaussianCount) = partition::range(numGaussians, deviceId);
             if (gaussianCount == 0) {
                 continue;
             }
@@ -259,7 +322,7 @@ makeDeviceLists(int64_t numCameras,
     for (const auto deviceId: c10::irange(deviceCount)) {
         int64_t tileOffset, deviceTileCount;
         std::tie(tileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId, deviceCount);
+            partition::aligned_range(tileAlignment, tileCount, deviceId, deviceCount);
         const auto [firstCamera, cameraCount] = cameraRangeForTiles(
             numCameras, tilesPerCamera, tileOffset, deviceTileCount, numActiveTiles.has_value());
         for (const auto cameraId: c10::irange(firstCamera, firstCamera + cameraCount)) {
@@ -298,7 +361,7 @@ copyLocalGradients(const std::vector<torch::Tensor> &localGradients,
     const size_t elementSize    = outputGradient.element_size();
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         int64_t shardOffset, shardSize;
-        std::tie(shardOffset, shardSize) = deviceChunk(partitionSize, deviceId);
+        std::tie(shardOffset, shardSize) = partition::range(partitionSize, deviceId);
         if (shardSize == 0) {
             continue;
         }

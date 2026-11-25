@@ -181,7 +181,7 @@ dispatchCreateNanoGridFromDense<torch::kPrivateUse1>(int64_t batchSize,
         cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
         size_t deviceOffset, deviceVolume;
-        std::tie(deviceOffset, deviceVolume) = deviceChunk(volume, deviceId);
+        std::tie(deviceOffset, deviceVolume) = partition::range(volume, deviceId);
 
         constexpr int64_t kNumThreads = DEFAULT_BLOCK_DIM;
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceVolume, kNumThreads);

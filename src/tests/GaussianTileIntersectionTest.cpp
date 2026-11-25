@@ -3,7 +3,7 @@
 
 #include <fvdb/detail/ops/gsplat/BuildSparseGaussianTileLayout.h>
 #include <fvdb/detail/ops/gsplat/IntersectGaussianTiles.h>
-#include <fvdb/detail/utils/cuda/Utils.cuh>
+#include <fvdb/detail/utils/cuda/PartitionUtils.h>
 #include <fvdb/detail/utils/gsplat/GaussianIntersectionRange.h>
 
 #include <torch/types.h>
@@ -99,39 +99,45 @@ TEST(GaussianIntersectionRangeTest, DevicePartitionsCoverEachIntersectionExactly
             for (uint32_t camera = 0; camera < numCameras; ++camera) {
                 cameraIds.insert(cameraIds.end(), packed ? camera % 3 : 3, camera);
             }
-            for (const uint32_t totalTiles: {1u, 3u, 7u}) {
-                const int64_t totalKeys = numCameras * totalTiles;
-                for (const int deviceCount: {1, 2, 3, 4, 8}) {
-                    SCOPED_TRACE(::testing::Message()
-                                 << "packed " << packed << ", cameras " << numCameras << ", tiles "
-                                 << totalTiles << ", devices " << deviceCount);
-                    std::vector<int> visits(cameraIds.size() * totalTiles, 0);
-                    for (int device = 0; device < deviceCount; ++device) {
-                        // Explicit device count exercises production partitioning on the CPU,
-                        // including uneven splits and more devices than tile keys.
-                        const auto [keyStart, keyCount] =
-                            fvdb::detail::deviceAlignedChunk(1, totalKeys, device, deviceCount);
-                        const auto range = fvdb::detail::ops::gaussianRangeForTileKeys(
-                            keyStart,
-                            keyStart + keyCount,
-                            totalTiles,
-                            packed ? cameraIds.size() : 3,
-                            packed ? cameraIds.data() : nullptr);
-                        checkGaussianRange(
-                            keyStart, keyStart + keyCount, totalTiles, cameraIds, range);
-                        for (uint32_t gaussian = range.offset;
-                             gaussian < range.offset + range.count;
-                             ++gaussian) {
-                            for (uint32_t tile = 0; tile < totalTiles; ++tile) {
-                                const size_t key =
-                                    static_cast<size_t>(cameraIds[gaussian]) * totalTiles + tile;
-                                if (key >= keyStart && key < keyStart + keyCount) {
-                                    ++visits[gaussian * totalTiles + tile];
+            for (const uint32_t tileAlignment: {1u, 3u}) {
+                for (const uint32_t tileRows: {1u, 3u, 7u}) {
+                    const uint32_t totalTiles = tileRows * tileAlignment;
+                    const int64_t totalKeys   = numCameras * totalTiles;
+                    for (const int deviceCount: {1, 2, 3, 4, 8}) {
+                        SCOPED_TRACE(::testing::Message()
+                                     << "packed " << packed << ", cameras " << numCameras
+                                     << ", tiles " << totalTiles << ", alignment " << tileAlignment
+                                     << ", devices " << deviceCount);
+                        std::vector<int> visits(cameraIds.size() * totalTiles, 0);
+                        for (int device = 0; device < deviceCount; ++device) {
+                            // Explicit device count exercises production partitioning on the CPU,
+                            // including uneven splits and more devices than tile rows.
+                            size_t keyStart, keyCount;
+                            std::tie(keyStart, keyCount) = fvdb::detail::partition::aligned_range(
+                                tileAlignment, totalKeys, device, deviceCount);
+                            const auto range = fvdb::detail::ops::gaussianRangeForTileKeys(
+                                keyStart,
+                                keyStart + keyCount,
+                                totalTiles,
+                                packed ? cameraIds.size() : 3,
+                                packed ? cameraIds.data() : nullptr);
+                            checkGaussianRange(
+                                keyStart, keyStart + keyCount, totalTiles, cameraIds, range);
+                            for (uint32_t gaussian = range.offset;
+                                 gaussian < range.offset + range.count;
+                                 ++gaussian) {
+                                for (uint32_t tile = 0; tile < totalTiles; ++tile) {
+                                    const size_t key =
+                                        static_cast<size_t>(cameraIds[gaussian]) * totalTiles +
+                                        tile;
+                                    if (key >= keyStart && key < keyStart + keyCount) {
+                                        ++visits[gaussian * totalTiles + tile];
+                                    }
                                 }
                             }
                         }
+                        EXPECT_EQ(visits, std::vector<int>(visits.size(), 1));
                     }
-                    EXPECT_EQ(visits, std::vector<int>(visits.size(), 1));
                 }
             }
         }

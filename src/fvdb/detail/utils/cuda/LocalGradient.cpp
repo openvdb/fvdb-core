@@ -92,8 +92,7 @@ makeLocalGradient(const torch::Tensor &tensor,
 
         auto receiveSizes = tensor.sizes().vec();
         receiveSizes[0]   = tensor.size(0) - cameraCount;
-        receiveSizes[1] =
-            std::min(shardSize, std::max(int64_t{0}, tensor.size(1) - deviceId * shardSize));
+        receiveSizes[1]   = partition::count(tensor.size(1), 1, deviceCount, deviceId);
         const int64_t receiveNumElements = checkedNumElements(receiveSizes);
         TORCH_CHECK(paddedNumElements <= std::numeric_limits<int64_t>::max() - receiveNumElements,
                     "Local gradient allocation size overflows int64_t");
