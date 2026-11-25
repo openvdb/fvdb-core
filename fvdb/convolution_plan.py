@@ -32,6 +32,7 @@ _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
 _TRANSFORM_COMPATIBILITY_ATOL = 1.0e-6
 _TRANSFORM_COMPATIBILITY_RTOL = 1.0e-6
 _WARNED_INCOMPLETE_COVERAGE_GEOMETRIES: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
+_WARNED_MASKED_IGEMM_FALLBACKS: set[str] = set()
 _DENSE_BACKEND_DISABLED_MESSAGE = (
     "The dense convolution backend is disabled because it does not yet implement the canonical sparse geometry "
     "and public transposed-weight layout; use backend='default' or backend='gather_scatter'."
@@ -653,6 +654,24 @@ def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, 
     return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype, device)
 
 
+def _warn_masked_igemm_fallback(dtype: torch.dtype, device: torch.device) -> None:
+    """Warn, once per process for each reason, that a masked_igemm plan ran on gather-scatter."""
+    if dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        reason = f"{dtype} inputs"
+    else:
+        major, minor = torch.cuda.get_device_capability(device)
+        reason = f"compute capability {major}.{minor} (the kernels need 8.0 or newer)"
+    if reason in _WARNED_MASKED_IGEMM_FALLBACKS:
+        return
+    _WARNED_MASKED_IGEMM_FALLBACKS.add(reason)
+    warnings.warn(
+        f"backend='masked_igemm' does not cover {reason}; running gather-scatter instead. "
+        "Use float16, bfloat16 or float32 on an SM80+ GPU to run the masked_igemm kernels.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 _Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend | _MaskedIGemmBackend
 
 
@@ -1264,6 +1283,7 @@ class ConvolutionPlan:
                 if fuse:
                     bias = None
             else:
+                _warn_masked_igemm_fallback(dtype, data.jdata.device)
                 topology = self._masked_igemm_fallback(backend)
                 out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, self._transposed)
 

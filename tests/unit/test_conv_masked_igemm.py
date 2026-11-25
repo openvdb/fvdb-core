@@ -14,12 +14,13 @@ import contextlib
 import math
 import os
 import unittest
+import warnings
 
 import torch
 from parameterized import parameterized
 
 import fvdb
-from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp
+from fvdb import ConvolutionPlan, GridBatch, JaggedTensor, _fvdb_cpp, convolution_plan
 from fvdb.convolution_plan import _MaskedIGemmBackend, _MatmulBackend
 from fvdb.functional._dispatch import _get_grid_data
 
@@ -297,6 +298,21 @@ class TestMaskedIGemm(unittest.TestCase):
             yr = ref_plan.execute(grid.jagged_like(x), w).jdata
         torch.testing.assert_close(y, yr)
         self.assertIn("gather_scatter", plan._backend.fallback)
+
+    def test_fallback_warns_once(self):
+        grid = _random_grid(1500, 10)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        x = grid.jagged_like(torch.randn(grid.total_voxels, 16, device="cuda", dtype=torch.float64))
+        w = torch.randn(16, 16, 3, 3, 3, device="cuda", dtype=torch.float64)
+        convolution_plan._WARNED_MASKED_IGEMM_FALLBACKS.clear()
+        with self.assertWarnsRegex(UserWarning, r"torch\.float64 inputs; running gather-scatter") as cm:
+            plan.execute(x, w)
+        self.assertEqual(os.path.basename(cm.filename), os.path.basename(__file__))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            plan.execute(x, w)
+            plan.execute(grid.jagged_like(x.jdata.float()), w.float())  # covered: runs natively, no warning
+        self.assertEqual([str(c.message) for c in caught], [])
 
     @parameterized.expand([(True,), (False,)])
     def test_module_bias_and_grad_flags(self, input_requires_grad):
