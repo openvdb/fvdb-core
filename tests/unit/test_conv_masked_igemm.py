@@ -266,9 +266,6 @@ class TestMaskedIGemm(unittest.TestCase):
             ConvolutionPlan.from_grid_batch(5, 1, grid, grid, expert_config=CONFIG)
         with self.assertRaisesRegex(ValueError, "kernel volume"):
             ConvolutionPlan.from_grid_batch_transposed(4, 2, grid, expert_config=CONFIG)
-        cpu = GridBatch.from_ijk(JaggedTensor([torch.randint(0, 8, (100, 3), dtype=torch.int32)]))
-        with self.assertRaisesRegex(ValueError, "CUDA"):
-            ConvolutionPlan.from_grid_batch(3, 2, cpu, expert_config=CONFIG)
 
     @parameterized.expand(
         [((64, 128),), ((128, 64),), ((192, 256),), ((32, 32),), ((96, 64),), ((64, 96),), ((96, 96),)]
@@ -697,6 +694,45 @@ class TestMaskedIGemm(unittest.TestCase):
         report = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG).coverage_report
         expected = ConvolutionPlan.from_grid_batch(3, 1, grid, grid).coverage_report
         self.assertEqual(report, expected)
+
+
+class TestMaskedIGemmCpuFallback(unittest.TestCase):
+    """masked_igemm plans on CPU grids run gather-scatter, with a one-time warning."""
+
+    def test_cpu_grid_runs_gather_scatter(self):
+        gen = torch.Generator(device="cpu").manual_seed(0)
+        grid = GridBatch.from_ijk(
+            JaggedTensor([torch.randint(-8, 8, (400, 3), generator=gen, dtype=torch.int32) for _ in range(2)])
+        )
+        x = torch.randn(grid.total_voxels, 8, generator=gen)
+        w = torch.randn(16, 8, 3, 3, 3, generator=gen)
+        convolution_plan._WARNED_MASKED_IGEMM_FALLBACKS.clear()
+        with self.assertWarnsRegex(UserWarning, r"cpu grids; running gather-scatter") as cm:
+            plan = ConvolutionPlan.from_grid_batch(3, 2, grid, expert_config=CONFIG)
+        self.assertEqual(os.path.basename(cm.filename), os.path.basename(__file__))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            transposed = ConvolutionPlan.from_grid_batch_transposed(
+                3, 2, plan.target_grid_batch, grid, expert_config=CONFIG
+            )
+        self.assertEqual([str(c.message) for c in caught], [])
+        ref = ConvolutionPlan.from_grid_batch(3, 2, grid)
+        ref_t = ConvolutionPlan.from_grid_batch_transposed(3, 2, ref.target_grid_batch, grid)
+
+        def run(p, q, x, w):
+            x = x.clone().requires_grad_(True)
+            w = w.clone().requires_grad_(True)
+            y = p.execute(grid.jagged_like(x), w).jdata
+            z = q.execute(p.target_grid_batch.jagged_like(y), w.transpose(0, 1)).jdata
+            z.square().sum().backward()
+            return y, z, x.grad, w.grad
+
+        got, want = run(plan, transposed, x, w), run(ref, ref_t, x, w)
+        for g, r in zip(got[:3], want[:3]):
+            torch.testing.assert_close(g, r, rtol=0, atol=0)
+        # Separately built CPU gather-scatter plans order each tap's pairs differently, so weight
+        # gradients agree only to float rounding even between two default plans.
+        self.assertLess(((got[3] - want[3]).norm() / want[3].norm()).item(), 1e-5)
 
 
 if __name__ == "__main__":

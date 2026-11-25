@@ -462,13 +462,11 @@ def _validate_pred_gather_igemm_grid_admission(source_grid: GridBatch, target_gr
         raise ValueError(f"PredGatherIGemm supports only batch size 1; got {target_grid.grid_count} target grids.")
 
 
-def _validate_masked_igemm_admission(kernel_size: torch.Tensor, source_grid: GridBatch) -> None:
-    """Admit kernels whose taps fit a 32-bit row mask, on CUDA grids."""
+def _validate_masked_igemm_admission(kernel_size: torch.Tensor) -> None:
+    """Admit kernels whose taps fit a 32-bit row mask."""
     kernel_values = [int(value) for value in kernel_size.tolist()]
     if math.prod(kernel_values) > 32:
         raise ValueError(f"masked_igemm requires a kernel volume <= 32; got {kernel_values}.")
-    if source_grid.device.type != "cuda":
-        raise ValueError("masked_igemm requires a CUDA grid.")
 
 
 def _matmul_weight_matrix(weights: torch.Tensor) -> torch.Tensor:
@@ -654,21 +652,27 @@ def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, 
     return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype, device)
 
 
-def _warn_masked_igemm_fallback(dtype: torch.dtype, device: torch.device) -> None:
-    """Warn, once per process for each reason, that a masked_igemm plan ran on gather-scatter."""
+def _warn_masked_igemm_fallback(reason: str, hint: str, stacklevel: int) -> None:
+    """Warn, once per process for each reason, that a masked_igemm plan runs gather-scatter."""
+    if reason in _WARNED_MASKED_IGEMM_FALLBACKS:
+        return
+    _WARNED_MASKED_IGEMM_FALLBACKS.add(reason)
+    warnings.warn(
+        f"backend='masked_igemm' does not cover {reason}; running gather-scatter instead. {hint}",
+        UserWarning,
+        stacklevel=stacklevel,
+    )
+
+
+def _warn_masked_igemm_input_fallback(dtype: torch.dtype, device: torch.device) -> None:
+    """Warn that inputs the kernels do not cover (dtype or GPU) ran on gather-scatter."""
     if dtype not in (torch.float16, torch.bfloat16, torch.float32):
         reason = f"{dtype} inputs"
     else:
         major, minor = torch.cuda.get_device_capability(device)
         reason = f"compute capability {major}.{minor} (the kernels need 8.0 or newer)"
-    if reason in _WARNED_MASKED_IGEMM_FALLBACKS:
-        return
-    _WARNED_MASKED_IGEMM_FALLBACKS.add(reason)
-    warnings.warn(
-        f"backend='masked_igemm' does not cover {reason}; running gather-scatter instead. "
-        "Use float16, bfloat16 or float32 on an SM80+ GPU to run the masked_igemm kernels.",
-        UserWarning,
-        stacklevel=3,
+    _warn_masked_igemm_fallback(
+        reason, "Use float16, bfloat16 or float32 on an SM80+ GPU to run the masked_igemm kernels.", stacklevel=4
     )
 
 
@@ -884,7 +888,7 @@ class ConvolutionPlan:
             if identity_plan is not None:
                 return identity_plan
             if backend_name == "masked_igemm":
-                _validate_masked_igemm_admission(kernel_size, source_grid)
+                _validate_masked_igemm_admission(kernel_size)
         if target_grid is None:
             target_grid = source_grid.conv_grid(kernel_size, stride)
 
@@ -991,7 +995,7 @@ class ConvolutionPlan:
             if identity_plan is not None:
                 return identity_plan
             if backend_name == "masked_igemm":
-                _validate_masked_igemm_admission(kernel_size, source_grid)
+                _validate_masked_igemm_admission(kernel_size)
         if target_grid is None:
             target_grid = source_grid.conv_transpose_grid(kernel_size, stride)
 
@@ -1283,7 +1287,7 @@ class ConvolutionPlan:
                 if fuse:
                     bias = None
             else:
-                _warn_masked_igemm_fallback(dtype, data.jdata.device)
+                _warn_masked_igemm_input_fallback(dtype, data.jdata.device)
                 topology = self._masked_igemm_fallback(backend)
                 out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, self._transposed)
 
@@ -1528,13 +1532,21 @@ class ConvolutionPlan:
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=kernel, stride=step)
 
         if backend_name == "masked_igemm":
-            _validate_masked_igemm_admission(kernel_size, source_grid)
-            # The topology always maps the forward direction, coarse output rows to fine input rows.
-            fine, coarse = (target_grid, source_grid) if transposed else (source_grid, target_grid)
-            topology = _fvdb_cpp.migemm_build_topology(
-                _get_grid_data(fine), _get_grid_data(coarse), kernel_size, stride
+            _validate_masked_igemm_admission(kernel_size)
+            if source_grid.device.type == "cuda":
+                # The topology always maps the forward direction, coarse output rows to fine input rows.
+                fine, coarse = (target_grid, source_grid) if transposed else (source_grid, target_grid)
+                topology = _fvdb_cpp.migemm_build_topology(
+                    _get_grid_data(fine), _get_grid_data(coarse), kernel_size, stride
+                )
+                return _MaskedIGemmBackend(topology=topology)
+            # The kernels run on CUDA only; other grids get a gather-scatter plan.
+            _warn_masked_igemm_fallback(
+                f"{source_grid.device.type} grids",
+                "Build the plan on CUDA grids to run the masked_igemm kernels.",
+                stacklevel=4,
             )
-            return _MaskedIGemmBackend(topology=topology)
+            backend_name = "gather_scatter"
 
         if backend_name not in ("gather_scatter", "default"):
             raise ValueError(f"Unknown backend: {backend_name!r}")
