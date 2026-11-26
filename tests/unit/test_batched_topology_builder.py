@@ -243,6 +243,22 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
                     f"{msg}: bbox of member {b}",
                 )
 
+    def test_far_flung_voxels_do_not_size_upper_readback_by_bbox(self):
+        # Two voxels at +-1e6 span about 489^3 root tiles of bbox but hold only two upper nodes.
+        # Bounding the upper-node readback by bbox volume alone asked for about 2.8 GB here.
+        coords = [torch.tensor([[-1_000_000] * 3, [1_000_000] * 3], dtype=torch.int32)]
+        grid = _build(coords, "cuda")
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        baseline = torch.cuda.memory_allocated()
+        refined = grid.refined_grid(2)
+        coarsened = grid.coarsened_grid(2)
+        torch.cuda.synchronize()
+        peak = torch.cuda.max_memory_allocated() - baseline
+        self.assertLess(peak, 256 * 1024 * 1024, f"peak device allocation {peak} bytes")
+        self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "far-flung refine x2")
+        self._check_against_expected(coarsened, [_expected_coarsen_ijk(c, 2) for c in coords], "far-flung coarsen x2")
+
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
         # multi-grid handle produced by the batched builder.

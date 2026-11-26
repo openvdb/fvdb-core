@@ -23,8 +23,10 @@
 // lie; the last pass's chunks are assembled into one storage, or adopted directly when there is
 // one.
 //
-// Scratch is allocated through BuilderResource on the caller's stream. The builder is cached per
-// stream, so its pinned staging is allocated once rather than per pass. Checksums are disabled on
+// A pass runs on the device's current torch stream. The builder's scratch is allocated through
+// BuilderResource and the pass's small device tables as torch tensors, both on that stream. The
+// builder is cached per (device, stream), so its pinned staging is allocated once rather than per
+// pass; see cachedTopologyBuilder for what it keeps between passes. Checksums are disabled on
 // the output, matching assembleGridStorage (compaction, concatenation, merge).
 
 #ifndef FVDB_DETAIL_UTILS_NANOVDB_BATCHEDTOPOLOGYBUILDER_CUH
@@ -34,6 +36,7 @@
 #include <fvdb/GridBatchData.h>
 #include <fvdb/GridStorage.h>
 #include <fvdb/TorchDeviceResource.h>
+#include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
 
 #include <nanovdb/GridHandle.h>
@@ -43,6 +46,7 @@
 #include <nanovdb/util/cuda/Morphology.cuh>
 
 #include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <torch/types.h>
 
 #include <cuda_runtime.h>
@@ -51,8 +55,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <memory>
-#include <unordered_map>
+#include <mutex>
+#include <utility>
 #include <vector>
 
 namespace fvdb {
@@ -385,17 +391,37 @@ copyGridHeaders(PassTables t) {
 // Host driver
 // ---------------------------------------------------------------------------------------------
 
-/// The builder for `stream`, created on first use. It is never destroyed, so no device memory is
-/// released after CUDA shuts down, and its pinned host staging is allocated once, not per pass.
-inline TopologyBuilderT &
-cachedTopologyBuilder(cudaStream_t stream) {
-    thread_local auto *builders =
-        new std::unordered_map<cudaStream_t, std::unique_ptr<TopologyBuilderT>>();
-    auto &builder = (*builders)[stream];
-    if (!builder) {
-        builder = std::make_unique<TopologyBuilderT>(stream);
+/// A cached builder and the mutex a builder run holds while it uses it.
+struct CachedTopologyBuilder {
+    std::mutex mutex;
+    std::unique_ptr<TopologyBuilderT> builder;
+};
+
+/// The process's builder for `stream` on `device`, created on first use under that device. The key
+/// needs the device: a null handle names a different default stream on every device, and a
+/// builder's event and scratch belong to the device it was created on. Threads share the entry and
+/// take its mutex for each builder run. Builders are never destroyed, so none is torn down after
+/// CUDA shuts down and the pinned host staging is allocated once rather than per pass. Each
+/// (device, stream) a pass has run on keeps its builder's pinned staging and small per-grid tables
+/// for the life of the process; the densified masks and other per-run scratch are released at the
+/// end of every run.
+inline CachedTopologyBuilder &
+cachedTopologyBuilder(const torch::Device &device, cudaStream_t stream) {
+    TORCH_CHECK(device.is_cuda() && device.has_index(),
+                "cachedTopologyBuilder requires an indexed CUDA device, got ",
+                device);
+    using Key           = std::pair<c10::DeviceIndex, cudaStream_t>;
+    static auto *mutex  = new std::mutex();
+    static auto *cached = new std::map<Key, std::unique_ptr<CachedTopologyBuilder>>();
+    std::lock_guard<std::mutex> lock(*mutex);
+    auto &entry = (*cached)[Key{device.index(), stream}];
+    if (!entry) {
+        c10::cuda::CUDAGuard deviceGuard(device);
+        auto created     = std::make_unique<CachedTopologyBuilder>();
+        created->builder = std::make_unique<TopologyBuilderT>(stream);
+        entry            = std::move(created);
     }
-    return *builder;
+    return *entry;
 }
 
 /// FVDB_TOPOLOGY_MAX_TILES: the most speculative root tiles one builder run takes (default 64,
@@ -455,7 +481,16 @@ sourceFromGridBatch(const GridBatchData &batch) {
         const int64_t leaves = batch.numLeavesAt(i);
         src.grids.push_back(batch.deviceGridPtrAt(i));
         src.leafCounts.push_back(leaves);
-        src.upperCapacity.push_back(leaves > 0 ? rootTilesOverlapping(batch.bboxAt(i)) : 0);
+        // Every upper node holds at least one leaf, so `leaves` also bounds the upper nodes; it
+        // keeps a grid with a few far-flung voxels from sizing the readback by its bbox volume. An
+        // empty bbox on a grid with leaves falls back to `leaves`, so a bad bbox reaches
+        // processedTiles' empty-bbox check rather than failing the capacity check here.
+        int64_t capacity = 0;
+        if (leaves > 0) {
+            const nanovdb::CoordBBox bbox = batch.bboxAt(i);
+            capacity = bbox.empty() ? leaves : std::min(leaves, rootTilesOverlapping(bbox));
+        }
+        src.upperCapacity.push_back(capacity);
     }
     return src;
 }
@@ -521,7 +556,9 @@ readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
 }
 
 /// The speculative root tiles of one output grid, from its source grid's upper-node bounding
-/// boxes, as NanoVDB's RefineGrid, CoarsenGrid and DilateGrid derive them.
+/// boxes, as NanoVDB's RefineGrid, CoarsenGrid and DilateGrid derive them. An upper node with an
+/// empty bbox throws: its leaves would still be processed, and the mask fills would look up a
+/// root tile that was never added.
 inline ProcessedTileMap
 processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPassSpec &pass) {
     namespace topo = nanovdb::tools::cuda::topology::detail;
@@ -529,9 +566,8 @@ processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPass
     using nanovdb::util::morphology::refineCoord;
     ProcessedTileMap tiles;
     for (const nanovdb::CoordBBox &b: uppers) {
-        if (b.empty()) {
-            continue;
-        }
+        TORCH_CHECK(!b.empty(),
+                    "batched topology pass: source grid has an upper node with no bbox");
         switch (pass.op) {
         case TopologyPassSpec::Op::Refine:
             topo::insertProcessedTiles<RootT>(
@@ -603,10 +639,12 @@ buildChunk(const BatchedTopologySource &src,
            const std::vector<ProcessedTileMap> &tiles,
            BatchedTopologyResult &result,
            cudaStream_t stream) {
-    namespace topo            = nanovdb::tools::cuda::topology::detail;
-    using Op                  = TopologyPassSpec::Op;
-    const int32_t n           = last - first;
-    TopologyBuilderT &builder = cachedTopologyBuilder(stream);
+    namespace topo                = nanovdb::tools::cuda::topology::detail;
+    using Op                      = TopologyPassSpec::Op;
+    const int32_t n               = last - first;
+    CachedTopologyBuilder &cached = cachedTopologyBuilder(src.device, stream);
+    std::lock_guard<std::mutex> builderLock(cached.mutex);
+    TopologyBuilderT &builder = *cached.builder;
 
     // 1. Speculative roots.
     std::vector<uint32_t> tileCounts(n);
@@ -691,12 +729,19 @@ buildChunk(const BatchedTopologySource &src,
 }
 
 /// Runs one batched topology pass over all grids of `src`: one host wait for the source roots,
-/// then one per chunk for its node counts.
+/// then one per chunk for its node counts. `stream` must be `src.device`'s current torch stream:
+/// the pass's device tables are torch tensors, allocated and freed on that stream.
 inline BatchedTopologyResult
 runBatchedTopologyPass(const BatchedTopologySource &src,
                        const TopologyPassSpec &pass,
                        cudaStream_t stream) {
-    TORCH_CHECK(src.device.is_cuda(), "batched topology passes require a CUDA device");
+    TORCH_CHECK(src.device.is_cuda() && src.device.has_index(),
+                "batched topology passes require an indexed CUDA device, got ",
+                src.device);
+    c10::cuda::CUDAGuard deviceGuard(src.device);
+    TORCH_CHECK(stream == storageStream(src.device),
+                "batched topology pass: stream must be the current torch stream of ",
+                src.device);
     const int32_t numGrids = int32_t(src.grids.size());
     TORCH_CHECK(numGrids > 0, "batched topology pass requires at least one grid");
     if (pass.op == TopologyPassSpec::Op::BoxDilate) {
