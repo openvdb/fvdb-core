@@ -58,7 +58,8 @@ TEST(AtomicFetchIncrementTest, CudaOneCounterPerWarp) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
     }
-    // stride 0, no skipping: every lane of every warp hits counter 0, so each group is a full warp.
+    // stride 0, no skipping: every lane of every warp is active and targets counter 0, so when the
+    // warp is converged each group is a full warp.
     runIncrements<torch::kCUDA>(1 << 20, 1, 0, 0, torch::kCUDA);
 }
 

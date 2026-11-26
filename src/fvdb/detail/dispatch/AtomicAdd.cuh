@@ -117,6 +117,9 @@ atomic_add_cas_16bit(T *addr, T val) {
 /// CAS loop for half types on older architectures (Half requires sm_70+,
 /// BFloat16 requires sm_80+).
 ///
+/// The host-side instantiation for a non-CPU tag is never executed (device tags only run in
+/// device code); it exists so the __hostdev__ template compiles and is a no-op.
+///
 /// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
 /// @tparam T    The scalar type (float, double, c10::Half, c10::BFloat16, etc.).
 /// @param tg    Tag instance (selects CPU vs GPU path).
@@ -149,7 +152,7 @@ atomic_add(Tag /*tg*/, T *dst, T src) {
 #endif
 }
 
-/// @brief Device-dispatched atomic fetch-and-increment for int32_t, warp-aggregated on GPU.
+/// @brief Device-dispatched int32_t atomic fetch-and-increment, warp-aggregated on GPU (sm_70+).
 ///
 /// Returns a unique pre-increment value per calling thread -- used to assign write positions
 /// in parallel fill passes and to count hits on a small set of counters. On GPU (sm_70+), the
