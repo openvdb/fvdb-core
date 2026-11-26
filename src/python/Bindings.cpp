@@ -692,6 +692,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
                                        return std::nullopt;
                                    return t.reverse->neighborMap;
                                })
+        .def_property_readonly("neighbor_offsets",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.neighborOffsets.defined())
+                                       return std::nullopt;
+                                   return t.neighborOffsets;
+                               })
+        .def_property_readonly("reverse_offsets",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.reverse || !t.reverse->neighborOffsets.defined())
+                                       return std::nullopt;
+                                   return t.reverse->neighborOffsets;
+                               })
         .def_readonly("kernel_volume", &MIGTopo::kernelVolume)
         .def_property_readonly("kernel_size", [](const MIGTopo &t) {
             return std::vector<int>{t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};

@@ -234,8 +234,6 @@ class TestMaskedIGemm(unittest.TestCase):
             ("sparse", (3, 5, 1)),
             ("dense", (17, 1, 1)),
             ("sparse", (19, 1, 1)),
-            ("dense", (5, 5, 5)),
-            ("shell", (7, 7, 7)),
         ]
     )
     def test_staged_builder_matches_scan(self, kind, kernel_size):
@@ -310,23 +308,41 @@ class TestMaskedIGemm(unittest.TestCase):
         finally:
             del os.environ["FVDB_MIGEMM_SPLIT"]
 
+    @staticmethod
+    def _dense_from_compact(nbr, offsets, masks, k):
+        """Expand a compact map (present neighbors in tap order per row) to dense [N, K]."""
+        n, words = masks.shape
+        bits = ((masks.long().unsqueeze(-1) >> torch.arange(32)) & 1).bool().view(n, words * 32)[:, :k]
+        dense = torch.full((n, k), -1, dtype=torch.int32)
+        dense[bits] = nbr
+        assert torch.equal(bits.sum(1), (offsets[1:] - offsets[:-1]).long())
+        return dense
+
     @parameterized.expand([("k5", 5), ("k7", 7), ("k33", (11, 3, 1))])
-    def test_wide_masks_and_order(self, _, kernel_size):
-        grid = _random_grid(2000, 9)
+    def test_wide_compact_map(self, _, kernel_size):
+        grid = _random_grid(1500, 8)
         topo = _build_topology(grid, grid, kernel_size)
-        nbr = topo.neighbor_map.cpu()
-        n, k = nbr.shape
+        ks = kernel_size if isinstance(kernel_size, tuple) else (kernel_size,) * 3
+        k = math.prod(ks)
         words = (k + 31) // 32
         masks = topo.row_masks.cpu()
-        self.assertEqual(tuple(masks.shape), (n, words))
-        bits = torch.zeros(n, words * 32, dtype=torch.bool)
-        bits[:, :k] = nbr >= 0
-        packed = (bits.view(n, words, 32).long() << torch.arange(32)).sum(-1)
-        self.assertTrue(torch.equal(masks.long() & 0xFFFFFFFF, packed))
+        offsets = topo.neighbor_offsets.cpu()
+        self.assertEqual(tuple(masks.shape), (grid.total_voxels, words))
+        self.assertEqual(int(offsets[-1]), topo.neighbor_map.numel())
+        dense = self._dense_from_compact(topo.neighbor_map.cpu(), offsets, masks, k)
+
+        # Every row's neighbors match a direct coordinate lookup, taps in k0-slowest order.
+        ijk = grid.ijk.jdata.cpu()
+        lookup = {tuple(v.tolist()): i for i, v in enumerate(ijk)}
+        pad = [(s - 1) // 2 for s in ks]
+        taps = [(a - pad[0], b - pad[1], c - pad[2]) for a in range(ks[0]) for b in range(ks[1]) for c in range(ks[2])]
+        for o in range(0, ijk.shape[0], 23):
+            expect = [lookup.get((int(ijk[o, 0]) + a, int(ijk[o, 1]) + b, int(ijk[o, 2]) + c), -1) for a, b, c in taps]
+            self.assertEqual(dense[o].tolist(), expect)
 
         # Rows run in non-decreasing Gray rank of the whole mask, tap K-1 most significant.
         def rank(row: int) -> int:
-            m = sum(int(packed[row, w]) << (32 * w) for w in range(words))
+            m = sum((int(masks[row, w]) & 0xFFFFFFFF) << (32 * w) for w in range(words))
             r = 0
             while m:
                 r ^= m
@@ -335,6 +351,24 @@ class TestMaskedIGemm(unittest.TestCase):
 
         ranks = [rank(int(o)) for o in topo.sorted_rows.cpu()]
         self.assertEqual(ranks, sorted(ranks))
+
+    def test_wide_compact_reverse_map(self):
+        # A strided map stores its reverse compactly: input row i lists, in tap order, every output
+        # row o that reads it, so (i, k, o) is a reverse entry exactly when (o, k, i) is a forward one.
+        fine = _random_grid(2000, 9)
+        coarse = fine.conv_grid(5, 2)
+        topo = _build_topology(fine, coarse, 5, 2)
+        fwd = self._dense_from_compact(topo.neighbor_map.cpu(), topo.neighbor_offsets.cpu(), topo.row_masks.cpu(), 125)
+        o, k = (fwd >= 0).nonzero(as_tuple=True)
+        by_input: dict[int, list[tuple[int, int]]] = {}
+        for i, kk, oo in zip(fwd[o, k].tolist(), k.tolist(), o.tolist()):
+            by_input.setdefault(i, []).append((kk, oo))
+        rev = topo.reverse_map.cpu()
+        offsets = topo.reverse_offsets.cpu()
+        self.assertEqual(rev.numel(), o.numel())
+        for i in range(fine.total_voxels):
+            expect = [oo for _, oo in sorted(by_input.get(i, []))]
+            self.assertEqual(rev[offsets[i] : offsets[i + 1]].tolist(), expect)
 
     @parameterized.expand(
         [((64, 128),), ((128, 64),), ((192, 256),), ((32, 32),), ((96, 64),), ((64, 96),), ((96, 96),)]

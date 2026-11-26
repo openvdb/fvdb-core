@@ -367,6 +367,15 @@ def _masked_igemm_degrees(topology: _fvdb_cpp.MaskedIGemmTopology) -> tuple[torc
     A submanifold map stores no reverse because it is symmetric (row o has input i at tap k exactly
     when row i has input o at tap K-1-k), so each voxel's input degree equals its output degree.
     """
+    offsets = topology.neighbor_offsets
+    if offsets is not None:
+        # Kernels of more than 32 taps keep compact maps: degrees are offset differences.
+        output_degrees = (offsets[1:] - offsets[:-1]).long()
+        reverse_offsets = topology.reverse_offsets
+        input_degrees = (
+            output_degrees if reverse_offsets is None else (reverse_offsets[1:] - reverse_offsets[:-1]).long()
+        )
+        return input_degrees, output_degrees
     output_degrees = _row_degrees(topology.neighbor_map)
     reverse = topology.reverse_map
     input_degrees = output_degrees if reverse is None else _row_degrees(reverse)
@@ -386,6 +395,9 @@ def _output_zero_count(backend: "_Backend", transposed: bool = False) -> int | N
         if topology.reverse_map is None:
             # Every row of a submanifold map has its center tap.
             return 0
+        offsets = topology.reverse_offsets if transposed else topology.neighbor_offsets
+        if offsets is not None:
+            return int((offsets[1:] == offsets[:-1]).sum().item())
         return _zero_degree_rows(topology.reverse_map if transposed else topology.neighbor_map)
     if isinstance(backend, _GatherScatterBackend):
         topology = backend.topology

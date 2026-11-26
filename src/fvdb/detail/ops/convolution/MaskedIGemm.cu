@@ -420,7 +420,7 @@ maskedIGemmKernel(T const *__restrict__ A,
         sRows[r]    = o;
         if constexpr (WIDE) {
             for (int w = 0; w < maskWords; ++w) {
-                uint32_t m = o >= 0 ? uint32_t(rowMasks[int64_t(o) * maskWords + w]) : 0u;
+                uint32_t m = o >= 0 ? uint32_t(rowMasks[(int64_t(o) * maskWords + w) * 2]) : 0u;
 #if FVDB_MIGEMM_SM80
                 m = __reduce_or_sync(__activemask(), m);
 #endif
@@ -533,7 +533,16 @@ maskedIGemmKernel(T const *__restrict__ A,
         for (int i = tid; i < BM * chunkN; i += THREADS) {
             int const r = i / chunkN;
             int const o = sRows[r];
-            sNbr[i]     = o >= 0 ? nbr[int64_t(o) * K + sTaps[first + i - r * chunkN]] : -1;
+            int32_t v   = -1;
+            if (o >= 0) {
+                // Compact map: rowMasks holds (mask, base) per 32-tap word (see wideTopology).
+                int const tap    = sTaps[first + i - r * chunkN];
+                int64_t const e  = (int64_t(o) * maskWords + tap / 32) * 2;
+                uint32_t const m = uint32_t(rowMasks[e]);
+                if ((m >> (tap % 32)) & 1u)
+                    v = nbr[rowMasks[e + 1] + __popc(m & ((1u << (tap % 32)) - 1u))];
+            }
+            sNbr[i] = v;
         }
         __syncthreads();
     };
@@ -1008,9 +1017,6 @@ grayRank(uint32_t mask) {
 // of walking the tree. Every tap offset must stay within one leaf (|d| <= 8).
 constexpr int kStagedWidth = VbmCache::kBlockWidth;
 
-// MASKS writes each row's tap mask and Gray rank; kernels of more than 32 taps skip them and
-// derive multi-word masks from the map (wideRowMaskKernel).
-template <bool MASKS>
 __global__ void __launch_bounds__(kStagedWidth)
 stagedNeighborMapKernel(nanovdb::OnIndexGrid const *__restrict__ grid,
                         uint32_t const *__restrict__ firstLeafID,
@@ -1078,19 +1084,15 @@ stagedNeighborMapKernel(nanovdb::OnIndexGrid const *__restrict__ grid,
             auto const &leaf   = leaves[li];
             if (leaf.isActive(off)) {
                 idx = int32_t(base + int64_t(leaf.getValue(off)) - 1);
-                if constexpr (MASKS)
-                    mask |= 1u << k;
+                mask |= 1u << k;
             }
         }
         out[k] = idx;
     }
-    if constexpr (MASKS) {
-        code[row]  = int32_t(grayRank(mask));
-        masks[row] = int32_t(mask);
-    }
+    code[row]  = int32_t(grayRank(mask));
+    masks[row] = int32_t(mask);
 }
 
-template <bool MASKS>
 void
 buildNeighborMapStaged(GridBatchData const &grid,
                        ConvolutionGeometry const &geometry,
@@ -1103,24 +1105,23 @@ buildNeighborMapStaged(GridBatchData const &grid,
         auto const vbm = grid.vbmAt(bi);
         if (vbm.blockCount == 0)
             continue;
-        stagedNeighborMapKernel<MASKS>
-            <<<vbm.blockCount, kStagedWidth, 0, stream>>>(grid.deviceGridPtrAt(bi),
-                                                          vbm.firstLeafID,
-                                                          vbm.jumpMap,
-                                                          vbm.firstOffset,
-                                                          vbm.lastOffset,
-                                                          grid.cumVoxelsAt(bi),
-                                                          geometry,
-                                                          K,
-                                                          nbr,
-                                                          code,
-                                                          masks);
+        stagedNeighborMapKernel<<<vbm.blockCount, kStagedWidth, 0, stream>>>(
+            grid.deviceGridPtrAt(bi),
+            vbm.firstLeafID,
+            vbm.jumpMap,
+            vbm.firstOffset,
+            vbm.lastOffset,
+            grid.cumVoxelsAt(bi),
+            geometry,
+            K,
+            nbr,
+            code,
+            masks);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 }
 
 // Leaf-scan builder: one thread per output voxel, K probes of the feature grid's tree.
-template <bool MASKS>
 void
 buildNeighborMapScan(GridBatchData const &featureGrid,
                      GridBatchData const &outputGrid,
@@ -1141,26 +1142,19 @@ buildNeighborMapScan(GridBatchData const &featureGrid,
                                      auto treeAcc       = acc.grid(batchIdx)->getAccessor();
                                      int64_t const base = acc.voxelOffset(batchIdx);
                                      int32_t *row       = nbr + voxelIdx * K;
-                                     // Captured here: nvcc rejects a first capture inside if
-                                     // constexpr.
-                                     [[maybe_unused]] int32_t *const codeOut = code;
-                                     [[maybe_unused]] int32_t *const maskOut = masks;
-                                     uint32_t mask                           = 0;
+                                     uint32_t mask      = 0;
                                      for (int k = 0; k < K; ++k) {
                                          nanovdb::Coord const probe =
                                              geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
                                          int32_t idx = -1;
                                          if (treeAcc.isActive(probe)) {
                                              idx = int32_t(base + treeAcc.getValue(probe) - 1);
-                                             if constexpr (MASKS)
-                                                 mask |= 1u << k;
+                                             mask |= 1u << k;
                                          }
                                          row[k] = idx;
                                      }
-                                     if constexpr (MASKS) {
-                                         codeOut[voxelIdx] = int32_t(grayRank(mask));
-                                         maskOut[voxelIdx] = int32_t(mask);
-                                     }
+                                     code[voxelIdx]  = int32_t(grayRank(mask));
+                                     masks[voxelIdx] = int32_t(mask);
                                  });
 }
 
@@ -1190,56 +1184,6 @@ rowMaskKernel(int32_t const *__restrict__ map,
         code[row]  = int32_t(grayRank(mask));
         masks[row] = int32_t(mask);
     }
-}
-
-// Kernels of more than 32 taps: masks[row, w] holds taps 32w..32w+31, and keys[j, row] packs
-// Gray-rank words 2j (low) and 2j+1 (high) of the row's whole tap mask into a signed int64 that
-// sorts like the unsigned 64-bit value. A rank bit is the XOR of the mask bits at and above it,
-// so a word's rank is its own prefix XOR flipped by the parity of the words above it.
-__global__ void
-wideRowMaskKernel(int32_t const *__restrict__ map,
-                  int64_t N,
-                  int K,
-                  int W,
-                  int32_t *__restrict__ masks,
-                  int64_t *__restrict__ keys) {
-    for (int64_t row = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; row < N;
-         row += int64_t(gridDim.x) * blockDim.x) {
-        uint32_t parity = 0, high = 0;
-        for (int w = W - 1; w >= 0; --w) {
-            uint32_t m       = 0;
-            int const kEnd   = min(32, K - 32 * w);
-            int32_t const *r = map + row * K + 32 * w;
-            for (int b = 0; b < kEnd; ++b)
-                m |= uint32_t(r[b] >= 0) << b;
-            masks[row * W + w]  = int32_t(m);
-            uint32_t const rank = grayRank(m) ^ (parity ? 0xffffffffu : 0u);
-            parity ^= __popc(m) & 1u;
-            if (w & 1) {
-                high = rank;
-            } else {
-                // Words above W - 1 are zero, so an odd W's top pair has high = 0.
-                if (w == W - 1)
-                    high = 0;
-                keys[int64_t(w / 2) * N + row] =
-                    int64_t((uint64_t(high ^ 0x80000000u) << 32) | rank);
-            }
-        }
-    }
-}
-
-// Rows ordered by the Gray rank of their whole tap mask: stable sorts from the least to the
-// most significant 64-bit key.
-torch::Tensor
-wideRowOrder(torch::Tensor const &keys) {
-    int64_t const N = keys.size(1);
-    auto perm       = torch::arange(N, keys.options().dtype(torch::kInt64));
-    for (int64_t j = 0; j < keys.size(0); ++j) {
-        auto const order =
-            std::get<1>(torch::sort(keys[j].index_select(0, perm), std::optional<bool>(true), 0));
-        perm = perm.index_select(0, order);
-    }
-    return perm.to(torch::kInt32);
 }
 
 int
@@ -1310,63 +1254,6 @@ pairFillKernel(int32_t const *__restrict__ rowMasks,
             pos += warpCounts[w][k];
         pairOut[pos] = row;
         pairIn[pos]  = nbr[int64_t(row) * K + k];
-    }
-}
-
-// The same passes for kernels of more than 32 taps, reading each tap's presence from the map.
-// Dynamic shared memory holds the per-warp counts: kPairBlock / 32 * K int32.
-__global__ void
-pairCountWideKernel(int32_t const *__restrict__ nbr,
-                    int N,
-                    int K,
-                    int32_t *__restrict__ blockCounts) {
-    extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
-    int const row         = blockIdx.x * kPairBlock + threadIdx.x;
-    int const warp        = threadIdx.x >> 5;
-    int32_t const *rowNbr = nbr + int64_t(row) * K;
-    for (int k = 0; k < K; ++k) {
-        uint32_t const bits = __ballot_sync(0xffffffffu, row < N && rowNbr[k] >= 0);
-        if ((threadIdx.x & 31) == 0)
-            warpCounts[warp * K + k] = __popc(bits);
-    }
-    __syncthreads();
-    for (int k = threadIdx.x; k < K; k += kPairBlock) {
-        int sum = 0;
-        for (int w = 0; w < kPairBlock / 32; ++w)
-            sum += warpCounts[w * K + k];
-        blockCounts[int64_t(k) * gridDim.x + blockIdx.x] = sum;
-    }
-}
-
-__global__ void
-pairFillWideKernel(int32_t const *__restrict__ nbr,
-                   int32_t const *__restrict__ blockOffsets,
-                   int N,
-                   int K,
-                   int32_t *__restrict__ pairIn,
-                   int32_t *__restrict__ pairOut) {
-    extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
-    int const row         = blockIdx.x * kPairBlock + threadIdx.x;
-    int const warp        = threadIdx.x >> 5;
-    int const lane        = threadIdx.x & 31;
-    int32_t const *rowNbr = nbr + int64_t(row) * K;
-    for (int k = 0; k < K; ++k) {
-        uint32_t const bits = __ballot_sync(0xffffffffu, row < N && rowNbr[k] >= 0);
-        if (lane == 0)
-            warpCounts[warp * K + k] = __popc(bits);
-    }
-    __syncthreads();
-    for (int k = 0; k < K; ++k) {
-        int32_t const in    = row < N ? rowNbr[k] : -1;
-        uint32_t const bits = __ballot_sync(0xffffffffu, in >= 0);
-        if (in < 0)
-            continue;
-        int pos =
-            blockOffsets[int64_t(k) * gridDim.x + blockIdx.x] + __popc(bits & ((1u << lane) - 1u));
-        for (int w = 0; w < warp; ++w)
-            pos += warpCounts[w * K + k];
-        pairOut[pos] = row;
-        pairIn[pos]  = in;
     }
 }
 
@@ -1465,7 +1352,7 @@ launchConv(torch::Tensor const &A,
         splits > 1 ? acc.data_ptr<float>() : nullptr,
         topo.neighborMap.data_ptr<int32_t>(),
         rowOrder(topo, int64_t(N) * Kc * A.element_size()).data_ptr<int32_t>(),
-        topo.rowMasks.data_ptr<int32_t>(),
+        (WIDE ? topo.rowWords : topo.rowMasks).data_ptr<int32_t>(),
         N,
         Kc,
         Nc,
@@ -1851,6 +1738,414 @@ columnSumKernel(T const *__restrict__ x, int64_t N, int C, float *__restrict__ o
     }
 }
 
+// =============================================================================
+// Compact neighbor maps (kernels of more than kMaxTaps taps)
+// =============================================================================
+//
+// A dense [N, K] map grows with K: 343 taps over millions of rows is tens of GiB. Wide kernels
+// keep only each row's present neighbors, in tap order, at neighborMap[neighborOffsets[o] ...].
+// rowWords[o, w] = (mask, base) for taps 32w..32w+31: the word's tap bits and the compact index of
+// its first present tap, so tap t's neighbor is neighborMap[base + popc(mask & below(t % 32))].
+// Rows are probed a chunk at a time into a dense scratch and compacted, so the dense map never
+// exists in full and every tap is probed once.
+
+constexpr int64_t kWideChunkBytes = int64_t(256) << 20; // dense scratch per probe chunk
+
+__device__ __forceinline__ uint32_t
+bitsBelow(int b) {
+    return (1u << b) - 1u;
+}
+
+// Probe rows [r0, r1) of rowGrid into scratch[(row - r0) * K + k] (a probeGrid row or -1). The
+// forward map's rows are output voxels probing input voxels at fine = stride * coarse + tap -
+// padding; the reverse map's rows are input voxels probing the output voxel that reads them.
+template <bool REVERSE>
+void
+probeChunkScan(GridBatchData const &rowGrid,
+               GridBatchData const &probeGrid,
+               ConvolutionGeometry const &geometry,
+               int K,
+               int64_t r0,
+               int64_t r1,
+               int32_t *scratch) {
+    using CudaTag  = ::dispatch::tag<torch::kCUDA>;
+    auto const acc = dispatch::make_grid_accessor(CudaTag{}, probeGrid);
+    dispatch::forEachActiveVoxel(CudaTag{},
+                                 rowGrid,
+                                 [=] __hostdev__(CudaTag,
+                                                 JIdxType batchIdx,
+                                                 nanovdb::Coord ijk,
+                                                 int64_t voxelIdx,
+                                                 GridBatchData::Accessor) {
+                                     if (voxelIdx < r0 || voxelIdx >= r1)
+                                         return;
+                                     auto treeAcc       = acc.grid(batchIdx)->getAccessor();
+                                     int64_t const base = acc.voxelOffset(batchIdx);
+                                     int32_t *row       = scratch + (voxelIdx - r0) * K;
+                                     for (int k = 0; k < K; ++k) {
+                                         // Computed here: nvcc rejects a lambda's first capture
+                                         // inside if constexpr.
+                                         nanovdb::Coord const tap = geometry.tapCoord(k);
+                                         nanovdb::Coord probe;
+                                         if constexpr (REVERSE) {
+                                             if (!geometry.coarseFromFine(ijk, tap, probe)) {
+                                                 row[k] = -1;
+                                                 continue;
+                                             }
+                                         } else {
+                                             probe = geometry.fineFromCoarse(ijk, tap);
+                                         }
+                                         row[k] = treeAcc.isActive(probe)
+                                                      ? int32_t(base + treeAcc.getValue(probe) - 1)
+                                                      : -1;
+                                     }
+                                 });
+}
+
+// Tap masks (rowWords[row, w].mask) and degrees of a probed chunk, one warp per row: lane b reads
+// tap 32w + b, so the warp's ballot is the row's mask word w.
+__global__ void
+chunkMaskKernel(int32_t const *__restrict__ scratch,
+                int64_t rows,
+                int K,
+                int W,
+                int32_t *__restrict__ rowWords,
+                int32_t *__restrict__ degrees) {
+    int const lane      = threadIdx.x & 31;
+    int64_t const warps = int64_t(gridDim.x) * (blockDim.x / 32);
+    for (int64_t row = (blockIdx.x * int64_t(blockDim.x) + threadIdx.x) / 32; row < rows;
+         row += warps) {
+        int32_t const *r = scratch + row * K;
+        int d            = 0;
+        for (int w = 0; w < W; ++w) {
+            int const k         = 32 * w + lane;
+            uint32_t const bits = __ballot_sync(0xffffffffu, k < K && r[k] >= 0);
+            if (lane == 0)
+                rowWords[(row * W + w) * 2] = int32_t(bits);
+            d += __popc(bits);
+        }
+        if (lane == 0)
+            degrees[row] = d;
+    }
+}
+
+// Write a probed chunk's present neighbors at their chunk-local offsets, one warp per row.
+__global__ void
+chunkCompactKernel(int32_t const *__restrict__ scratch,
+                   int64_t rows,
+                   int K,
+                   int32_t const *__restrict__ start,
+                   int32_t *__restrict__ out) {
+    int const lane      = threadIdx.x & 31;
+    int64_t const warps = int64_t(gridDim.x) * (blockDim.x / 32);
+    for (int64_t row = (blockIdx.x * int64_t(blockDim.x) + threadIdx.x) / 32; row < rows;
+         row += warps) {
+        int32_t const *r = scratch + row * K;
+        int32_t pos      = start[row];
+        for (int k0 = 0; k0 < K; k0 += 32) {
+            int32_t const v     = k0 + lane < K ? r[k0 + lane] : -1;
+            uint32_t const bits = __ballot_sync(0xffffffffu, v >= 0);
+            if (v >= 0)
+                out[pos + __popc(bits & bitsBelow(lane))] = v;
+            pos += __popc(bits);
+        }
+    }
+}
+
+// rowWords[row, w].base from the row offsets and the masks of the words before w.
+__global__ void
+rowBaseKernel(int32_t const *__restrict__ offsets,
+              int64_t N,
+              int W,
+              int32_t *__restrict__ rowWords) {
+    for (int64_t row = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; row < N;
+         row += int64_t(gridDim.x) * blockDim.x) {
+        int32_t base = offsets[row];
+        for (int w = 0; w < W; ++w) {
+            rowWords[(row * W + w) * 2 + 1] = base;
+            base += __popc(uint32_t(rowWords[(row * W + w) * 2]));
+        }
+    }
+}
+
+// keys[j, row] packs Gray-rank words 2j (low) and 2j+1 (high) of the row's whole tap mask into a
+// signed int64 that sorts like the unsigned 64-bit value. A rank bit is the XOR of the mask bits at
+// and above it, so a word's rank is its own prefix XOR flipped by the parity of the words above it.
+__global__ void
+wideKeyKernel(int32_t const *__restrict__ rowWords, int64_t N, int W, int64_t *__restrict__ keys) {
+    for (int64_t row = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; row < N;
+         row += int64_t(gridDim.x) * blockDim.x) {
+        uint32_t parity = 0, high = 0;
+        for (int w = W - 1; w >= 0; --w) {
+            uint32_t const m    = uint32_t(rowWords[(row * W + w) * 2]);
+            uint32_t const rank = grayRank(m) ^ (parity ? 0xffffffffu : 0u);
+            parity ^= __popc(m) & 1u;
+            if (w & 1) {
+                high = rank;
+            } else {
+                if (w == W - 1)
+                    high = 0; // words above W - 1 are zero
+                keys[int64_t(w / 2) * N + row] =
+                    int64_t((uint64_t(high ^ 0x80000000u) << 32) | rank);
+            }
+        }
+    }
+}
+
+// Rows ordered by the Gray rank of their whole tap mask: stable sorts from the least to the
+// most significant 64-bit key.
+torch::Tensor
+wideRowOrder(torch::Tensor const &rowWords, int64_t N, int64_t W, cudaStream_t stream) {
+    auto keys = torch::empty({(W + 1) / 2, N}, rowWords.options().dtype(torch::kInt64));
+    if (N > 0) {
+        wideKeyKernel<<<gridStrideBlocks(N), 256, 0, stream>>>(
+            rowWords.data_ptr<int32_t>(), N, int(W), keys.data_ptr<int64_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    auto perm = torch::arange(N, keys.options());
+    for (int64_t j = 0; j < keys.size(0); ++j) {
+        auto const order =
+            std::get<1>(torch::sort(keys[j].index_select(0, perm), std::optional<bool>(true), 0));
+        perm = perm.index_select(0, order);
+    }
+    return perm.to(torch::kInt32);
+}
+
+// Weight-gradient pair lists from the masks and compact map, as pairCountKernel/pairFillKernel.
+// Dynamic shared memory holds the per-warp counts: kPairBlock / 32 * K int32.
+__global__ void
+pairCountWideKernel(
+    int32_t const *__restrict__ rowWords, int N, int K, int W, int32_t *__restrict__ blockCounts) {
+    extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
+    int const row  = blockIdx.x * kPairBlock + threadIdx.x;
+    int const warp = threadIdx.x >> 5;
+    for (int w = 0; w < W; ++w) {
+        uint32_t const m = row < N ? uint32_t(rowWords[(int64_t(row) * W + w) * 2]) : 0u;
+        int const kEnd   = min(32, K - 32 * w);
+        for (int b = 0; b < kEnd; ++b) {
+            uint32_t const bits = __ballot_sync(0xffffffffu, (m >> b) & 1u);
+            if ((threadIdx.x & 31) == 0)
+                warpCounts[warp * K + 32 * w + b] = __popc(bits);
+        }
+    }
+    __syncthreads();
+    for (int k = threadIdx.x; k < K; k += kPairBlock) {
+        int sum = 0;
+        for (int v = 0; v < kPairBlock / 32; ++v)
+            sum += warpCounts[v * K + k];
+        blockCounts[int64_t(k) * gridDim.x + blockIdx.x] = sum;
+    }
+}
+
+__global__ void
+pairFillWideKernel(int32_t const *__restrict__ rowWords,
+                   int32_t const *__restrict__ nbr,
+                   int32_t const *__restrict__ offsets,
+                   int32_t const *__restrict__ blockOffsets,
+                   int N,
+                   int K,
+                   int W,
+                   int32_t *__restrict__ pairIn,
+                   int32_t *__restrict__ pairOut) {
+    extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
+    int const row  = blockIdx.x * kPairBlock + threadIdx.x;
+    int const warp = threadIdx.x >> 5;
+    int const lane = threadIdx.x & 31;
+    for (int w = 0; w < W; ++w) {
+        uint32_t const m = row < N ? uint32_t(rowWords[(int64_t(row) * W + w) * 2]) : 0u;
+        int const kEnd   = min(32, K - 32 * w);
+        for (int b = 0; b < kEnd; ++b) {
+            uint32_t const bits = __ballot_sync(0xffffffffu, (m >> b) & 1u);
+            if (lane == 0)
+                warpCounts[warp * K + 32 * w + b] = __popc(bits);
+        }
+    }
+    __syncthreads();
+    int32_t src = row < N ? offsets[row] : 0; // this row's next compact entry
+    for (int w = 0; w < W; ++w) {
+        uint32_t const m = row < N ? uint32_t(rowWords[(int64_t(row) * W + w) * 2]) : 0u;
+        int const kEnd   = min(32, K - 32 * w);
+        for (int b = 0; b < kEnd; ++b) {
+            int const k         = 32 * w + b;
+            uint32_t const bits = __ballot_sync(0xffffffffu, (m >> b) & 1u);
+            if (!((m >> b) & 1u))
+                continue;
+            int pos =
+                blockOffsets[int64_t(k) * gridDim.x + blockIdx.x] + __popc(bits & bitsBelow(lane));
+            for (int v = 0; v < warp; ++v)
+                pos += warpCounts[v * K + k];
+            pairOut[pos] = row;
+            pairIn[pos]  = nbr[src++];
+        }
+    }
+}
+
+struct CompactMap {
+    torch::Tensor nbr;      ///< int32 [P], present neighbors per row in tap order
+    torch::Tensor offsets;  ///< int32 [rows + 1]
+    torch::Tensor rowWords; ///< int32 [rows, W, 2], (mask, base) per 32-tap word
+    torch::Tensor sorted;   ///< int32 [rows], rows by Gray rank of their tap mask
+};
+
+// Probe rowGrid's rows a chunk at a time into a dense scratch, compact each chunk, then derive the
+// row offsets, word bases and Gray-rank row order.
+template <bool REVERSE>
+CompactMap
+buildCompactMap(GridBatchData const &rowGrid,
+                GridBatchData const &probeGrid,
+                ConvolutionGeometry const &geometry,
+                cudaStream_t stream) {
+    int64_t const K    = geometry.kernelVolume();
+    int64_t const W    = (K + 31) / 32;
+    int64_t const rows = rowGrid.totalVoxels();
+    auto const i32     = torch::dtype(torch::kInt32).device(rowGrid.device());
+
+    auto rowWords = torch::empty({rows, W, 2}, i32);
+    auto degrees  = torch::empty({rows}, i32);
+    std::vector<torch::Tensor> parts;
+    int64_t const chunk = std::max<int64_t>(1, kWideChunkBytes / (K * int64_t(sizeof(int32_t))));
+    auto scratch        = torch::empty({std::min(chunk, rows), K}, i32);
+    for (int64_t r0 = 0; r0 < rows; r0 += chunk) {
+        int64_t const r1 = std::min(rows, r0 + chunk), n = r1 - r0;
+        probeChunkScan<REVERSE>(
+            rowGrid, probeGrid, geometry, int(K), r0, r1, scratch.data_ptr<int32_t>());
+        chunkMaskKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+            scratch.data_ptr<int32_t>(),
+            n,
+            int(K),
+            int(W),
+            rowWords.data_ptr<int32_t>() + r0 * W * 2,
+            degrees.data_ptr<int32_t>() + r0);
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+        torch::Tensor const d = degrees.slice(0, r0, r1);
+        // Exclusive offsets within the chunk; a chunk holds fewer than 2^31 entries.
+        torch::Tensor const start = torch::cumsum(d, 0, torch::kInt32) - d;
+        torch::Tensor const last  = start[n - 1] + d[n - 1];
+        int64_t const size        = last.item<int64_t>();
+        torch::Tensor part        = torch::empty({size}, i32);
+        if (size > 0) {
+            chunkCompactKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+                scratch.data_ptr<int32_t>(),
+                n,
+                int(K),
+                start.data_ptr<int32_t>(),
+                part.data_ptr<int32_t>());
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
+        }
+        parts.push_back(std::move(part));
+    }
+    scratch  = torch::Tensor();
+    auto nbr = parts.empty() ? torch::empty({0}, i32) : torch::cat(parts);
+    parts    = {};
+
+    auto offsets = torch::zeros({rows + 1}, i32);
+    if (rows > 0) {
+        TORCH_CHECK(nbr.size(0) < std::numeric_limits<int32_t>::max(),
+                    "maskedIGemmTopology: neighbor pairs exceed the int32 index");
+        offsets.slice(0, 1).copy_(torch::cumsum(degrees, 0, torch::kInt32));
+        rowBaseKernel<<<gridStrideBlocks(rows), 256, 0, stream>>>(
+            offsets.data_ptr<int32_t>(), rows, int(W), rowWords.data_ptr<int32_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    auto sorted = wideRowOrder(rowWords, rows, W, stream);
+    return {nbr, offsets, rowWords, sorted};
+}
+
+MaskedIGemmTopology
+wideTopology(GridBatchData const &featureGrid,
+             GridBatchData const &outputGrid,
+             ConvolutionGeometry const &geometry,
+             nanovdb::Coord kernelSize,
+             bool submanifold) {
+    int64_t const K   = geometry.kernelVolume();
+    int64_t const W   = (K + 31) / 32;
+    int64_t const N   = outputGrid.totalVoxels();
+    int64_t const NIn = featureGrid.totalVoxels();
+    auto const i32    = torch::dtype(torch::kInt32).device(outputGrid.device());
+    auto stream       = c10::cuda::getCurrentCUDAStream();
+
+    // ---- Forward map: output rows, each listing the input rows it reads ----
+    CompactMap const fwd = buildCompactMap<false>(outputGrid, featureGrid, geometry, stream);
+    auto const &nbr      = fwd.nbr;
+    auto const &offsets  = fwd.offsets;
+    auto const &rowWords = fwd.rowWords;
+    int64_t const P      = nbr.size(0);
+
+    // ---- Weight-gradient pairs per tap, output rows ascending ----
+    int64_t const blocks = (N + kPairBlock - 1) / kPairBlock;
+    auto blockCounts     = torch::zeros({K, blocks}, i32);
+    int const pairSmem   = int(kPairBlock / 32 * K * sizeof(int32_t));
+    if (pairSmem > 48 * 1024) {
+        C10_CUDA_CHECK(cudaFuncSetAttribute(
+            pairCountWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
+        C10_CUDA_CHECK(cudaFuncSetAttribute(
+            pairFillWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
+    }
+    if (blocks > 0) {
+        pairCountWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
+            rowWords.data_ptr<int32_t>(), int(N), int(K), int(W), blockCounts.data_ptr<int32_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+    auto pairOffsets = torch::zeros({K + 1}, i32);
+    pairOffsets.slice(0, 1).copy_(torch::cumsum(blockCounts.sum(1, false, torch::kInt64), 0));
+    auto blockOffsets = (torch::cumsum(blockCounts, 1, torch::kInt32) - blockCounts) +
+                        pairOffsets.slice(0, 0, K).unsqueeze(1);
+    auto pairIn  = torch::empty({P}, i32);
+    auto pairOut = torch::empty({P}, i32);
+    if (blocks > 0 && P > 0) {
+        pairFillWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
+            rowWords.data_ptr<int32_t>(),
+            nbr.data_ptr<int32_t>(),
+            offsets.data_ptr<int32_t>(),
+            blockOffsets.data_ptr<int32_t>(),
+            int(N),
+            int(K),
+            int(W),
+            pairIn.data_ptr<int32_t>(),
+            pairOut.data_ptr<int32_t>());
+        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    }
+
+    MaskedIGemmTopology topo{nbr,
+                             fwd.sorted,
+                             torch::Tensor(),
+                             rowWords.select(2, 0),
+                             pairIn,
+                             pairOut,
+                             pairOffsets,
+                             blockOffsets,
+                             N,
+                             NIn,
+                             K,
+                             kernelSize,
+                             nullptr,
+                             offsets,
+                             rowWords};
+    if (submanifold)
+        return topo;
+
+    // ---- Reverse map: input rows, each listing the output rows that read it ----
+    CompactMap const rev = buildCompactMap<true>(featureGrid, outputGrid, geometry, stream);
+    auto const none      = torch::empty({0}, i32);
+    topo.reverse =
+        std::make_shared<MaskedIGemmTopology const>(MaskedIGemmTopology{rev.nbr,
+                                                                        rev.sorted,
+                                                                        torch::Tensor(),
+                                                                        rev.rowWords.select(2, 0),
+                                                                        none,
+                                                                        none,
+                                                                        none,
+                                                                        none,
+                                                                        NIn,
+                                                                        N,
+                                                                        K,
+                                                                        kernelSize,
+                                                                        nullptr,
+                                                                        rev.offsets,
+                                                                        rev.rowWords});
+    return topo;
+}
+
 } // namespace
 
 // =============================================================================
@@ -1929,10 +2224,7 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
     // A submanifold map is its own reverse with mirrored taps; other maps store the reverse.
     bool const submanifold = &featureGrid == &outputGrid && stride == nanovdb::Coord(1) && odd;
     ConvolutionGeometry const geometry(kernelSize, stride);
-    int64_t const K = geometry.kernelVolume();
-    // Kernels of more than 32 taps keep one 32-bit mask word per 32 taps.
-    bool const wide   = K > kMaxTaps;
-    int64_t const W   = (K + 31) / 32;
+    int64_t const K   = geometry.kernelVolume();
     int64_t const N   = outputGrid.totalVoxels();
     int64_t const NIn = featureGrid.totalVoxels();
     TORCH_CHECK(N < std::numeric_limits<int32_t>::max() &&
@@ -1940,10 +2232,13 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
                 "maskedIGemmTopology: too many voxels");
 
     c10::cuda::CUDAGuard guard(outputGrid.device());
+    // Kernels of more than kMaxTaps taps keep compact maps (wideTopology).
+    if (K > kMaxTaps)
+        return wideTopology(featureGrid, outputGrid, geometry, kernelSize, submanifold);
     auto const i32 = torch::dtype(torch::kInt32).device(outputGrid.device());
     auto nbr       = torch::empty({N, K}, i32);
-    auto code      = torch::empty({wide ? 0 : N}, i32);
-    auto rowMasks  = wide ? torch::empty({N, W}, i32) : torch::empty({N}, i32);
+    auto code      = torch::empty({N}, i32);
+    auto rowMasks  = torch::empty({N}, i32);
     auto stream    = c10::cuda::getCurrentCUDAStream();
 
     if (N > 0) {
@@ -1960,56 +2255,32 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
             scan = false;
         else if (choice == "scan")
             scan = true;
-        auto const build = [&](auto masks) {
-            constexpr bool M = decltype(masks)::value;
-            int32_t *const c = M ? code.data_ptr<int32_t>() : nullptr;
-            int32_t *const m = M ? rowMasks.data_ptr<int32_t>() : nullptr;
-            if (scan)
-                buildNeighborMapScan<M>(
-                    featureGrid, outputGrid, geometry, int(K), nbr.data_ptr<int32_t>(), c, m);
-            else
-                buildNeighborMapStaged<M>(
-                    outputGrid, geometry, int(K), nbr.data_ptr<int32_t>(), c, m, stream);
-        };
-        if (wide)
-            build(std::false_type{});
-        else
-            build(std::true_type{});
+        if (scan) {
+            buildNeighborMapScan(featureGrid,
+                                 outputGrid,
+                                 geometry,
+                                 int(K),
+                                 nbr.data_ptr<int32_t>(),
+                                 code.data_ptr<int32_t>(),
+                                 rowMasks.data_ptr<int32_t>());
+        } else {
+            buildNeighborMapStaged(outputGrid,
+                                   geometry,
+                                   int(K),
+                                   nbr.data_ptr<int32_t>(),
+                                   code.data_ptr<int32_t>(),
+                                   rowMasks.data_ptr<int32_t>(),
+                                   stream);
+        }
     }
 
-    torch::Tensor sortedRows;
-    if (wide) {
-        auto keys = torch::empty({(W + 1) / 2, N}, i32.dtype(torch::kInt64));
-        if (N > 0) {
-            wideRowMaskKernel<<<gridStrideBlocks(N), 256, 0, stream>>>(nbr.data_ptr<int32_t>(),
-                                                                       N,
-                                                                       int(K),
-                                                                       int(W),
-                                                                       rowMasks.data_ptr<int32_t>(),
-                                                                       keys.data_ptr<int64_t>());
-            C10_CUDA_KERNEL_LAUNCH_CHECK();
-        }
-        sortedRows = wideRowOrder(keys);
-    } else {
-        sortedRows = torch::argsort(code).to(torch::kInt32);
-    }
+    auto sortedRows = torch::argsort(code).to(torch::kInt32);
     // Weight-gradient pairs per tap, output rows ascending (leaf order).
     int64_t const blocks = (N + kPairBlock - 1) / kPairBlock;
     auto blockCounts     = torch::zeros({K, blocks}, i32); // tap-major, so scans run along rows
-    int const pairSmem   = int(kPairBlock / 32 * K * sizeof(int32_t));
-    if (wide && pairSmem > 48 * 1024) {
-        C10_CUDA_CHECK(cudaFuncSetAttribute(
-            pairCountWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
-        C10_CUDA_CHECK(cudaFuncSetAttribute(
-            pairFillWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
-    }
     if (blocks > 0) {
-        if (wide)
-            pairCountWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
-                nbr.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
-        else
-            pairCountKernel<<<blocks, kPairBlock, 0, stream>>>(
-                rowMasks.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
+        pairCountKernel<<<blocks, kPairBlock, 0, stream>>>(
+            rowMasks.data_ptr<int32_t>(), int(N), int(K), blockCounts.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     auto tapEnds    = torch::cumsum(blockCounts.sum(1, false, torch::kInt64), 0);
@@ -2025,22 +2296,13 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
     auto pairIn  = torch::empty({P}, i32);
     auto pairOut = torch::empty({P}, i32);
     if (blocks > 0 && P > 0) {
-        if (wide)
-            pairFillWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
-                nbr.data_ptr<int32_t>(),
-                blockOffsets.data_ptr<int32_t>(),
-                int(N),
-                int(K),
-                pairIn.data_ptr<int32_t>(),
-                pairOut.data_ptr<int32_t>());
-        else
-            pairFillKernel<<<blocks, kPairBlock, 0, stream>>>(rowMasks.data_ptr<int32_t>(),
-                                                              nbr.data_ptr<int32_t>(),
-                                                              blockOffsets.data_ptr<int32_t>(),
-                                                              int(N),
-                                                              int(K),
-                                                              pairIn.data_ptr<int32_t>(),
-                                                              pairOut.data_ptr<int32_t>());
+        pairFillKernel<<<blocks, kPairBlock, 0, stream>>>(rowMasks.data_ptr<int32_t>(),
+                                                          nbr.data_ptr<int32_t>(),
+                                                          blockOffsets.data_ptr<int32_t>(),
+                                                          int(N),
+                                                          int(K),
+                                                          pairIn.data_ptr<int32_t>(),
+                                                          pairOut.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
@@ -2061,46 +2323,36 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
         return topo;
 
     auto rev      = torch::full({NIn, K}, -1, i32);
-    auto revCode  = torch::empty({wide ? 0 : NIn}, i32);
-    auto revMasks = wide ? torch::empty({NIn, W}, i32) : torch::empty({NIn}, i32);
-    auto revKeys  = torch::empty({wide ? (W + 1) / 2 : 0, NIn}, i32.dtype(torch::kInt64));
+    auto revCode  = torch::empty({NIn}, i32);
+    auto revMasks = torch::empty({NIn}, i32);
     if (N > 0 && NIn > 0) {
         reverseMapKernel<<<gridStrideBlocks(N * K), 256, 0, stream>>>(
             nbr.data_ptr<int32_t>(), N * K, int(K), rev.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     if (NIn > 0) {
-        if (wide)
-            wideRowMaskKernel<<<gridStrideBlocks(NIn), 256, 0, stream>>>(
-                rev.data_ptr<int32_t>(),
-                NIn,
-                int(K),
-                int(W),
-                revMasks.data_ptr<int32_t>(),
-                revKeys.data_ptr<int64_t>());
-        else
-            rowMaskKernel<<<gridStrideBlocks(NIn), 256, 0, stream>>>(rev.data_ptr<int32_t>(),
-                                                                     NIn,
-                                                                     int(K),
-                                                                     revCode.data_ptr<int32_t>(),
-                                                                     revMasks.data_ptr<int32_t>());
+        rowMaskKernel<<<gridStrideBlocks(NIn), 256, 0, stream>>>(rev.data_ptr<int32_t>(),
+                                                                 NIn,
+                                                                 int(K),
+                                                                 revCode.data_ptr<int32_t>(),
+                                                                 revMasks.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     auto const none = torch::empty({0}, i32);
-    topo.reverse    = std::make_shared<MaskedIGemmTopology const>(MaskedIGemmTopology{
-        rev,
-        wide ? wideRowOrder(revKeys) : torch::argsort(revCode).to(torch::kInt32),
-        torch::Tensor(),
-        revMasks,
-        none,
-        none,
-        none,
-        none,
-        NIn,
-        N,
-        K,
-        kernelSize,
-        nullptr});
+    topo.reverse    = std::make_shared<MaskedIGemmTopology const>(
+        MaskedIGemmTopology{rev,
+                            torch::argsort(revCode).to(torch::kInt32),
+                            torch::Tensor(),
+                            revMasks,
+                            none,
+                            none,
+                            none,
+                            none,
+                            NIn,
+                            N,
+                            K,
+                            kernelSize,
+                            nullptr});
     return topo;
 }
 

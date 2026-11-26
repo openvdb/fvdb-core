@@ -36,7 +36,8 @@ namespace detail {
 namespace ops {
 
 struct MaskedIGemmTopology {
-    // Row o of neighborMap holds output voxel o's K input rows (-1 if absent).
+    // Row o of neighborMap holds output voxel o's K input rows (-1 if absent); see rowWords for
+    // the compact map of kernels of more than 32 taps.
     torch::Tensor neighborMap; ///< int32 [N, K]
     torch::Tensor sortedRows;  ///< int32 [N], rows ordered by Gray rank of their tap mask
     /// sortedRows regrouped into windows of nearby rows; built on first use for large inputs.
@@ -56,6 +57,12 @@ struct MaskedIGemmTopology {
     /// Map from input rows to the output rows reading them per tap, with its row order and
     /// masks; no pair lists. Null for submanifold maps.
     std::shared_ptr<MaskedIGemmTopology const> reverse;
+    // Kernels of more than 32 taps keep a compact map: neighborMap is int32 [P], each row's present
+    // neighbors in tap order, and rowMasks is int32 [N, W] with W = ceil(K / 32) mask words.
+    torch::Tensor neighborOffsets; ///< int32 [N + 1], start of each row in neighborMap (wide only)
+    /// int32 [N, W, 2], (mask, base) per 32-tap word: tap t's neighbor is
+    /// neighborMap[base + popc(mask & below(t % 32))] when its bit is set (wide only)
+    torch::Tensor rowWords;
 };
 
 /// Build the map from @p outputGrid's voxels to @p featureGrid's voxels for convolution with
