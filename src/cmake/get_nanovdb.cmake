@@ -18,7 +18,7 @@ CPMAddPackage(
     NAME NanoVDB
     VERSION 32.11
     GITHUB_REPOSITORY AcademySoftwareFoundation/openvdb
-    GIT_TAG 1ec456ef66ec6cde58cf175f693609c05ac9c98e
+    GIT_TAG 1b010f05efa19f1243c5cacf50770e53dd606562
     SOURCE_SUBDIR nanovdb/nanovdb
     EXCLUDE_FROM_ALL YES
     OPTIONS
