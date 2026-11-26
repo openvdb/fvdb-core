@@ -204,18 +204,23 @@ class TestMaskedIGemm(unittest.TestCase):
 
     @parameterized.expand(
         [
-            # Many channels on a small grid: the forward and input gradient split K.
-            ("split_k", 48, 256, 1),
-            ("split_k_strided", 48, 256, 2),
-            # A larger grid at C = 64: the weight and bias gradients split.
-            ("weight_splits", 96, 64, 1),
-            ("weight_splits_strided", 128, 64, 2),
+            # Forced splits, so every GPU runs the per-split path: forward and input-gradient
+            # split-K, and the weight gradient split by output rows.
+            ("forced_split_k", 48, 256, 1, {"splits": 4}),
+            ("forced_split_k_strided", 48, 256, 2, {"splits": 4}),
+            ("forced_weight_row_splits", 96, 64, 1, {"weight_row_splits": 4}),
+            ("forced_weight_row_splits_strided", 128, 64, 2, {"weight_row_splits": 4}),
+            # The heuristics' own choices. On an RTX PRO 6000 these split the forward and input
+            # gradient (C = 256) and the weight gradient by pairs (C = 64), and their results
+            # differ run to run without the flag; other GPUs may choose differently.
+            ("heuristic_c256", 48, 256, 1, {}),
+            ("heuristic_c64", 96, 64, 1, {}),
         ]
     )
-    def test_deterministic_algorithms(self, _, res, channels, stride):
-        # Split kernels add float partials with atomics in run-dependent order (each case above
-        # differs run to run without the flag). torch.use_deterministic_algorithms(True) must
-        # turn that off so that every result repeats bitwise.
+    def test_deterministic_algorithms(self, _, res, channels, stride, overrides):
+        # Split kernels add float partials with atomics in run-dependent order.
+        # torch.use_deterministic_algorithms(True) gives each split its own slice, summed in a
+        # fixed order, so every result must repeat bitwise.
         torch.manual_seed(0)
         grid = _shell_grid(res)
         target = grid if stride == 1 else grid.conv_grid(3, stride)
@@ -234,7 +239,8 @@ class TestMaskedIGemm(unittest.TestCase):
         previous = torch.are_deterministic_algorithms_enabled()
         torch.use_deterministic_algorithms(True)
         try:
-            runs = [run() for _ in range(5)]
+            with _overrides(**overrides):
+                runs = [run() for _ in range(5)]
         finally:
             torch.use_deterministic_algorithms(previous)
         self.assertNotIn("gather_scatter", plan._backend.fallback)

@@ -75,7 +75,8 @@ constexpr int64_t kDeterministicScratchBytes = int64_t(256) << 20;
 
 int64_t
 deterministicSplits(int64_t splits, int64_t sliceElements) {
-    int64_t const fit = kDeterministicScratchBytes / std::max<int64_t>(1, sliceElements * 4);
+    int64_t const fit =
+        kDeterministicScratchBytes / std::max<int64_t>(1, sliceElements * int64_t(sizeof(float)));
     return std::clamp<int64_t>(fit, 1, splits);
 }
 
@@ -213,6 +214,9 @@ template <MmaElement T> struct Elem {
     static constexpr int MMA_K = BK / 2;              // MMA k per instruction
 };
 
+// Half a TF32 ulp in float32 bits: TF32 keeps the top 10 of float32's 23 mantissa bits.
+constexpr uint32_t kTf32RoundBias = 0x1000u;
+
 // Round a loaded fragment register to TF32 (no-op for 16-bit types). Adding half an ulp lets
 // the tensor core's truncation of the low 13 bits round to nearest, ties away from zero, as
 // cvt.rna.tf32.f32 does, for less issue cost (CUTLASS's round_half_ulp_truncate). Inf and NaN
@@ -222,7 +226,7 @@ __device__ __forceinline__ uint32_t
 roundToTf32(uint32_t x) {
     if constexpr (sizeof(T) == 4) {
         if (isfinite(__uint_as_float(x)))
-            x += 0x1000u;
+            x += kTf32RoundBias;
     }
     return x;
 }
@@ -238,7 +242,7 @@ roundUnless3xTf32(uint32_t x) {
 }
 
 // Magnitudes from here up round to inf in TF32.
-constexpr uint32_t kTf32RoundingOverflow = 0x7f7ff000u;
+constexpr uint32_t kTf32RoundingOverflow = 0x7f800000u - kTf32RoundBias;
 
 // Split a float32 into TF32 parts: big is the value rounded to TF32 and small the rounded
 // remainder, so big + small keeps about 22 of float32's 24 mantissa bits. Inf, NaN and the
@@ -253,7 +257,7 @@ splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
         small = 0u;
         return;
     }
-    big   = (x + 0x1000u) & 0xffffe000u;
+    big   = (x + kTf32RoundBias) & 0xffffe000u;
     small = roundToTf32<float>(__float_as_uint(f - __uint_as_float(big)));
 }
 
@@ -429,8 +433,9 @@ smemBytes(int K) {
 // KMajorWeights selects the weight operand layout per tap:
 //   false (forward):        B[k][n] at W + row * Kc * Nc + k * Nc + n
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
-// With splits > 1, CTA z of a tile runs its share of the tile's (tap, k-tile)
-// iterations and adds float32 partials into outAcc instead of writing out.
+// With splits > 1, CTA (tile, y) runs split y's share of the tile's (tap, k-tile) iterations and
+// adds float32 partials into outAcc + y * splitStride instead of writing out. splitStride is 0
+// (all splits share one buffer) unless deterministic mode gives each split its own slice.
 //
 // LargeKernel runs kernels of more than kMaxTaps taps: neighborMap is compact and rowMaskWords
 // holds a (mask, base) pair per 32-tap word (see largeKernelTopology), and the neighbor columns of
@@ -804,7 +809,8 @@ maskedIGemmKernel(T const *__restrict__ A,
 //
 // CTA (m tile of C_in, n tile of C_out, tap u, split s) accumulates
 //   dW[u][m][n] += sum_p features[pairIn[p], m] * grad_output[pairOut[p], n]
-// over its share of tap u's pairs, then adds into a float32 buffer. Both
+// over its share of tap u's pairs, then adds into a float32 buffer at dWAcc + s * splitStride
+// (splitStride is 0 unless deterministic mode gives each split its own slice). Both
 // operands are gathered along the reduction dimension. Warp 0 fetches each
 // stage's pair indices into a shared-memory ring one iteration ahead, so the
 // data loads never wait on a dependent global load.
@@ -1388,6 +1394,9 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     bool local = topo.outputTotalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
     if (gTestOverrides.localRowOrder)
         local = *gTestOverrides.localRowOrder;
+    TORCH_INTERNAL_ASSERT(!topo.localRows.defined() ||
+                              topo.localRows.numel() == topo.sortedRows.numel(),
+                          "localRows must reorder sortedRows");
     return local && topo.localRows.defined() ? topo.localRows : topo.sortedRows;
 }
 

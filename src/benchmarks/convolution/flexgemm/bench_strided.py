@@ -186,13 +186,21 @@ def main():
                 return flex_step(feats, coords, shape, k, s, args.topology, weight, bias)
             return fvdb_step(name, feats, coords, B, C, k, s, args.topology, weight, bias)
 
-        # Each backend is timed alone: nothing from an earlier backend is alive, since peak memory
-        # is process-wide.
+        def measure(name):
+            # The step, and the plan, grads and topology it holds, is freed on return or raise, so
+            # the next backend's process-wide peak memory does not include it.
+            step = make(name)[0]
+            return time_cuda(step, iters=args.iters)
+
+        def compare():
+            # Only the two outputs' coords and features stay alive, and only until return.
+            fv_output = fvdb_output(make("masked_igemm")[1])
+            torch.cuda.empty_cache()
+            return check(fv_output, flex_output(make("flex_gemm")[1]))
+
         for name in backends:
             try:
-                step = make(name)[0]
-                ms, gb = time_cuda(step, iters=args.iters)
-                del step
+                ms, gb = measure(name)
                 row[name] = {"ms": ms, "peak_gb": gb}
                 cells.append(f"{ms:9.2f} ms {gb:6.2f} GB")
             except Exception as e:  # report and keep going, e.g. OOM
@@ -204,11 +212,7 @@ def main():
         diff = ""
         if all("ms" in row.get(name, {}) for name in ("masked_igemm", "flex_gemm")):
             try:
-                fv_output = fvdb_output(make("masked_igemm")[1])
-                torch.cuda.empty_cache()
-                fx_output = flex_output(make("flex_gemm")[1])
-                row["max_rel_diff"] = check(fv_output, fx_output)
-                del fv_output, fx_output
+                row["max_rel_diff"] = compare()
                 diff = f"{row['max_rel_diff']:.1e}"
             except Exception as e:  # report and keep going
                 row["max_rel_diff_error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:100]}"

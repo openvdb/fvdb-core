@@ -984,6 +984,7 @@ class TestConvSemanticsIntegration(unittest.TestCase):
             for name, transform in (
                 ("inf_origin", {"origins": (float("inf"), 0.0, 0.0)}),
                 ("nan_origin", {"origins": (float("nan"), 0.0, 0.0)}),
+                ("inf_voxel_size", {"voxel_sizes": (1.0, float("inf"), 1.0)}),
             )
         ]
     )

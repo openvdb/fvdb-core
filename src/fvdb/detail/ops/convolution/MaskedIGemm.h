@@ -11,8 +11,9 @@
 // the Gray rank of their tap mask so tiles skip the taps none of their rows
 // use. The weight gradient reduces over per-tap (input, output) pair lists,
 // split across CTAs with the same atomics. Under
-// torch.use_deterministic_algorithms(True) nothing splits, so every result is
-// bitwise repeatable.
+// torch.use_deterministic_algorithms(True) each split writes its own float32
+// slice instead (bounded scratch) and the slices are summed in a fixed order,
+// so every result is bitwise repeatable.
 //
 // Supports any stride and any kernel size whose per-tap state fits the device's
 // shared memory (several thousand taps), and the transposed direction of each, on
