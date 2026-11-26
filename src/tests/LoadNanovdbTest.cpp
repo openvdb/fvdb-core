@@ -3,15 +3,25 @@
 
 #include <fvdb/FVDB.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/io/LoadNanovdb.h>
 #include <fvdb/detail/io/SaveNanoVDB.h>
+#include <fvdb/detail/ops/ActiveGridCoords.h>
+#include <fvdb/detail/ops/SerializeGrid.h>
 
 #include <nanovdb/NanoVDB.h>
+#include <nanovdb/tools/CreateNanoGrid.h>
+#include <nanovdb/tools/GridBuilder.h>
+#include <nanovdb/tools/VoxelBlockManager.h>
 
+#include <ATen/Context.h>
+#include <torch/cuda.h>
 #include <torch/types.h>
 
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -233,4 +243,119 @@ TEST(SaveNanoVDB, BlindFloatPayloadMatchesValueOnIndexIndexSpace) {
     for (int64_t i = 0; i < sourceData.numel(); ++i) {
         EXPECT_FLOAT_EQ(payload[i + 1], sourceData[i].item<float>());
     }
+}
+
+namespace {
+
+// Three leaves holding four active voxels. With an empty leaf, a fourth leaf between them holds
+// none, as in a grid whose voxels were deactivated without pruning.
+std::shared_ptr<nanovdb::tools::build::Grid<float>>
+makeSourceGrid(bool withEmptyLeaf) {
+    auto grid = std::make_shared<nanovdb::tools::build::Grid<float>>(0.0f);
+    auto acc  = grid->getAccessor();
+    acc.setValue(nanovdb::Coord(0, 0, 0), 1.0f);
+    acc.setValue(nanovdb::Coord(1, 2, 3), 2.0f);
+    acc.setValue(nanovdb::Coord(200, 0, 0), 3.0f);
+    acc.setValue(nanovdb::Coord(-300, 5, 7), 4.0f);
+    if (withEmptyLeaf) {
+        const nanovdb::Coord ijk(100, 0, 0);
+        auto *leaf = acc.setValue(ijk, 5.0f);
+        leaf->mValueMask.setOff(leaf->CoordToOffset(ijk));
+    }
+    return grid;
+}
+
+torch::Tensor
+sortedRows(const torch::Tensor &ijk) {
+    auto key = ijk.to(torch::kInt64);
+    key      = (key.select(1, 0) * 4096 + key.select(1, 1)) * 4096 + key.select(1, 2);
+    return ijk.index_select(0, std::get<1>(key.sort()));
+}
+
+// Loads @p handle and checks that the grid meets the VoxelBlockManager layout and holds the source
+// grid's active voxels; on CUDA, that .ijk through the VoxelBlockManager matches the CPU leaf scan.
+void
+expectLoadsAsSourceGrid(nanovdb::GridHandle<nanovdb::HostBuffer> &handle) {
+    const torch::Tensor expected =
+        torch::tensor({0, 0, 0, 1, 2, 3, 200, 0, 0, -300, 5, 7}, torch::kInt32).reshape({4, 3});
+
+    auto cpuBatch = std::get<0>(fvdb::detail::io::fromNVDB(handle, torch::Device(torch::kCPU)));
+    EXPECT_TRUE(nanovdb::tools::isVoxelBlockManagerCompatible(cpuBatch->hostGridPtrAt(0)));
+    const torch::Tensor cpuIjk = fvdb::detail::ops::activeGridCoords(*cpuBatch).jdata();
+    EXPECT_TRUE(torch::equal(sortedRows(cpuIjk), sortedRows(expected)));
+
+    if (torch::cuda::is_available()) {
+        // The load is this process's first CUDA work; importing fvdb does this in Python
+        at::globalContext().lazyInitDevice(c10::DeviceType::CUDA);
+        auto cudaBatch =
+            std::get<0>(fvdb::detail::io::fromNVDB(handle, torch::Device(torch::kCUDA, 0)));
+        const torch::Tensor cudaIjk = fvdb::detail::ops::activeGridCoords(*cudaBatch).jdata();
+        EXPECT_TRUE(torch::equal(cudaIjk.cpu(), cpuIjk));
+    }
+}
+
+} // namespace
+
+TEST(LoadNanovdb, IndexGridWithIndexedStatsAndTilesIsRebuilt) {
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/false);
+    // createNanoGrid's defaults index per-node stats, which leaves gaps between the leaves' indices
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source);
+    ASSERT_FALSE(
+        nanovdb::tools::isVoxelBlockManagerCompatible(handle.grid<nanovdb::ValueOnIndex>()));
+    expectLoadsAsSourceGrid(handle);
+}
+
+TEST(LoadNanovdb, ValueIndexGridIsRenumbered) {
+    // A ValueIndex grid also indexes inactive voxels, so relabelling it ValueOnIndex without
+    // renumbering would give wrong per-voxel indices (openvdb/fvdb-core#841)
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/false);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueIndex>(
+            *source, 0u, false, false);
+    expectLoadsAsSourceGrid(handle);
+}
+
+TEST(LoadNanovdb, IndexGridWithEmptyLeafIsRejected) {
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/true);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source, 0u, false, false);
+    ASSERT_EQ(handle.grid<nanovdb::ValueOnIndex>()->tree().nodeCount(0), 4u);
+    try {
+        fvdb::detail::io::fromNVDB(handle, torch::Device(torch::kCPU));
+        FAIL() << "Expected the grid with an empty leaf to be rejected";
+    } catch (const c10::ValueError &e) {
+        EXPECT_NE(std::string(e.what()).find("no active voxels"), std::string::npos) << e.what();
+    }
+}
+
+TEST(SerializeGrid, GridWithEmptyLeafIsRejectedOnDeserialize) {
+    // Load-time checks now keep such grids out, so build the batch directly, as a grid pickled
+    // before those checks would have been
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/true);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source, 0u, false, false);
+    auto batch = fvdb::detail::makeGridBatchData(
+        fvdb::GridStorage(std::move(handle)), {nanovdb::Vec3d(1.0)}, {nanovdb::Vec3d(0.0)});
+    const torch::Tensor serialized = fvdb::detail::ops::serializeGrid(*batch);
+    try {
+        fvdb::detail::ops::deserializeGrid(serialized);
+        FAIL() << "Expected the grid with an empty leaf to be rejected";
+    } catch (const c10::ValueError &e) {
+        EXPECT_NE(std::string(e.what()).find("no active voxels"), std::string::npos) << e.what();
+    }
+}
+
+TEST(SerializeGrid, CompatibleGridRoundTrips) {
+    auto source = makeSourceGrid(/*withEmptyLeaf=*/false);
+    auto handle =
+        nanovdb::tools::createNanoGrid<nanovdb::tools::build::Grid<float>, nanovdb::ValueOnIndex>(
+            *source, 0u, false, false);
+    auto batch = fvdb::detail::makeGridBatchData(
+        fvdb::GridStorage(std::move(handle)), {nanovdb::Vec3d(1.0)}, {nanovdb::Vec3d(0.0)});
+    auto restored = fvdb::detail::ops::deserializeGrid(fvdb::detail::ops::serializeGrid(*batch));
+    EXPECT_EQ(restored->totalVoxels(), 4);
 }

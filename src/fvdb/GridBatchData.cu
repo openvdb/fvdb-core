@@ -3,9 +3,27 @@
 //
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
+#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/JIdxForGrid.h>
 
 namespace fvdb {
+
+std::shared_ptr<detail::VbmCache>
+GridBatchData::makeVbmCache() {
+    return std::make_shared<detail::VbmCache>();
+}
+
+const detail::BatchVbm &
+GridBatchData::vbm() const {
+    return mVbmCache->acquire(*this);
+}
+
+detail::GridVbm
+GridBatchData::vbmAt(int64_t bi) const {
+    bi = negativeToPositiveIndexWithRangecheck(bi);
+    mVbmCache->acquire(*this);
+    return mVbmCache->gridVbm(bi);
+}
 
 // -----------------------------------------------------------------------
 // Methods that dereference mStorage

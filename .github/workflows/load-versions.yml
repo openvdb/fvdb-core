@@ -54,6 +54,8 @@ on:
         value: ${{ jobs.load.outputs.docker-os-ubuntu }}
       aws-role:
         value: ${{ jobs.load.outputs.aws-role }}
+      aws-runner-role:
+        value: ${{ jobs.load.outputs.aws-runner-role }}
       aws-region:
         value: ${{ jobs.load.outputs.aws-region }}
       aws-cpu-ami:
@@ -78,6 +80,9 @@ on:
         value: ${{ jobs.load.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major:
         value: ${{ jobs.load.outputs.auditwheel-excludes-cuda-major }}
+
+permissions:
+  contents: read # sparse checkout of .github/versions.json
 
 jobs:
   load:
@@ -105,6 +110,7 @@ jobs:
       docker-os-rocky: ${{ steps.parse.outputs.docker-os-rocky }}
       docker-os-ubuntu: ${{ steps.parse.outputs.docker-os-ubuntu }}
       aws-role: ${{ steps.parse.outputs.aws-role }}
+      aws-runner-role: ${{ steps.parse.outputs.aws-runner-role }}
       aws-region: ${{ steps.parse.outputs.aws-region }}
       aws-cpu-ami: ${{ steps.parse.outputs.aws-cpu-ami }}
       aws-gpu-ami: ${{ steps.parse.outputs.aws-gpu-ami }}
@@ -118,7 +124,7 @@ jobs:
       auditwheel-excludes: ${{ steps.parse.outputs.auditwheel-excludes }}
       auditwheel-excludes-cuda-major: ${{ steps.parse.outputs.auditwheel-excludes-cuda-major }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/versions.json
           sparse-checkout-cone-mode: false
@@ -161,6 +167,7 @@ jobs:
             echo "docker-os-rocky=$(jq -r '.docker_os.rocky' $CFG)"
             echo "docker-os-ubuntu=$(jq -r '.docker_os.ubuntu' $CFG)"
             echo "aws-role=$(jq -r '.aws.role' $CFG)"
+            echo "aws-runner-role=$(jq -r '.aws.runner_role' $CFG)"
             echo "aws-region=$(jq -r '.aws.region' $CFG)"
             echo "aws-cpu-ami=$(jq -r '.aws.cpu_ami' $CFG)"
             echo "aws-gpu-ami=$(jq -r '.aws.gpu_ami' $CFG)"

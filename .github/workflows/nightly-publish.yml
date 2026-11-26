@@ -26,7 +26,7 @@ jobs:
     outputs:
       should_build: ${{ steps.decide.outputs.should_build }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -65,6 +65,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       # One job builds the CUDA library once, then the bindings for every Python version
       instance-type: m6a.4xlarge
@@ -78,10 +79,8 @@ jobs:
           {"Key": "GitHubRunId", "Value": "${{ github.run_id }}"}
         ]
       stagger-seconds: 15
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # BUILD NIGHTLY WHEELS
@@ -95,7 +94,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
@@ -123,7 +122,7 @@ jobs:
       # Runs after a partial failure too, so the wheels that did build stay inspectable
       - name: Upload wheels
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fvdb-nightly-torch${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}
           path: dist/fvdb_core-*.whl
@@ -139,18 +138,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
+      attestations: write # Store the wheels' build provenance
     env:
       S3_BUCKET: fvdb-packages
       SIMPLE_PREFIX: simple-nightly
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ needs.versions.outputs.aws-role }}
           aws-region: ${{ needs.versions.outputs.aws-region }}
 
       - name: Download all built wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: fvdb-nightly-*
           path: dist
@@ -196,92 +196,36 @@ jobs:
         env:
           STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
 
-      - name: Upload wheels to S3 project directory
-        run: |
-          set -euo pipefail
-          DEST="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}/"
-          echo "Uploading wheels to $DEST"
-          # Recursive cp uploads the wheels concurrently. It exits non-zero
-          # if any single upload fails.
-          aws s3 cp dist/ "$DEST" --recursive --exclude "*" --include "*.whl"
-          echo "All wheels uploaded successfully"
+      # Signed SLSA build provenance for each wheel, recorded in GitHub's
+      # attestation store and the public Sigstore log. Anyone can check a
+      # wheel with: gh attestation verify <wheel> --repo openvdb/fvdb-core
+      # verify-package-index.yml (fvdb-core) checks that every wheel in the
+      # release index has one.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*.whl
+
+      - name: Check out the publish script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+          sparse-checkout: .github/scripts/publish_simple_index.py
+          sparse-checkout-cone-mode: false
+
+      # Uploads the wheels and rewrites the project index. Hashes of wheels not
+      # built in this run are copied from the current index, never recomputed
+      # from S3, so a wheel replaced in S3 fails pip's hash check instead of
+      # being vouched for. Release wheels (prefix simple) are write-once.
+      - name: Upload wheels and update the project index
         env:
-          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
-
-      - name: Generate project index.html
+          PROJECT: ${{ steps.proj.outputs.normalized }}
+          TITLE: Links for ${{ steps.proj.outputs.project_name }}
         run: |
-          set -euo pipefail
-          S3_PROJECT="s3://${S3_BUCKET}/${SIMPLE_PREFIX}/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
-          OUTDIR="dist/index-gen/${STEPS_PROJ_OUTPUTS_NORMALIZED}"
-          mkdir -p "$OUTDIR"
-          INDEX_FILE="$OUTDIR/index.html"
-          PREV_INDEX="$OUTDIR/prev-index.html"
-          TITLE="Links for ${STEPS_PROJ_OUTPUTS_PROJECT_NAME}"
-
-          # Wheel hashes never change once uploaded, so the previously
-          # published index doubles as a hash cache. Reusing it avoids
-          # re-downloading the whole 30-day archive every night.
-          declare -A cached_sha
-          if aws s3 cp "$S3_PROJECT/index.html" "$PREV_INDEX" --only-show-errors 2>/dev/null; then
-            while read -r name sha; do
-              cached_sha["$name"]="$sha"
-            done < <(grep -oE 'href="[^"#]+\.whl#sha256=[0-9a-f]{64}"' "$PREV_INDEX" \
-                     | sed -E 's/^href="([^#]+)#sha256=([0-9a-f]+)"$/\1 \2/')
-            echo "Loaded ${#cached_sha[@]} hash(es) from the previous index"
-          else
-            echo "No previous index found; every wheel will be hashed"
-          fi
-
-          wheels=$(aws s3 ls "$S3_PROJECT/" | { grep -E '\.whl$' || true; } | awk '{print $4}')
-
-          echo "Found wheels in S3:"
-          echo "$wheels"
-
-          if [ -z "$wheels" ]; then
-            echo "WARNING: No wheels found in S3 at $S3_PROJECT/"
-            echo "This may indicate an upload failure or timing issue"
-          fi
-
-          {
-            echo "<!DOCTYPE html>";
-            echo "<html><head><meta charset=\"utf-8\"><title>${TITLE}</title></head><body>";
-            echo "<h1>${TITLE}</h1>";
-            wheel_count=0
-            for whl in $wheels; do
-              wheel_count=$((wheel_count + 1))
-              if [ -f "dist/$whl" ]; then
-                sha=$(sha256sum "dist/$whl" | awk '{print $1}')
-                source=local
-              elif [ -n "${cached_sha[$whl]:-}" ]; then
-                sha=${cached_sha[$whl]}
-                source=cached
-              else
-                if ! aws s3 cp "$S3_PROJECT/$whl" "/tmp/$whl" --only-show-errors; then
-                  echo "  ERROR: Failed to download $whl from S3" >&2
-                  exit 1
-                fi
-                sha=$(sha256sum "/tmp/$whl" | awk '{print $1}')
-                rm "/tmp/$whl"
-                source=downloaded
-              fi
-              echo "Wheel ${wheel_count}: $whl  sha256=${sha:0:16}... (${source})" >&2
-              echo "<a href=\"${whl}#sha256=${sha}\">${whl}</a><br/>";
-            done;
-            echo "</body></html>";
-          } > "$INDEX_FILE"
-
-          echo "Total wheels processed: $wheel_count"
-          echo "Generated index.html:"
-          cat "$INDEX_FILE"
-
-          aws s3 cp "$INDEX_FILE" "$S3_PROJECT/index.html" \
-            --content-type text/html \
-            --cache-control "public, max-age=60, must-revalidate" \
-            --only-show-errors
-          echo "Index uploaded successfully"
-        env:
-          STEPS_PROJ_OUTPUTS_NORMALIZED: ${{ steps.proj.outputs.normalized }}
-          STEPS_PROJ_OUTPUTS_PROJECT_NAME: ${{ steps.proj.outputs.project_name }}
+          python3 src/.github/scripts/publish_simple_index.py \
+            --bucket "$S3_BUCKET" --prefix "$SIMPLE_PREFIX" --project "$PROJECT" \
+            --title "$TITLE" --dist dist
 
       - name: Generate root simple index.html
         run: |
@@ -289,7 +233,8 @@ jobs:
           TMPDIR=$(mktemp -d)
           ROOT_INDEX="$TMPDIR/index.html"
           echo "Building root simple index from s3://${S3_BUCKET}/${SIMPLE_PREFIX}/"
-          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '{print $2}' | sed 's:/$::')
+          # Only folders ("PRE" lines); a file line's second field is its timestamp.
+          projects=$(aws s3 ls "s3://${S3_BUCKET}/${SIMPLE_PREFIX}/" | awk '$1 == "PRE" {print $2}' | sed 's:/$::')
           TITLE="Simple index"
           {
             echo "<!DOCTYPE html>";
@@ -362,9 +307,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.versions.outputs.publish-build-matrix) }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: nightly-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}

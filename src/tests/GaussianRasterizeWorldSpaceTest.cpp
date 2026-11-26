@@ -11,9 +11,12 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -142,6 +145,73 @@ expectFiniteRaster(const RasterResult &result, const int64_t channels) {
     EXPECT_GT(std::get<1>(result).sum().item<float>(), 0.0f);
 }
 
+/// Six overlapping anisotropic Gaussians in the single tile, sorted front to back.
+WorldSpaceInputs
+makeLayeredInputs() {
+    WorldSpaceInputs inputs = makeInputs();
+    const auto floats       = inputs.means.options();
+    inputs.means            = torch::tensor({{0.05f, -0.03f, 2.0f},
+                                             {-0.08f, 0.04f, 2.2f},
+                                             {0.02f, 0.07f, 2.4f},
+                                             {-0.04f, -0.06f, 2.6f},
+                                             {0.07f, 0.01f, 2.8f},
+                                             {0.0f, 0.0f, 3.0f}},
+                                 floats);
+    inputs.quats =
+        torch::tensor({0.97321693f, 0.05016582f, 0.20066328f, -0.10033164f}, floats).repeat({6, 1});
+    inputs.logScales       = torch::tensor({-0.7f, -1.3f, -1.0f}, floats).repeat({6, 1});
+    inputs.opacities       = torch::tensor({{0.5f, 0.6f, 0.7f, 0.55f, 0.65f, 0.8f}}, floats);
+    inputs.features        = torch::rand({1, 6, 3}, floats);
+    inputs.tileGaussianIds = torch::arange(6, inputs.tileGaussianIds.options());
+    return inputs;
+}
+
+RasterBackwardResult
+rasterizeBackwardWithGrads(const WorldSpaceInputs &inputs,
+                           const torch::Tensor &features,
+                           const RasterResult &forward,
+                           const torch::Tensor &dLossDFeatures,
+                           const torch::Tensor &dLossDAlphas,
+                           const at::optional<torch::Tensor> &backgrounds) {
+    return fvdb::detail::ops::rasterizeWorldSpaceGaussiansBwd(inputs.means,
+                                                              inputs.quats,
+                                                              inputs.logScales,
+                                                              features,
+                                                              inputs.opacities,
+                                                              inputs.worldToCam,
+                                                              inputs.worldToCam,
+                                                              inputs.intrinsics,
+                                                              inputs.distortion,
+                                                              RollingShutterType::NONE,
+                                                              DistortionModel::PINHOLE,
+                                                              kImageWidth,
+                                                              kImageHeight,
+                                                              0,
+                                                              0,
+                                                              kTileSize,
+                                                              inputs.tileOffsets,
+                                                              inputs.tileGaussianIds,
+                                                              std::get<1>(forward),
+                                                              std::get<2>(forward),
+                                                              dLossDFeatures,
+                                                              dLossDAlphas,
+                                                              backgrounds,
+                                                              at::nullopt);
+}
+
+/// Elementwise closeness with an absolute tolerance relative to the largest expected magnitude.
+void
+expectNear(const torch::Tensor &actual,
+           const torch::Tensor &expected,
+           const char *what,
+           const double rtol = 1e-4) {
+    ASSERT_TRUE(actual.sizes() == expected.sizes());
+    const double scale = std::max(expected.abs().max().item<double>(), 1e-12);
+    const double err   = (actual - expected).abs().max().item<double>();
+    EXPECT_LE(err, rtol * scale) << what << ": max abs error " << err << " vs max magnitude "
+                                 << scale;
+}
+
 } // namespace
 
 TEST(GaussianRasterizeWorldSpaceTest, ForwardSupportsSh0AndHigherOrderFeatures) {
@@ -184,6 +254,76 @@ TEST(GaussianRasterizeWorldSpaceTest, BackwardMatchesFiniteDifference) {
     EXPECT_TRUE(torch::isfinite(std::get<2>(backward)).all().item<bool>());
     EXPECT_TRUE(torch::isfinite(std::get<3>(backward)).all().item<bool>());
     EXPECT_TRUE(torch::isfinite(std::get<4>(backward)).all().item<bool>());
+}
+
+TEST(GaussianRasterizeWorldSpaceTest, ChannelChunksMatchNarrowRender) {
+    // Wide renders process channels in chunks. A 3-channel slice of a wide render must match a
+    // 3-channel render of the same features and backgrounds, and with dL/dfeatures zero outside
+    // the slice the geometry gradients must match too. The slices straddle a chunk boundary or
+    // sit in the last chunk, which absorbs a 1-channel remainder.
+    using torch::indexing::Ellipsis;
+    using torch::indexing::Slice;
+
+    torch::manual_seed(0);
+    const WorldSpaceInputs inputs  = makeLayeredInputs();
+    const auto floats              = inputs.means.options();
+    const int64_t numGaussians     = inputs.means.size(0);
+    const auto narrowFeatures      = inputs.features;
+    const auto narrowBackgroundVal = torch::rand({1, 3}, floats);
+    const auto dLossDNarrow        = torch::rand({1, kImageHeight, kImageWidth, 3}, floats);
+    const auto dLossDAlphas        = torch::rand({1, kImageHeight, kImageWidth, 1}, floats);
+
+    const std::vector<std::pair<int64_t, int64_t>> cases = {
+        {65, 62}, {129, 126}, {193, 190}, {513, 62}, {513, 510}};
+    for (const auto &[channels, start]: cases) {
+        for (const bool withBackground: {false, true}) {
+            SCOPED_TRACE(testing::Message() << "channels=" << channels << " start=" << start
+                                            << " background=" << withBackground);
+            const auto slice = Slice(start, start + 3);
+
+            auto wideFeatures = torch::rand({1, numGaussians, channels}, floats);
+            wideFeatures.index_put_({Ellipsis, slice}, narrowFeatures);
+
+            at::optional<torch::Tensor> narrowBackground, wideBackground;
+            if (withBackground) {
+                auto background = torch::rand({1, channels}, floats);
+                background.index_put_({Ellipsis, slice}, narrowBackgroundVal);
+                narrowBackground = narrowBackgroundVal;
+                wideBackground   = background;
+            }
+
+            const auto narrow =
+                rasterize(inputs, narrowFeatures, DistortionModel::PINHOLE, narrowBackground);
+            const auto wide =
+                rasterize(inputs, wideFeatures, DistortionModel::PINHOLE, wideBackground);
+            ASSERT_GT(std::get<1>(narrow).max().item<float>(), 0.5f);
+            expectNear(
+                std::get<0>(wide).index({Ellipsis, slice}), std::get<0>(narrow), "features", 1e-6);
+            EXPECT_TRUE(torch::equal(std::get<1>(wide), std::get<1>(narrow)));
+            EXPECT_TRUE(torch::equal(std::get<2>(wide), std::get<2>(narrow)));
+
+            auto dLossDWide = torch::zeros({1, kImageHeight, kImageWidth, channels}, floats);
+            dLossDWide.index_put_({Ellipsis, slice}, dLossDNarrow);
+            const auto narrowGrads = rasterizeBackwardWithGrads(
+                inputs, narrowFeatures, narrow, dLossDNarrow, dLossDAlphas, narrowBackground);
+            const auto wideGrads = rasterizeBackwardWithGrads(
+                inputs, wideFeatures, wide, dLossDWide, dLossDAlphas, wideBackground);
+
+            expectNear(std::get<0>(wideGrads), std::get<0>(narrowGrads), "dMeans");
+            expectNear(std::get<1>(wideGrads), std::get<1>(narrowGrads), "dQuats");
+            expectNear(std::get<2>(wideGrads), std::get<2>(narrowGrads), "dLogScales");
+            expectNear(std::get<4>(wideGrads), std::get<4>(narrowGrads), "dOpacities");
+
+            const auto dFeatures = std::get<3>(wideGrads);
+            expectNear(dFeatures.index({Ellipsis, slice}), std::get<3>(narrowGrads), "dFeatures");
+            EXPECT_EQ(dFeatures.index({Ellipsis, Slice(0, start)}).count_nonzero().item<int64_t>(),
+                      0);
+            EXPECT_EQ(dFeatures.index({Ellipsis, Slice(start + 3, channels)})
+                          .count_nonzero()
+                          .item<int64_t>(),
+                      0);
+        }
+    }
 }
 
 TEST(GaussianRasterizeWorldSpaceTest, MasksBackgroundsAndNoIntersections) {

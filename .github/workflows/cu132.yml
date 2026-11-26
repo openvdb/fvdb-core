@@ -1,27 +1,28 @@
 name: fVDB pip CUDA 13.2 Build and Test
 
 on:
-  # zizmor: ignore[dangerous-triggers] pull_request_target is required to provision AWS runners; privileged credentials are scoped to runner lifecycle jobs.
-  pull_request_target:
-    branches:
-      - '**'
+  # Called by pr-tests.yml, which owns the pull_request_target trigger and the
+  # approval gate. Do NOT add a pull_request_target trigger here: it would run
+  # this workflow for external PRs without approval.
+  workflow_call:
 
-# Allow subsequent pushes to the same PR or REF to cancel any previous jobs.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+# No concurrency group here: PR runs are de-duplicated by the caller
+# (pr-tests.yml). A group built from github.workflow would collide with the
+# caller's, because in a called workflow github.workflow is the caller's name.
 
+# Read-only by default. Jobs that need more are granted it individually
+# (check-changes; the runner start and stop calls). The jobs that run PR code
+# get contents: read only.
 permissions:
   contents: read
-  deployments: read
-  pull-requests: read
-  issues: read
 
 jobs:
   ##############################################################################
   # CHECK FOR RELEVANT CHANGES
   ##############################################################################
   check-changes:
+    permissions:
+      pull-requests: read # scopes required by check-changes.yml; see that file
     uses: ./.github/workflows/check-changes.yml
 
   versions:
@@ -39,14 +40,13 @@ jobs:
       needs.check-changes.outputs.should_test == 'true'
       && (github.event.pull_request.draft == false || github.event_name != 'pull_request_target')
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       instance-type: m6a.8xlarge
       runner-label: cu132-build-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-cpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # BUILD FVDB
@@ -80,7 +80,7 @@ jobs:
         env:
           NEEDS_VERSIONS_OUTPUTS_GCC_TOOLSET: ${{ needs.versions.outputs.gcc-toolset }}
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
@@ -122,11 +122,11 @@ jobs:
       #     git merge --no-ff $CURRENT_COMMIT --message "CI: Simulating merge of $CURRENT_COMMIT into $TARGET_BRANCH"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -162,9 +162,9 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_CUDA_ARCH_PR: ${{ needs.versions.outputs.cuda-arch-pr }}
 
       - name: Upload wheel
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu132
             path: dist/*.whl
             retention-days: 2
 
@@ -174,9 +174,9 @@ jobs:
         run: tar -cvf fvdb-gtest.tar build/
 
       - name: Upload gtests
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-cu132
             path: fvdb-gtest.tar
             retention-days: 2
 
@@ -202,13 +202,12 @@ jobs:
     # but only if the start-build-runner job was not skipped
     if: ${{ always() && needs.start-build-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: cu132-build-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-build-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # START FVDB TESTS GPU RUNNER
@@ -219,15 +218,14 @@ jobs:
     permissions:
       id-token: write  # Required for AWS OIDC
     uses: ./.github/workflows/start-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       instance-type: g6.xlarge # 4 CPU-core, L4 GPU
       fallback-instance-type: g5.xlarge # A10G, SM 8.6 -- different capacity pool
       runner-label: cu132-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       az-config: ${{ needs.versions.outputs.aws-gpu-az-config }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
 
   ##############################################################################
   # RUN FVDB GTESTS
@@ -256,7 +254,7 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
@@ -282,11 +280,11 @@ jobs:
 
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -313,9 +311,9 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download gtests
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-gtest
+            name: fvdb-gtest-cu132
             path: .
 
       - name: Extract tar
@@ -363,7 +361,7 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
@@ -389,11 +387,11 @@ jobs:
           git merge pr_branch
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         id: setup-python
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
@@ -414,9 +412,9 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu132
             path: ./dist
 
       - name: Install package
@@ -473,7 +471,7 @@ jobs:
           apt-get update
           apt-get install -y libstdc++6
 
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for all branches
           # For pull requests, this automatically checks out the merge commit
@@ -498,11 +496,11 @@ jobs:
           cd $GITHUB_WORKSPACE
           git merge pr_branch
       - name: Install uv
-        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -520,9 +518,9 @@ jobs:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
       - name: Download package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-            name: fvdb-test-package
+            name: fvdb-test-package-cu132
             path: ./dist
 
       - name: Install package
@@ -559,10 +557,9 @@ jobs:
     # but only if the start-tests-gpu-runner job was not skipped
     if: ${{ always() && needs.start-tests-gpu-runner.result != 'skipped' }}
     uses: ./.github/workflows/stop-ec2-runner.yml
+    secrets: inherit # zizmor: ignore[secrets-inherit] the runner App key reaches the runner jobs this way; see start-ec2-runner.yml
     with:
       label: cu132-gpu-${{ github.run_id }}-${{ github.run_attempt }}
       ec2-instance-id: ${{ needs.start-tests-gpu-runner.outputs.ec2-instance-id }}
-      aws-role: ${{ needs.versions.outputs.aws-role }}
+      aws-role: ${{ needs.versions.outputs.aws-runner-role }}
       aws-region: ${{ needs.versions.outputs.aws-region }}
-    secrets:
-      EC2_RUNNER_TOKEN: ${{ secrets.EC2_RUNNER_TOKEN }}
