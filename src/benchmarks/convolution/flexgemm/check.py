@@ -74,6 +74,9 @@ def main():
     flex_gemm.ops.spconv.set_algorithm(flex_gemm.ops.spconv.Algorithm.MASKED_IMPLICIT_GEMM_SPLITK)
     tol = {"fp32": 1e-4, "fp16": 1e-2}
     dtypes = {"fp32": torch.float32, "fp16": torch.float16}
+    unknown = [d for d in args.dtypes.split(",") if d not in dtypes]
+    if unknown:
+        ap.error(f"unknown --dtypes {unknown}; choose from {sorted(dtypes)}")
 
     failed = False
     for backend in args.backends.split(","):
@@ -84,6 +87,7 @@ def main():
                     N, errs = check(backend, RES, C, dtypes[dname], args.solid)
                 except Exception as e:
                     print(f"{backend:20} {dname} RES={RES:4} C={C:4}  ERR {type(e).__name__}: {str(e)[:80]}")
+                    failed = True  # a check that cannot run is not a pass
                     continue
                 ok = all(v <= tol[dname] for v in errs.values())
                 failed |= not ok

@@ -103,6 +103,8 @@ def main():
     ap.add_argument("--json", default=None)
     args = ap.parse_args()
 
+    if "flex_gemm" in args.backends.split(",") and not HAVE_FLEX_GEMM:
+        raise SystemExit("flex_gemm is not installed")
     dtype = set_precision(args.mode)
     configs = DEFAULT_CONFIGS
     if args.configs:

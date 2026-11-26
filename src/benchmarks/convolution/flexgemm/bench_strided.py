@@ -105,9 +105,10 @@ def flex_step(feats, coords, shape, k, s, topology, weight, bias):
     return step, forward
 
 
-def _keys(ijk: torch.Tensor, batch_idx: torch.Tensor) -> torch.Tensor:
-    ijk = ijk.long() + (1 << 20)
-    return ((batch_idx.long() * (1 << 21) + ijk[:, 0]) * (1 << 21) + ijk[:, 1]) * (1 << 21) + ijk[:, 2]
+def _voxel_ids(*coord_sets: torch.Tensor) -> list[torch.Tensor]:
+    """Give each distinct (b, i, j, k) row one id, shared across the coordinate sets."""
+    ids = torch.unique(torch.cat(coord_sets), dim=0, return_inverse=True)[1]
+    return list(ids.split([c.shape[0] for c in coord_sets]))
 
 
 @torch.no_grad()
@@ -118,15 +119,15 @@ def check(fvdb_forward, flex_forward) -> float:
     """
     plan, out = fvdb_forward()
     target = plan.target_grid_batch
-    fv_keys = _keys(target.ijk.jdata, target.ijk.jidx)
+    fv_coords = torch.cat([target.ijk.jidx.long()[:, None], target.ijk.jdata.long()], dim=1)
     out_coords, flex_out = flex_forward()
-    fx_keys = _keys(out_coords[:, 1:], out_coords[:, 0])
-    if not torch.isin(fx_keys, fv_keys).all():
+    fv_ids, fx_ids = _voxel_ids(fv_coords, out_coords.long())
+    if not torch.isin(fx_ids, fv_ids).all():
         raise RuntimeError("FlexGEMM produced output voxels fVDB did not")
-    shared = torch.isin(fv_keys, fx_keys)
-    fv_keys, fv = fv_keys[shared], out.jdata[shared].float()
-    fv, fx = fv[fv_keys.argsort()], flex_out[fx_keys.argsort()].float()
-    return ((fv - fx).abs().max() / fx.abs().max()).item()
+    shared = torch.isin(fv_ids, fx_ids)
+    fv_ids, fv = fv_ids[shared], out.jdata[shared].float()
+    fv, fx = fv[fv_ids.argsort()], flex_out[fx_ids.argsort()].float()
+    return ((fv - fx).abs().max() / fx.abs().max().clamp_min(1e-12)).item()
 
 
 def main():
@@ -174,8 +175,8 @@ def main():
                     step, fwd = flex_step(feats, coords, shape, k, s, args.topology, weight, bias)
                 else:
                     step, fwd = fvdb_step(name, feats, coords, B, C, k, s, args.topology, weight, bias)
-                forwards[name] = fwd
                 ms, gb = time_cuda(step, iters=args.iters)
+                forwards[name] = fwd
                 row[name] = {"ms": ms, "peak_gb": gb}
                 cells.append(f"{ms:9.2f} ms {gb:6.2f} GB")
             except Exception as e:  # report and keep going, e.g. OOM
@@ -186,8 +187,12 @@ def main():
             torch.cuda.empty_cache()
         diff = ""
         if "masked_igemm" in forwards and "flex_gemm" in forwards:
-            row["max_rel_diff"] = check(forwards["masked_igemm"], forwards["flex_gemm"])
-            diff = f"{row['max_rel_diff']:.1e}"
+            try:
+                row["max_rel_diff"] = check(forwards["masked_igemm"], forwards["flex_gemm"])
+                diff = f"{row['max_rel_diff']:.1e}"
+            except Exception as e:  # report and keep going
+                row["max_rel_diff_error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:100]}"
+                diff = "ERR"
         if "flex_gemm" in row and "ms" in row["flex_gemm"]:
             for name in backends:
                 if name != "flex_gemm" and "ms" in row[name]:

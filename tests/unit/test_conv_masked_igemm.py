@@ -4,10 +4,11 @@
 """
 Test the masked implicit GEMM (masked_igemm) convolution backend.
 
-The backend runs regular and transposed convolution with any stride and kernel volumes <= 32 on
-CUDA SM80+, with float16/bfloat16/TF32 features. Channel counts that are not multiples of 8 run
-zero-padded. Forward, input gradient and weight gradient are checked against the default
-gather-scatter backend evaluated in float32.
+The backend runs regular and transposed convolution with any stride and kernel size on CUDA
+SM80+, with float16, bfloat16 and float32 features (float32 as TF32, or as 3xTF32 when TF32 is
+off). Kernels of more than 32 taps use multi-word tap masks and compact neighbor maps. Channel
+counts that are not multiples of 8 run zero-padded. Forward, input gradient and weight gradient
+are checked against the default gather-scatter backend in float32, or float64 for 3xTF32.
 """
 
 import contextlib
@@ -200,6 +201,47 @@ class TestMaskedIGemm(unittest.TestCase):
         y.backward(torch.ones_like(y))
         self.assertTrue(w.grad.is_contiguous())
         self.assertEqual(w.grad.view(-1).numel(), w.numel())
+
+    def test_misaligned_views_run(self):
+        # cp.async needs 16-byte-aligned operands; a contiguous view that starts mid-buffer is
+        # copied into fresh storage instead of faulting.
+        grid = _random_grid(2000, 10)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config=CONFIG)
+        n = grid.total_voxels
+        buf = torch.randn(n * 16 + 1, device="cuda", dtype=torch.float16)
+        x = buf[1:].view(n, 16)
+        self.assertNotEqual(x.data_ptr() % 16, 0)
+        wbuf = torch.randn(32 * 16 * 27 + 1, device="cuda", dtype=torch.float16) * 0.05
+        w = wbuf[1:].view(32, 16, 3, 3, 3)
+        xg, wg = x.clone().requires_grad_(True), w.clone().requires_grad_(True)
+        y = plan.execute(x, w)
+        torch.testing.assert_close(y, plan.execute(x.clone(), w.clone()), rtol=0, atol=0)
+        yg = plan.execute(xg, wg)
+        yg.backward(torch.ones_like(yg))
+        torch.cuda.synchronize()
+        self.assertTrue(torch.isfinite(xg.grad).all() and torch.isfinite(wg.grad).all())
+
+    @parameterized.expand([("masked_igemm", "masked_igemm"), ("gather_scatter", "default")])
+    def test_rejects_channel_mismatch(self, _, backend):
+        grid = _random_grid(500, 8)
+        plan = ConvolutionPlan.from_grid_batch(3, 1, grid, grid, expert_config={"backend": backend})
+        w = torch.randn(32, 16, 3, 3, 3, device="cuda", dtype=torch.float16)
+        for channels in (12, 20):
+            x = torch.randn(grid.total_voxels, channels, device="cuda", dtype=torch.float16)
+            with self.assertRaisesRegex(ValueError, "the weights expect 16"):
+                plan.execute(x, w)
+
+    def test_test_overrides_reject_zero_counts(self):
+        with self.assertRaisesRegex(RuntimeError, "splits must be at least 1"):
+            _fvdb_cpp._masked_igemm_set_test_overrides(splits=0)
+        with self.assertRaisesRegex(RuntimeError, "weight_row_splits must be at least 1"):
+            _fvdb_cpp._masked_igemm_set_test_overrides(weight_row_splits=0)
+        _fvdb_cpp._masked_igemm_set_test_overrides()
+
+    def test_rejects_kernel_beyond_shared_memory(self):
+        grid = _random_grid(200, 6)
+        with self.assertRaisesRegex(RuntimeError, "bytes of shared memory per block"):
+            _build_topology(grid, grid, (101, 101, 1))
 
     def test_anisotropic_kernel(self):
         self._check(_random_grid(2000, 10), 64, 64, (3, 5, 1), torch.float16)

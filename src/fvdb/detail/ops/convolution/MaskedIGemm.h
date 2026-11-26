@@ -1,18 +1,21 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// MaskedIGemm.h -- Masked implicit-GEMM submanifold sparse convolution.
+// MaskedIGemm.h -- Masked implicit-GEMM sparse convolution.
 //
 // Output-stationary implicit GEMM over a voxel-major neighbor map. Each CTA owns
 // a tile of output rows, stages their neighbor rows in shared memory, and
 // accumulates every tap any of its rows uses in registers. Forward and input
-// gradient need no atomics. Rows are grouped by the Gray rank of their tap
+// gradient need no atomics, except that split-K (several CTAs per tile, chosen
+// to fill the last wave) adds float32 partials atomically. Rows are grouped by
+// the Gray rank of their tap
 // mask so tiles skip the taps none of their rows use. The weight gradient
 // reduces over per-tap (input, output) pair lists.
 //
-// Supports any stride and kernel size, and the transposed
-// direction of each, on CUDA with float16, bfloat16 and float32 (computed as TF32)
-// features. The input gradient and the transpose run the same kernel over the
+// Supports any stride and any kernel size whose per-tap state fits the device's
+// shared memory (several thousand taps), and the transposed direction of each, on
+// CUDA SM80+ with float16, bfloat16 and float32 features (float32 computed as TF32,
+// or as 3xTF32 when precise). The input gradient and the transpose run the same kernel over the
 // reverse map; a submanifold map (same grid, stride 1, odd kernel) is its own
 // reverse with mirrored taps, so it stores none.
 //
@@ -87,7 +90,9 @@ torch::Tensor maskedIGemmSparseConv(torch::Tensor features,
 
 /// Backward of maskedIGemmSparseConv with the same @p transposed and @p precise: returns
 /// (grad_features [N, C_in], grad_weights shaped like weights). Each is an undefined tensor when
-/// its need flag is false.
+/// its need flag is false. @p gradOutput is cast to the features' dtype. grad_weights follows the
+/// weights' layout: a view for module weights stored (k2, k1, k0, C_in, C_out), contiguous
+/// otherwise.
 std::tuple<torch::Tensor, torch::Tensor>
 maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                               torch::Tensor features,
@@ -98,11 +103,13 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                               bool transposed = false,
                               bool precise    = false);
 
-/// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32.
+/// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32 for
+/// float16, bfloat16 and float32 inputs (other dtypes use torch's sum).
 torch::Tensor maskedIGemmColumnSum(torch::Tensor x);
 
 /// Choices that are otherwise made from the grid size and the device, forced so tests can reach
-/// every code path on any GPU. Unset fields leave the heuristics in charge. For tests only.
+/// every code path on any GPU. Unset fields leave the heuristics in charge; set counts must be at
+/// least 1. For tests only.
 struct MaskedIGemmTestOverrides {
     std::optional<int> splits;         ///< split-K count of the forward and input-gradient kernel
     std::optional<int>

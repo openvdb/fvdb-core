@@ -1,7 +1,7 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// MaskedIGemm.cu -- Masked implicit-GEMM submanifold sparse convolution.
+// MaskedIGemm.cu -- Masked implicit-GEMM sparse convolution.
 //
 // Kernels use SM80 warp-level tensor-core instructions (cp.async, ldmatrix,
 // mma.sync m16n8k16), which also run on SM89/SM90/SM100/SM120.
@@ -9,8 +9,10 @@
 // Forward and input gradient share one output-stationary kernel:
 //   out[o, n] = sum_{u in taps(tile)} sum_k A[nbr[o, u], k] * B_u[k, n]
 // Forward reads A = features and B_u = W[u] (C_in x C_out). The input gradient
-// reads A = grad_output and B_u = W[K-1-u]^T, which is exact for submanifold
-// convolution with odd kernel sizes because nbr[o, u] = i iff nbr[i, K-1-u] = o.
+// reads A = grad_output over the reverse map (input rows to the output rows that
+// read them) with B_u = W[u]^T. A submanifold map (same grid, stride 1, odd
+// kernel) is its own reverse with mirrored taps, since nbr[o, u] = i iff
+// nbr[i, K-1-u] = o, so it reads the forward map with B_u = W[K-1-u]^T.
 //
 // The weight gradient reduces over each tap's active (input, output) pairs:
 //   dW[u] = sum_p features[pairIn[p]]^T grad_output[pairOut[p]]
@@ -42,11 +44,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <concepts>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 #include <optional>
-#include <string>
+#include <utility>
+#include <vector>
 
 namespace fvdb {
 namespace detail {
@@ -55,7 +58,36 @@ namespace ops {
 namespace {
 
 // Set only by tests (setMaskedIGemmTestOverrides); unset fields leave the heuristics in charge.
-MaskedIGemmTestOverrides gTestOverrides;
+constinit MaskedIGemmTestOverrides gTestOverrides;
+
+// Element types the tensor-core kernels run.
+template <typename T>
+concept MmaElement =
+    std::same_as<T, __half> || std::same_as<T, __nv_bfloat16> || std::same_as<T, float>;
+
+// Tap masks hold kMaskWordBits taps per 32-bit word.
+constexpr int kMaskWordBits = 32;
+
+__host__ __device__ constexpr int
+maskWordsFor(int64_t taps) {
+    return int((taps + kMaskWordBits - 1) / kMaskWordBits);
+}
+
+__host__ __device__ __forceinline__ uint32_t
+bitsBelow(int b) {
+    return (1u << b) - 1u;
+}
+
+// Grid-stride kernels launch blocks of this many threads (see gridStrideBlocks).
+constexpr int kGridStrideThreads = 256;
+
+// cp.async copies 16-byte chunks, so the kernels need 16-byte-aligned operands. A contiguous view
+// can still start at any element (a slice of a flat buffer, say); those get fresh storage.
+torch::Tensor
+aligned16(torch::Tensor t) {
+    t = t.contiguous();
+    return reinterpret_cast<uintptr_t>(t.data_ptr()) % 16 == 0 ? t : t.clone();
+}
 
 // =============================================================================
 // Weight rows
@@ -156,7 +188,7 @@ mma(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
 // Per-element-type tile constants. Every k-tile row is 64 bytes (four 16-byte
 // chunks), so shared-memory layouts and ldmatrix addressing match across types,
 // and each k-tile holds two MMA k-steps.
-template <typename T> struct Elem {
+template <MmaElement T> struct Elem {
     static constexpr int CHUNK = 16 / int(sizeof(T)); // elements per 16-byte chunk
     static constexpr int BK    = 4 * CHUNK;           // k-tile width in elements
     static constexpr int MMA_K = BK / 2;              // MMA k per instruction
@@ -187,7 +219,7 @@ roundUnless3xTf32(uint32_t x) {
 }
 
 // Split a float32 into TF32 parts: big is the value rounded to TF32 and small the rounded
-// remainder, so big + small keeps about 21 of float32's 24 mantissa bits.
+// remainder, so big + small keeps about 22 of float32's 24 mantissa bits.
 __device__ __forceinline__ void
 splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
     float const f = __uint_as_float(x);
@@ -252,7 +284,7 @@ toFloat(__nv_bfloat16 x) {
 }
 
 // Shared-memory swizzles, in units of 16-byte chunks.
-//   Rows of 4 chunks (32 elements): XOR with bits 1-2 of the row.
+//   Rows of 4 chunks (32 16-bit or 16 float32 elements): XOR with bits 1-2 of the row.
 //   Rows of 8+ chunks: XOR the low 3 chunk bits with the row's low 3 bits.
 __device__ __forceinline__ int
 swizzle4(int row, int chunk) {
@@ -284,6 +316,8 @@ __device__ __forceinline__ int
 swizzleRow(int row, int chunk) {
     constexpr int chunks = W * int(sizeof(T)) / 16;
     static_assert(chunks % 4 == 0, "rows must span a multiple of 4 chunks");
+    static_assert(sizeof(T) != 4 || chunks % 8 == 0,
+                  "float32 rows must span a multiple of 8 chunks");
     if constexpr (sizeof(T) == 2 && chunks % 8 != 0)
         return swizzle4(row, chunk);
     else
@@ -331,7 +365,7 @@ mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) 
 // Output-stationary masked implicit GEMM (forward and input gradient)
 // =============================================================================
 
-constexpr int kMaxTaps = 32;
+constexpr int kMaxTaps = kMaskWordBits; // one mask word per row
 // Large kernels (more than kMaxTaps taps) stage the neighbor columns of their taps in groups of
 // kStagedTaps.
 constexpr int kStagedTaps = 32;
@@ -345,6 +379,7 @@ template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct TileConfig {
     static constexpr int THREADS = WM * WN * 32;
     static constexpr int MT      = BM / WM / 16; // m16 tiles per warp
     static constexpr int NT      = BN / WN / 8;  // n8 tiles per warp
+    static_assert(BM % (WM * 16) == 0 && BN % (WN * 8) == 0, "warp tiles must cover the CTA tile");
     static_assert(NT % 2 == 0, "B fragments load two n8 tiles at a time");
     static_assert(BN >= 32, "B rows must span at least 4 chunks");
 };
@@ -354,7 +389,8 @@ constexpr int
 smemBytes(int K) {
     int const tiles = Cfg::STAGES * (Cfg::BM + Cfg::BN) * Elem<T>::BK * int(sizeof(T));
     if constexpr (LargeKernel)
-        return tiles + Cfg::BM * kStagedTaps * 4 + Cfg::BM * 4 + 2 * K * 4 + (K + 31) / 32 * 4 + 16;
+        return tiles + Cfg::BM * kStagedTaps * 4 + Cfg::BM * 4 + 2 * K * 4 + maskWordsFor(K) * 4 +
+               16;
     else
         return tiles + Cfg::BM * K * 4 + Cfg::BM * 4 + 2 * kMaxTaps * 4 + 16;
 }
@@ -372,7 +408,7 @@ smemBytes(int K) {
 // LargeKernel runs kernels of more than kMaxTaps taps: neighborMap is compact and rowMaskWords
 // holds a (mask, base) pair per 32-tap word (see largeKernelTopology), and the neighbor columns of
 // the tile's taps are staged in groups of kStagedTaps as the loader reaches them.
-template <typename Cfg, typename T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel = false>
+template <typename Cfg, MmaElement T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel = false>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmKernel(T const *__restrict__ A,
                   T const *__restrict__ W,
@@ -393,7 +429,7 @@ maskedIGemmKernel(T const *__restrict__ A,
     constexpr int THREADS = Cfg::THREADS, MT = Cfg::MT, NT = Cfg::NT;
     constexpr int A_STAGE = BM * BK, B_STAGE = BK * BN;
 
-    [[maybe_unused]] int const maskWords = (K + 31) / 32; // LargeKernel only
+    [[maybe_unused]] int const maskWords = maskWordsFor(K); // LargeKernel only
     constexpr int TAP_SLOTS              = LargeKernel ? 0 : kMaxTaps;
     int const tapSlots                   = LargeKernel ? K : TAP_SLOTS;
 
@@ -417,6 +453,7 @@ maskedIGemmKernel(T const *__restrict__ A,
     int const n0     = nTile * BN;
 
     // ---- Stage the tile's rows, tap union, and neighbor columns of the union ----
+    // (LargeKernel stages the neighbor columns per tap group, as load() reaches them.)
     if constexpr (LargeKernel) {
         for (int w = tid; w < maskWords; w += THREADS)
             sMask[w] = 0;
@@ -496,7 +533,7 @@ maskedIGemmKernel(T const *__restrict__ A,
     constexpr int B_CHUNKS = BN * 4 / THREADS;
     constexpr int B_ROW    = KMajorWeights ? 4 : BN / CHUNK_ELEMS; // chunks per B shared-memory row
     // When the threads tile B rows, each thread's chunks share a column and step by B_RSTEP
-    // rows; otherwise (B rows of 12 chunks) each chunk keeps its own offsets.
+    // rows; otherwise (BN = 96: B rows of 12 or 24 chunks) each chunk keeps its own offsets.
     constexpr bool B_TILED = THREADS % B_ROW == 0;
     constexpr int B_RSTEP  = B_TILED ? THREADS / B_ROW : 0;
     static_assert(BM * 4 % THREADS == 0 && BN * 4 % THREADS == 0, "chunks must tile the CTA");
@@ -547,10 +584,11 @@ maskedIGemmKernel(T const *__restrict__ A,
             if (o >= 0) {
                 // Compact map: rowMaskWords holds (mask, base) per 32-tap word.
                 int const tap    = sTaps[first + i - r * tapGroupSize];
-                int64_t const e  = (int64_t(o) * maskWords + tap / 32) * 2;
+                int const bit    = tap % kMaskWordBits;
+                int64_t const e  = (int64_t(o) * maskWords + tap / kMaskWordBits) * 2;
                 uint32_t const m = uint32_t(rowMaskWords[e]);
-                if ((m >> (tap % 32)) & 1u)
-                    v = neighborMap[rowMaskWords[e + 1] + __popc(m & ((1u << (tap % 32)) - 1u))];
+                if ((m >> bit) & 1u)
+                    v = neighborMap[rowMaskWords[e + 1] + __popc(m & bitsBelow(bit))];
             }
             sNbr[i] = v;
         }
@@ -753,6 +791,7 @@ template <int BM_, int BN_, int WM_, int WN_, int STAGES_, int BK_ = 32> struct 
     static constexpr int THREADS = WM * WN * 32;
     static constexpr int MT      = BM / WM / 16;
     static constexpr int NT      = BN / WN / 8;
+    static_assert(BM % (WM * 16) == 0 && BN % (WN * 8) == 0, "warp tiles must cover the CTA tile");
     static_assert(NT % 2 == 0 && BM >= 32 && BN >= 32 && BK <= 32, "tile shape");
 };
 
@@ -763,7 +802,7 @@ wgradSmemBytes() {
            Cfg::STAGES * 2 * Cfg::BK * 4;
 }
 
-template <typename Cfg, typename T, bool Use3xTf32>
+template <typename Cfg, MmaElement T, bool Use3xTf32>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmWgradKernel(T const *__restrict__ X,
                        T const *__restrict__ dY,
@@ -1084,7 +1123,7 @@ stagedNeighborMapKernel(nanovdb::OnIndexGrid const *__restrict__ grid,
     uint16_t voxelOffset;
     VbmT::decodeInverseMap(grid, leaf0, jump, first, int(threadIdx.x), leafIndex, voxelOffset);
     if (leafIndex == VbmT::UnusedLeafIndex)
-        return; // defensive; the lastOffset guard makes this unreachable
+        __trap(); // the lastOffset guard makes this unreachable; never leave a row unwritten
 
     int const j = int(leafIndex - leaf0);
     int const x = voxelOffset >> 6, y = (voxelOffset >> 3) & 7, z = voxelOffset & 7;
@@ -1207,7 +1246,8 @@ rowMaskKernel(int32_t const *__restrict__ map,
 
 int
 gridStrideBlocks(int64_t work) {
-    return int(std::clamp<int64_t>((work + 255) / 256, 1, int64_t(1) << 16));
+    return int(std::clamp<int64_t>(
+        (work + kGridStrideThreads - 1) / kGridStrideThreads, 1, int64_t(1) << 16));
 }
 
 // =============================================================================
@@ -1268,7 +1308,7 @@ pairFillKernel(int32_t const *__restrict__ rowMasks,
         if (!((m >> k) & 1u))
             continue;
         int pos =
-            blockOffsets[int64_t(k) * gridDim.x + blockIdx.x] + __popc(bits & ((1u << lane) - 1u));
+            blockOffsets[int64_t(k) * gridDim.x + blockIdx.x] + __popc(bits & bitsBelow(lane));
         for (int w = 0; w < warp; ++w)
             pos += warpCounts[w][k];
         pairOut[pos] = row;
@@ -1293,6 +1333,9 @@ smCount() {
 // sorted by Gray rank keep the neighbor gathers in L2 at the cost of slightly larger tile
 // unions.
 constexpr int64_t kLocalWindow = int64_t(1) << 16;
+
+// gridDim.z limit; the weight gradient's splits run along z.
+constexpr int64_t kMaxGridZ = 65535;
 
 torch::Tensor const &
 rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
@@ -1360,7 +1403,10 @@ launchConv(torch::Tensor const &A,
     if (splits > 1)
         acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
 
-    TapToWeightRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], flipTaps};
+    TapToWeightRow const ttr{.k1   = topo.kernelSize[1],
+                             .k2   = topo.kernelSize[2],
+                             .k0   = topo.kernelSize[0],
+                             .flip = flipTaps};
     dim3 const grid(tiles, splits);
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(A.data_ptr()),
@@ -1369,7 +1415,7 @@ launchConv(torch::Tensor const &A,
         reinterpret_cast<T *>(out.data_ptr()),
         splits > 1 ? acc.data_ptr<float>() : nullptr,
         topo.neighborMap.data_ptr<int32_t>(),
-        rowOrder(topo, int64_t(N) * Kc * A.element_size()).data_ptr<int32_t>(),
+        rowOrder(topo, A.numel() * A.element_size()).data_ptr<int32_t>(),
         (LargeKernel ? topo.rowWords : topo.rowMasks).data_ptr<int32_t>(),
         N,
         Kc,
@@ -1414,7 +1460,7 @@ dispatchConvTiles(torch::Tensor const &A,
     }
 }
 
-// Tile shape by output width.
+// Dense (at most kMaxTaps taps) or compact (large kernel) neighbor-map instantiations.
 template <typename T, bool KMajorWeights, bool Use3xTf32>
 void
 dispatchConv(torch::Tensor const &A,
@@ -1452,22 +1498,22 @@ launchWgrad(torch::Tensor const &X,
     int const tiles     = ((Ci + Cfg::BM - 1) / Cfg::BM) * ((Co + Cfg::BN - 1) / Cfg::BN);
     int64_t const steps = std::max<int64_t>(1, topo.pairIn.numel() / std::max(1, K) / Cfg::BK);
     // Many short CTAs keep the last wave small, but each split adds a tile of float32 atomics,
-    // so every CTA keeps at least 128 steps.
+    // so a pair split keeps at least 128 steps per CTA (a row split, below, at least 32).
     int64_t const target = int64_t(64) * sms;
     int64_t splits       = std::clamp<int64_t>(
         (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128));
 
     // Each row is read by up to K taps, which hit L2 only if they run close together. When X and
     // dY are several times L2, split by output rows rather than pairs, so the K taps of a split
-    // read the same rows, and use enough splits that the rows read by the resident
-    // resident / (tiles * K) splits fit in a quarter of L2.
+    // read the same rows, and use enough splits that the rows read by the
+    // resident / (tiles * K) concurrently running splits fit in a quarter of L2.
     int perSm = 0, device = 0, l2 = 0;
     C10_CUDA_CHECK(
         cudaOccupancyMaxActiveBlocksPerMultiprocessor(&perSm, kernel, Cfg::THREADS, smem));
     C10_CUDA_CHECK(cudaGetDevice(&device));
     C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
     double const groups = double(std::max(1, perSm) * sms) / double(tiles * K);
-    double const bytes  = double(topo.outputTotalVoxels) * (Ci + Co) * X.element_size();
+    double const bytes  = double(X.numel() + dY.numel()) * X.element_size();
     auto const local    = int64_t(std::ceil(groups * bytes / (l2 / 4.0)));
     int const rowBlocks = int(topo.pairBlockOffsets.size(1));
     bool rowSplit       = local > splits && rowBlocks > 1;
@@ -1484,7 +1530,11 @@ launchWgrad(torch::Tensor const &X,
     else
         rows = torch::empty({K, Ci, Co}, X.options());
 
-    TapToWeightRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], false};
+    TapToWeightRow const ttr{.k1   = topo.kernelSize[1],
+                             .k2   = topo.kernelSize[2],
+                             .k0   = topo.kernelSize[0],
+                             .flip = false};
+    splits = std::min<int64_t>(splits, kMaxGridZ);
     dim3 const grid(tiles, K, unsigned(splits));
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(X.data_ptr()),
@@ -1567,12 +1617,43 @@ dispatchWgrad(torch::Tensor const &X,
     }
 }
 
+// The relations between topology fields that the launchers rely on.
+void
+validateTopology(MaskedIGemmTopology const &t, char const *name) {
+    int64_t const K = int64_t(t.kernelSize[0]) * t.kernelSize[1] * t.kernelSize[2];
+    TORCH_CHECK(
+        t.kernelVolume == K, name, ": topology kernel volume does not match its kernel size");
+    bool const large = K > kMaxTaps;
+    TORCH_CHECK(t.rowWords.defined() == large && t.neighborOffsets.defined() == large,
+                name,
+                ": topology has the wrong neighbor-map layout for a kernel of ",
+                K,
+                " taps");
+    if (large) {
+        TORCH_CHECK(t.neighborOffsets.numel() == t.outputTotalVoxels + 1 && t.rowWords.dim() == 3 &&
+                        t.rowWords.size(0) == t.outputTotalVoxels &&
+                        t.rowWords.size(1) == maskWordsFor(K) && t.rowWords.size(2) == 2,
+                    name,
+                    ": compact neighbor map has inconsistent shapes");
+    } else {
+        TORCH_CHECK(t.neighborMap.dim() == 2 && t.neighborMap.size(0) == t.outputTotalVoxels &&
+                        t.neighborMap.size(1) == K && t.rowMasks.numel() == t.outputTotalVoxels,
+                    name,
+                    ": neighbor map has inconsistent shapes");
+    }
+    TORCH_CHECK(
+        t.sortedRows.numel() == t.outputTotalVoxels, name, ": row order has the wrong length");
+}
+
 void
 checkConv(torch::Tensor const &features,
           torch::Tensor const &weights,
           MaskedIGemmTopology const &topo,
           bool transposed,
           char const *name) {
+    validateTopology(topo, name);
+    if (topo.reverse)
+        validateTopology(*topo.reverse, name);
     int64_t const inRows = transposed ? topo.outputTotalVoxels : topo.featureTotalVoxels;
     TORCH_CHECK(features.is_cuda(), name, ": features must be on CUDA");
     TORCH_CHECK(weights.device() == features.device() &&
@@ -1671,7 +1752,7 @@ runWgrad(torch::Tensor const &X,
 // one partial per column into out.
 constexpr int kColumnSumThreads = 256;
 
-template <typename T>
+template <MmaElement T>
 __global__ void __launch_bounds__(kColumnSumThreads)
 columnSumKernel(T const *__restrict__ x, int64_t N, int C, float *__restrict__ out) {
     constexpr int V  = 16 / sizeof(T);
@@ -1717,11 +1798,6 @@ columnSumKernel(T const *__restrict__ x, int64_t N, int C, float *__restrict__ o
 // exists in full and every tap is probed once.
 
 constexpr int64_t kProbeBatchBytes = int64_t(256) << 20; // dense scratch per probe batch
-
-__device__ __forceinline__ uint32_t
-bitsBelow(int b) {
-    return (1u << b) - 1u;
-}
 
 // Probe rows [r0, r1) of rowGrid into scratch[(row - r0) * K + k] (a probeGrid row or -1). The
 // forward map's rows are output voxels probing input voxels at fine = stride * coarse + tap -
@@ -1853,8 +1929,7 @@ multiWordGrayKeyKernel(int32_t const *__restrict__ rowWords,
             if (w & 1) {
                 high = rank;
             } else {
-                if (w == W - 1)
-                    high = 0; // words above W - 1 are zero
+                // high is still 0 here when w == W - 1: words above W - 1 are zero.
                 keys[int64_t(w / 2) * N + row] =
                     int64_t((uint64_t(high ^ 0x80000000u) << 32) | rank);
             }
@@ -1868,7 +1943,7 @@ torch::Tensor
 multiWordRowOrder(torch::Tensor const &rowWords, int64_t N, int64_t W, cudaStream_t stream) {
     auto keys = torch::empty({(W + 1) / 2, N}, rowWords.options().dtype(torch::kInt64));
     if (N > 0) {
-        multiWordGrayKeyKernel<<<gridStrideBlocks(N), 256, 0, stream>>>(
+        multiWordGrayKeyKernel<<<gridStrideBlocks(N), kGridStrideThreads, 0, stream>>>(
             rowWords.data_ptr<int32_t>(), N, int(W), keys.data_ptr<int64_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -1966,7 +2041,7 @@ buildCompactMap(GridBatchData const &rowGrid,
                 ConvolutionGeometry const &geometry,
                 cudaStream_t stream) {
     int64_t const K    = geometry.kernelVolume();
-    int64_t const W    = (K + 31) / 32;
+    int64_t const W    = maskWordsFor(K);
     int64_t const rows = rowGrid.totalVoxels();
     auto const i32     = torch::dtype(torch::kInt32).device(rowGrid.device());
 
@@ -1980,7 +2055,7 @@ buildCompactMap(GridBatchData const &rowGrid,
         int64_t const r1 = std::min(rows, r0 + batchRows), n = r1 - r0;
         probeBatchScan<Reverse>(
             rowGrid, probeGrid, geometry, int(K), r0, r1, scratch.data_ptr<int32_t>());
-        batchMaskKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+        batchMaskKernel<<<gridStrideBlocks(n * 32), kGridStrideThreads, 0, stream>>>(
             scratch.data_ptr<int32_t>(),
             n,
             int(K),
@@ -1995,7 +2070,7 @@ buildCompactMap(GridBatchData const &rowGrid,
         int64_t const size        = last.item<int64_t>();
         torch::Tensor part        = torch::empty({size}, i32);
         if (size > 0) {
-            batchCompactKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+            batchCompactKernel<<<gridStrideBlocks(n * 32), kGridStrideThreads, 0, stream>>>(
                 scratch.data_ptr<int32_t>(),
                 n,
                 int(K),
@@ -2014,7 +2089,7 @@ buildCompactMap(GridBatchData const &rowGrid,
         TORCH_CHECK(nbr.size(0) < std::numeric_limits<int32_t>::max(),
                     "maskedIGemmSparseConvTopology: neighbor pairs exceed the int32 index");
         offsets.slice(0, 1).copy_(torch::cumsum(degrees, 0, torch::kInt32));
-        rowBaseKernel<<<gridStrideBlocks(rows), 256, 0, stream>>>(
+        rowBaseKernel<<<gridStrideBlocks(rows), kGridStrideThreads, 0, stream>>>(
             offsets.data_ptr<int32_t>(), rows, int(W), rowWords.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -2029,7 +2104,7 @@ largeKernelTopology(GridBatchData const &featureGrid,
                     nanovdb::Coord kernelSize,
                     bool submanifold) {
     int64_t const K   = geometry.kernelVolume();
-    int64_t const W   = (K + 31) / 32;
+    int64_t const W   = maskWordsFor(K);
     int64_t const N   = outputGrid.totalVoxels();
     int64_t const NIn = featureGrid.totalVoxels();
     auto const i32    = torch::dtype(torch::kInt32).device(outputGrid.device());
@@ -2077,43 +2152,43 @@ largeKernelTopology(GridBatchData const &featureGrid,
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    MaskedIGemmTopology topo{nbr,
-                             fwd.sorted,
-                             torch::Tensor(),
-                             rowWords.select(2, 0),
-                             pairIn,
-                             pairOut,
-                             pairOffsets,
-                             blockOffsets,
-                             N,
-                             NIn,
-                             K,
-                             kernelSize,
-                             nullptr,
-                             offsets,
-                             rowWords};
+    MaskedIGemmTopology topo{.neighborMap        = nbr,
+                             .sortedRows         = fwd.sorted,
+                             .localRows          = torch::Tensor(),
+                             .rowMasks           = rowWords.select(2, 0),
+                             .pairIn             = pairIn,
+                             .pairOut            = pairOut,
+                             .pairOffsets        = pairOffsets,
+                             .pairBlockOffsets   = blockOffsets,
+                             .outputTotalVoxels  = N,
+                             .featureTotalVoxels = NIn,
+                             .kernelVolume       = K,
+                             .kernelSize         = kernelSize,
+                             .reverse            = nullptr,
+                             .neighborOffsets    = offsets,
+                             .rowWords           = rowWords};
     if (submanifold)
         return topo;
 
     // ---- Reverse map: input rows, each listing the output rows that read it ----
     CompactMap const rev = buildCompactMap<true>(featureGrid, outputGrid, geometry, stream);
     auto const none      = torch::empty({0}, i32);
-    topo.reverse =
-        std::make_shared<MaskedIGemmTopology const>(MaskedIGemmTopology{rev.nbr,
-                                                                        rev.sorted,
-                                                                        torch::Tensor(),
-                                                                        rev.rowWords.select(2, 0),
-                                                                        none,
-                                                                        none,
-                                                                        none,
-                                                                        none,
-                                                                        NIn,
-                                                                        N,
-                                                                        K,
-                                                                        kernelSize,
-                                                                        nullptr,
-                                                                        rev.offsets,
-                                                                        rev.rowWords});
+    topo.reverse         = std::make_shared<MaskedIGemmTopology const>(
+        MaskedIGemmTopology{.neighborMap        = rev.nbr,
+                                    .sortedRows         = rev.sorted,
+                                    .localRows          = torch::Tensor(),
+                                    .rowMasks           = rev.rowWords.select(2, 0),
+                                    .pairIn             = none,
+                                    .pairOut            = none,
+                                    .pairOffsets        = none,
+                                    .pairBlockOffsets   = none,
+                                    .outputTotalVoxels  = NIn,
+                                    .featureTotalVoxels = N,
+                                    .kernelVolume       = K,
+                                    .kernelSize         = kernelSize,
+                                    .reverse            = nullptr,
+                                    .neighborOffsets    = rev.offsets,
+                                    .rowWords           = rev.rowWords});
     return topo;
 }
 
@@ -2125,6 +2200,9 @@ largeKernelTopology(GridBatchData const &featureGrid,
 
 void
 setMaskedIGemmTestOverrides(MaskedIGemmTestOverrides const &overrides) {
+    TORCH_CHECK(!overrides.splits || *overrides.splits >= 1, "splits must be at least 1");
+    TORCH_CHECK(!overrides.weightRowSplits || *overrides.weightRowSplits >= 1,
+                "weight_row_splits must be at least 1");
     gTestOverrides = overrides;
 }
 
@@ -2204,12 +2282,29 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
     int64_t const K   = geometry.kernelVolume();
     int64_t const N   = outputGrid.totalVoxels();
     int64_t const NIn = featureGrid.totalVoxels();
-    TORCH_CHECK(N < std::numeric_limits<int32_t>::max() &&
-                    NIn < std::numeric_limits<int32_t>::max(),
-                "maskedIGemmSparseConvTopology: too many voxels");
+    // Kernels index rows as int32 and probe up to one block of rows past N.
+    constexpr int64_t kMaxRows = std::numeric_limits<int32_t>::max() - kPairBlock;
+    TORCH_CHECK(N <= kMaxRows && NIn <= kMaxRows, "maskedIGemmSparseConvTopology: too many voxels");
 
     c10::cuda::CUDAGuard guard(outputGrid.device());
-    // Kernels of more than kMaxTaps taps keep compact maps (largeKernelTopology).
+    // Kernels of more than kMaxTaps taps keep compact maps (largeKernelTopology). Their kernels
+    // hold per-tap state in shared memory, which bounds the kernel volume.
+    if (K > kMaxTaps) {
+        int device = 0, optin = 0;
+        C10_CUDA_CHECK(cudaGetDevice(&device));
+        C10_CUDA_CHECK(
+            cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+        int64_t const need =
+            std::max<int64_t>(int64_t(kPairBlock / 32) * K * int64_t(sizeof(int32_t)),
+                              smemBytes<TileConfig<128, 128, 2, 2, 2>, float, true>(int(K)));
+        TORCH_CHECK(need <= optin,
+                    "maskedIGemmSparseConvTopology: a kernel of ",
+                    K,
+                    " taps needs ",
+                    need,
+                    " bytes of shared memory per block; this device allows ",
+                    optin);
+    }
     if (K > kMaxTaps)
         return largeKernelTopology(featureGrid, outputGrid, geometry, kernelSize, submanifold);
     auto const i32 = torch::dtype(torch::kInt32).device(outputGrid.device());
@@ -2224,7 +2319,7 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
         // than the probes it saves.
         bool withinLeaf = submanifold;
         for (int d = 0; d < 3; ++d)
-            withinLeaf &= (kernelSize[d] - 1) / 2 <= 8;
+            withinLeaf &= (kernelSize[d] - 1) / 2 <= int(nanovdb::OnIndexTree::LeafNodeType::DIM);
         bool scan = !withinLeaf || N < (int64_t(1) << 17);
         if (gTestOverrides.stagedBuilder)
             scan = !(*gTestOverrides.stagedBuilder && withinLeaf);
@@ -2279,19 +2374,19 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
 
-    MaskedIGemmTopology topo{nbr,
-                             sortedRows,
-                             torch::Tensor(),
-                             rowMasks,
-                             pairIn,
-                             pairOut,
-                             offsets,
-                             blockOffsets,
-                             N,
-                             NIn,
-                             K,
-                             kernelSize,
-                             nullptr};
+    MaskedIGemmTopology topo{.neighborMap        = nbr,
+                             .sortedRows         = sortedRows,
+                             .localRows          = torch::Tensor(),
+                             .rowMasks           = rowMasks,
+                             .pairIn             = pairIn,
+                             .pairOut            = pairOut,
+                             .pairOffsets        = offsets,
+                             .pairBlockOffsets   = blockOffsets,
+                             .outputTotalVoxels  = N,
+                             .featureTotalVoxels = NIn,
+                             .kernelVolume       = K,
+                             .kernelSize         = kernelSize,
+                             .reverse            = nullptr};
     if (submanifold)
         return topo;
 
@@ -2299,33 +2394,34 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
     auto revCode  = torch::empty({NIn}, i32);
     auto revMasks = torch::empty({NIn}, i32);
     if (N > 0 && NIn > 0) {
-        reverseMapKernel<<<gridStrideBlocks(N * K), 256, 0, stream>>>(
+        reverseMapKernel<<<gridStrideBlocks(N * K), kGridStrideThreads, 0, stream>>>(
             nbr.data_ptr<int32_t>(), N * K, int(K), rev.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     if (NIn > 0) {
-        rowMaskKernel<<<gridStrideBlocks(NIn), 256, 0, stream>>>(rev.data_ptr<int32_t>(),
-                                                                 NIn,
-                                                                 int(K),
-                                                                 revCode.data_ptr<int32_t>(),
-                                                                 revMasks.data_ptr<int32_t>());
+        rowMaskKernel<<<gridStrideBlocks(NIn), kGridStrideThreads, 0, stream>>>(
+            rev.data_ptr<int32_t>(),
+            NIn,
+            int(K),
+            revCode.data_ptr<int32_t>(),
+            revMasks.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
     auto const none = torch::empty({0}, i32);
     topo.reverse    = std::make_shared<MaskedIGemmTopology const>(
-        MaskedIGemmTopology{rev,
-                            torch::argsort(revCode).to(torch::kInt32),
-                            torch::Tensor(),
-                            revMasks,
-                            none,
-                            none,
-                            none,
-                            none,
-                            NIn,
-                            N,
-                            K,
-                            kernelSize,
-                            nullptr});
+        MaskedIGemmTopology{.neighborMap        = rev,
+                               .sortedRows         = torch::argsort(revCode).to(torch::kInt32),
+                               .localRows          = torch::Tensor(),
+                               .rowMasks           = revMasks,
+                               .pairIn             = none,
+                               .pairOut            = none,
+                               .pairOffsets        = none,
+                               .pairBlockOffsets   = none,
+                               .outputTotalVoxels  = NIn,
+                               .featureTotalVoxels = N,
+                               .kernelVolume       = K,
+                               .kernelSize         = kernelSize,
+                               .reverse            = nullptr});
     return topo;
 }
 
@@ -2339,8 +2435,8 @@ maskedIGemmSparseConv(torch::Tensor features,
     checkConv(features, weights, topo, transposed, "maskedIGemmSparseConv");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
-    features      = features.contiguous();
-    auto Wrows    = weightRows(weights);
+    features      = aligned16(features);
+    auto Wrows    = aligned16(weightRows(weights));
     int const Ci = int(weights.size(1)), Co = int(weights.size(0));
     torch::Tensor b;
     if (bias.has_value() && bias->defined()) {
@@ -2377,8 +2473,8 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                 "maskedIGemmSparseConvBackward: grad_output must be on the features' device");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
-    features      = features.contiguous();
-    gradOutput    = gradOutput.to(st).contiguous();
+    features      = aligned16(features);
+    gradOutput    = aligned16(gradOutput.to(st));
     int const Ci = int(weights.size(1)), Co = int(weights.size(0));
     auto stream = c10::cuda::getCurrentCUDAStream();
 
@@ -2388,8 +2484,15 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
         RowMap const map = transposed ? RowMap{topo, false} : inputRows(topo);
         gradFeatures     = torch::empty({features.size(0), Ci}, features.options());
         if (map.topo.outputTotalVoxels > 0)
-            runConv<true>(
-                gradOutput, weightRows(weights), {}, gradFeatures, map, Co, Ci, precise, stream);
+            runConv<true>(gradOutput,
+                          aligned16(weightRows(weights)),
+                          {},
+                          gradFeatures,
+                          map,
+                          Co,
+                          Ci,
+                          precise,
+                          stream);
     }
     if (needWeights) {
         // Pairs gather input rows from the forward convolution's input. For the transpose

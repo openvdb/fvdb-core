@@ -70,6 +70,9 @@ def sphere_coords(res: int, ch: int, batch_size: int = 1, dtype=torch.float32, s
 
 
 def coords_to_jagged(coords: torch.Tensor, batch_size: int) -> fvdb.JaggedTensor:
+    """Split (b, i, j, k) rows into one ijk tensor per batch member; rows must be sorted by b."""
+    if coords.shape[0] > 1 and not bool((coords[1:, 0] >= coords[:-1, 0]).all()):
+        raise ValueError("coords must be sorted by batch index")
     ijk = coords[:, 1:].contiguous()
     counts = torch.bincount(coords[:, 0].long(), minlength=batch_size).tolist()
     return fvdb.JaggedTensor(list(torch.split(ijk, counts)))
@@ -77,6 +80,8 @@ def coords_to_jagged(coords: torch.Tensor, batch_size: int) -> fvdb.JaggedTensor
 
 def set_precision(mode: str):
     """mode in {fp16, tf32, fp32}; returns the feature dtype."""
+    if mode not in ("fp16", "tf32", "fp32"):
+        raise ValueError(f"unknown precision mode {mode!r}; expected fp16, tf32 or fp32")
     tf32 = mode != "fp32"
     torch.backends.cuda.matmul.allow_tf32 = tf32
     torch.backends.cudnn.allow_tf32 = tf32
@@ -95,6 +100,8 @@ def zero_grad(params):
 
 def time_cuda(fn, iters: int = 20, warmup: int = 2):
     """Mean ms per call and peak GB over the timed calls."""
+    if iters < 1 or warmup < 0:
+        raise ValueError(f"time_cuda needs iters >= 1 and warmup >= 0; got iters={iters}, warmup={warmup}")
     for _ in range(warmup):
         fn()
     torch.cuda.synchronize()

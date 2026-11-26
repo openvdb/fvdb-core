@@ -639,17 +639,18 @@ maxPairsPerOffset(torch::Tensor const &offsets, int64_t K) {
 static torch::Tensor
 weightRows(torch::Tensor const &weights) {
     int64_t const K = weights.size(2) * weights.size(3) * weights.size(4);
-    return weights.permute({4, 3, 2, 1, 0}).reshape({K, weights.size(1), weights.size(0)});
+    return weights.permute({4, 3, 2, 1, 0})
+        .reshape({K, weights.size(1), weights.size(0)})
+        .contiguous();
 }
 
-// Topology tap k runs k0 slowest (ConvolutionGeometry::tapCoord). Weight rows
-// run k2 slowest.
+// Weight row of topology tap k: tap coordinates come from ConvolutionGeometry::tapCoord (k0
+// slowest), and weight rows run k2 slowest.
 static int64_t
-weightRow(int64_t k, nanovdb::Coord const &ks) {
-    int64_t const k0 = k / (int64_t(ks[1]) * ks[2]);
-    int64_t const k1 = (k / ks[2]) % ks[1];
-    int64_t const k2 = k % ks[2];
-    return (k2 * ks[1] + k1) * ks[0] + k0;
+weightRow(int64_t k, ConvolutionGeometry const &geometry) {
+    nanovdb::Coord const t  = geometry.tapCoord(k);
+    nanovdb::Coord const ks = geometry.kernelSize();
+    return (int64_t(t[2]) * ks[1] + t[1]) * ks[0] + t[0];
 }
 
 // The weight gradient in the weights' own layout: a free (C_out, C_in, k0, k1, k2) view of the
@@ -724,6 +725,7 @@ struct gs_default_conv_op {
         int64_t const TP    = topo.totalPairs;
 
         auto W = weightRows(weights);
+        ConvolutionGeometry const geometry(topo.kernelSize, topo.stride);
         if (W.scalar_type() != features.scalar_type()) {
             W = W.to(features.scalar_type());
         }
@@ -750,7 +752,7 @@ struct gs_default_conv_op {
             auto D_k = buf_D.slice(0, 0, n_k);
 
             gsDefaultGather(tg, features, A_k, topo.gatherIndices.slice(0, start, end), n_k, C_in);
-            mmOutSafe(D_k, A_k, W[weightRow(k, topo.kernelSize)]);
+            mmOutSafe(D_k, A_k, W[weightRow(k, geometry)]);
             gsDefaultScatterAdd(
                 tg, D_k, output, topo.scatterIndices.slice(0, start, end), n_k, C_out);
         }
@@ -795,6 +797,7 @@ struct gs_default_backward_op {
         int64_t const TP    = topo.totalPairs;
 
         auto W = weightRows(weights);
+        ConvolutionGeometry const geometry(topo.kernelSize, topo.stride);
         if (W.scalar_type() != features.scalar_type()) {
             W = W.to(features.scalar_type());
         }
@@ -831,7 +834,7 @@ struct gs_default_backward_op {
             gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
             gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
 
-            auto const row = weightRow(k, topo.kernelSize);
+            auto const row = weightRow(k, geometry);
             mmOutSafe(gf_k, gb_k, W[row].t());
             gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
 

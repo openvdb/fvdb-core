@@ -174,8 +174,8 @@ class MaskedIGemmTopology:
 def masked_igemm_build_topology(
     feature_grid: GridBatchData,
     output_grid: GridBatchData,
-    kernel_size: Vec3iOrScalar,
-    stride: Vec3iOrScalar,
+    kernel_size: torch.Tensor,
+    stride: torch.Tensor,
 ) -> MaskedIGemmTopology: ...
 def masked_igemm_conv(
     features: torch.Tensor,

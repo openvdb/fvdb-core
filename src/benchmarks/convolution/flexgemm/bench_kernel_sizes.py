@@ -68,8 +68,15 @@ def run_case(grid, feats, k: int, s: int, backends, iters: int) -> dict:
     C = feats.shape[1]
     torch.manual_seed(0)
     w = torch.randn(C, C, k, k, k, device="cuda") / (C * k**3) ** 0.5
-    ref = fvdb.ConvolutionPlan.from_grid_batch(k, s, grid, channel_pairs=((C, C),)).execute(feats.double(), w.double())
-    out = {"N_in": int(feats.shape[0]), "N_out": int(ref.shape[0])}
+    out: dict = {"N_in": int(feats.shape[0])}
+    try:
+        ref_plan = fvdb.ConvolutionPlan.from_grid_batch(k, s, grid, channel_pairs=((C, C),))
+        ref = ref_plan.execute(feats.double(), w.double())
+    except Exception as e:  # e.g. out of memory in float64; skip this case and keep going
+        out["error"] = f"reference: {type(e).__name__}: {str(e)[:120]}"
+        return out
+    out["N_out"] = int(ref.shape[0])
+    del ref_plan
     for b in backends:
         try:
             out[b] = run_backend(b, grid, feats, w, k, s, ref, iters)
@@ -95,6 +102,8 @@ def main():
     workloads = WORKLOADS
     if args.workloads:
         workloads = tuple((kd, int(r), int(c)) for kd, r, c in (w.split(":") for w in args.workloads.split(",")))
+        if bad := [kd for kd, _, _ in workloads if kd not in ("shell", "solid")]:
+            ap.error(f"workload kind must be shell or solid; got {bad}")
 
     rows = {}
     print(f"{'case':>24} {'N_in':>8} | {'backend':>17} {'fwd ms':>8} {'step ms':>8} {'build':>7} {'err':>8}")
@@ -106,6 +115,9 @@ def main():
             for s in (1, 2):
                 key = f"{kind},{res},{C},k{k},s{s}"
                 rows[key] = r = run_case(grid, feats, k, s, backends, args.iters)
+                if "error" in r:
+                    print(f"{key:>24} {r['N_in']:>8} | ERR {r['error']}", flush=True)
+                    continue
                 for b in backends:
                     v = r[b]
                     if "error" in v:

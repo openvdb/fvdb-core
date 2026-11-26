@@ -640,6 +640,7 @@ class _MaskedIGemmBackend:
 
     topology: _fvdb_cpp.MaskedIGemmTopology
     fallback: dict = field(default_factory=dict, compare=False)
+    fallback_lock: Lock = field(default_factory=Lock, compare=False, repr=False)
 
 
 def _tf32_matmul_enabled() -> bool:
@@ -684,10 +685,15 @@ def _warn_masked_igemm_fallback(reason: str, hint: str, stacklevel: int) -> None
     )
 
 
-def _warn_masked_igemm_input_fallback(dtype: torch.dtype, device: torch.device) -> None:
-    """Warn that inputs the kernels do not cover (dtype or GPU) ran on gather-scatter."""
+def _warn_masked_igemm_input_fallback(dtype: torch.dtype, device: torch.device, in_c: int, out_c: int) -> None:
+    """Warn that inputs the kernels do not cover (dtype, channels or GPU) ran on gather-scatter.
+
+    Checks the reasons in the order masked_igemm_supports does; ``device`` is a CUDA device.
+    """
     if dtype not in (torch.float16, torch.bfloat16, torch.float32):
         reason = f"{dtype} inputs"
+    elif in_c <= 0 or out_c <= 0:
+        reason = "zero-channel inputs or outputs"
     else:
         major, minor = torch.cuda.get_device_capability(device)
         reason = f"compute capability {major}.{minor} (the kernels need 8.0 or newer)"
@@ -1245,6 +1251,11 @@ class ConvolutionPlan:
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
         if bias is not None and tuple(bias.shape) != (out_c,):
             raise ValueError(f"bias must have shape ({out_c},); got {tuple(bias.shape)}")
+        features = data.jdata if isinstance(data, JaggedTensor) else data
+        if features.shape[-1] != in_c:
+            raise ValueError(f"data has {features.shape[-1]} channels; the weights expect {in_c}")
+        if features.device != self._source_grid.device:
+            raise ValueError(f"data is on {features.device}; the plan's grids are on {self._source_grid.device}")
         if isinstance(backend, _PredGatherIGemmBackend) and not _pred_gather_igemm_channel_pair_supported(in_c, out_c):
             raise ValueError(
                 f"PredGatherIGemm requires input and output channel counts divisible by 32; got ({in_c}, {out_c})."
@@ -1303,7 +1314,7 @@ class ConvolutionPlan:
                 if fuse:
                     bias = None
             else:
-                _warn_masked_igemm_input_fallback(dtype, data.jdata.device)
+                _warn_masked_igemm_input_fallback(dtype, data.jdata.device, in_c, out_c)
                 topology = self._masked_igemm_fallback(backend)
                 out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, self._transposed)
 
@@ -1336,6 +1347,10 @@ class ConvolutionPlan:
 
     def _masked_igemm_fallback(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
         """Gather-scatter rulebook for inputs the masked_igemm kernels do not cover."""
+        with backend.fallback_lock:
+            return self._masked_igemm_fallback_locked(backend)
+
+    def _masked_igemm_fallback_locked(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
         forward = backend.fallback.get("gather_scatter")
         if forward is None:
             fine, coarse = (
