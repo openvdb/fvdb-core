@@ -112,21 +112,32 @@ def _voxel_ids(*coord_sets: torch.Tensor) -> list[torch.Tensor]:
 
 
 @torch.no_grad()
-def check(fvdb_forward, flex_forward) -> float:
+def fvdb_output(forward) -> tuple[torch.Tensor, torch.Tensor]:
+    """(b, i, j, k) coords and features of one fVDB forward; nothing else stays alive."""
+    plan, out = forward()
+    target = plan.target_grid_batch
+    coords = torch.cat([target.ijk.jidx.long()[:, None], target.ijk.jdata.long()], dim=1)
+    return coords, out.jdata.detach().float()
+
+
+@torch.no_grad()
+def flex_output(forward) -> tuple[torch.Tensor, torch.Tensor]:
+    out_coords, out = forward()
+    return out_coords.long(), out.detach().float()
+
+
+def check(fv_output, fx_output) -> float:
     """Max relative difference between fVDB and FlexGEMM outputs at the output voxels both produce.
 
     FlexGEMM drops outputs outside the dense volume's bounds; fVDB keeps every reachable voxel.
     """
-    plan, out = fvdb_forward()
-    target = plan.target_grid_batch
-    fv_coords = torch.cat([target.ijk.jidx.long()[:, None], target.ijk.jdata.long()], dim=1)
-    out_coords, flex_out = flex_forward()
-    fv_ids, fx_ids = _voxel_ids(fv_coords, out_coords.long())
+    (fv_coords, out), (out_coords, flex_out) = fv_output, fx_output
+    fv_ids, fx_ids = _voxel_ids(fv_coords, out_coords)
     if not torch.isin(fx_ids, fv_ids).all():
         raise RuntimeError("FlexGEMM produced output voxels fVDB did not")
     shared = torch.isin(fv_ids, fx_ids)
-    fv_ids, fv = fv_ids[shared], out.jdata[shared].float()
-    fv, fx = fv[fv_ids.argsort()], flex_out[fx_ids.argsort()].float()
+    fv_ids, fv = fv_ids[shared], out[shared]
+    fv, fx = fv[fv_ids.argsort()], flex_out[fx_ids.argsort()]
     return ((fv - fx).abs().max() / fx.abs().max().clamp_min(1e-12)).item()
 
 
@@ -168,15 +179,20 @@ def main():
         weight = (torch.randn(C, C, k, k, k, device="cuda") / math.sqrt(C * k**3)).to(dtype)
         bias = torch.randn(C, device="cuda").to(dtype)
         row = {"N": int(coords.shape[0])}
-        cells, forwards = [], {}
+        cells = []
+
+        def make(name):
+            if name == "flex_gemm":
+                return flex_step(feats, coords, shape, k, s, args.topology, weight, bias)
+            return fvdb_step(name, feats, coords, B, C, k, s, args.topology, weight, bias)
+
+        # Each backend is timed alone: nothing from an earlier backend is alive, since peak memory
+        # is process-wide.
         for name in backends:
             try:
-                if name == "flex_gemm":
-                    step, fwd = flex_step(feats, coords, shape, k, s, args.topology, weight, bias)
-                else:
-                    step, fwd = fvdb_step(name, feats, coords, B, C, k, s, args.topology, weight, bias)
+                step = make(name)[0]
                 ms, gb = time_cuda(step, iters=args.iters)
-                forwards[name] = fwd
+                del step
                 row[name] = {"ms": ms, "peak_gb": gb}
                 cells.append(f"{ms:9.2f} ms {gb:6.2f} GB")
             except Exception as e:  # report and keep going, e.g. OOM
@@ -186,9 +202,13 @@ def main():
                 print(f"  {name}: {msg}")
             torch.cuda.empty_cache()
         diff = ""
-        if "masked_igemm" in forwards and "flex_gemm" in forwards:
+        if all("ms" in row.get(name, {}) for name in ("masked_igemm", "flex_gemm")):
             try:
-                row["max_rel_diff"] = check(forwards["masked_igemm"], forwards["flex_gemm"])
+                fv_output = fvdb_output(make("masked_igemm")[1])
+                torch.cuda.empty_cache()
+                fx_output = flex_output(make("flex_gemm")[1])
+                row["max_rel_diff"] = check(fv_output, fx_output)
+                del fv_output, fx_output
                 diff = f"{row['max_rel_diff']:.1e}"
             except Exception as e:  # report and keep going
                 row["max_rel_diff_error"] = f"{type(e).__name__}: {str(e).splitlines()[0][:100]}"
@@ -199,7 +219,7 @@ def main():
                     row[name]["speed_vs_flex"] = row["flex_gemm"]["ms"] / row[name]["ms"]
         results["rows"][f"{RES},{C},{B}"] = row
         print(f"{f'{RES},{C},{B}':>14} {row['N']:>9}  " + "  ".join(cells) + f"   {diff}", flush=True)
-        del feats, coords, forwards
+        del feats, coords
         torch.cuda.empty_cache()
 
     if args.json:

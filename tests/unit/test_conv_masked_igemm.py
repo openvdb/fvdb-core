@@ -214,8 +214,9 @@ class TestMaskedIGemm(unittest.TestCase):
         wbuf = torch.randn(32 * 16 * 27 + 1, device="cuda", dtype=torch.float16) * 0.05
         w = wbuf[1:].view(32, 16, 3, 3, 3)
         xg, wg = x.clone().requires_grad_(True), w.clone().requires_grad_(True)
-        y = plan.execute(x, w)
-        torch.testing.assert_close(y, plan.execute(x.clone(), w.clone()), rtol=0, atol=0)
+        with _overrides(splits=1):  # split-K accumulates with atomics, so is not bitwise repeatable
+            y = plan.execute(x, w)
+            torch.testing.assert_close(y, plan.execute(x.clone(), w.clone()), rtol=0, atol=0)
         yg = plan.execute(xg, wg)
         yg.backward(torch.ones_like(yg))
         torch.cuda.synchronize()
@@ -542,6 +543,33 @@ class TestMaskedIGemm(unittest.TestCase):
             err_strict, err_tf32 = _rel_err(a.double(), r), _rel_err(b.double(), r)
             self.assertLess(err_strict, 2e-6, name)
             self.assertLess(err_strict * 20, err_tf32, f"{name}: 3xTF32 should be far below TF32")
+
+    @parameterized.expand([("narrow", 3), ("wide", 5)])
+    def test_strict_fp32_non_finite(self, _, kernel_size):
+        # 3xTF32 splits each operand into a TF32 big part and a residual. That split must not
+        # overflow FLT_MAX to inf, and inf * 0 in a cross term must not turn an infinite product
+        # into NaN: both should match IEEE float32 gather-scatter.
+        torch.manual_seed(0)
+        grid = _random_grid(500, 6)
+        plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid, expert_config=CONFIG)
+        ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid)
+        cin = cout = 32
+        x = torch.randn(grid.total_voxels, cin, device="cuda")
+        x[0, 0] = torch.finfo(torch.float32).max  # rounding up to TF32 would overflow
+        x[1, 3] = float("inf")
+        x[2, 5] = -float("inf")
+        # Positive weights small enough that FLT_MAX * w stays finite.
+        w = torch.rand(cout, cin, *(kernel_size,) * 3, device="cuda") * 2.0**-100 + 2.0**-110
+        with _tf32(False):
+            y = plan.execute(grid.jagged_like(x), w).jdata
+            ref = ref_plan.execute(grid.jagged_like(x), w).jdata
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
+        self.assertTrue(torch.equal(torch.isnan(y), torch.isnan(ref)), "NaN positions")
+        self.assertTrue(torch.equal(torch.isinf(y), torch.isinf(ref)), "inf positions")
+        self.assertTrue(torch.isinf(ref).any() and torch.isfinite(ref).any())
+        infinite, finite = torch.isinf(ref), torch.isfinite(ref)
+        self.assertTrue(torch.equal(y[infinite], ref[infinite]), "signs of infinities")
+        self.assertLess(_rel_err(y[finite], ref[finite]), 1e-5)
 
     def test_tf32_legacy_api(self):
         # The other TF32 tests use fp32_precision; this one enables TF32 through allow_tf32.

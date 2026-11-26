@@ -228,16 +228,20 @@ splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
         small = 0u;
         return;
     }
-    big   = (x + 0x1000u) & 0xffffe000u;
+    big = (x + 0x1000u) & 0xffffe000u;
+    if ((big & 0x7f800000u) == 0x7f800000u)
+        big = x & 0xffffe000u; // rounding up would overflow to inf near FLT_MAX: truncate instead
     small = roundToTf32<float>(__float_as_uint(f - __uint_as_float(big)));
 }
 
 // acc += A * B over a warp's MT x NT fragments. Use3xTf32 (float32 only) computes 3xTF32:
 // small * big, big * small, then big * big, which carries ~22 mantissa bits through TF32
 // tensor cores. The small * small term is below float32 rounding and is dropped. The tensor
-// core truncates while adding into its accumulator, so the three products go into a zeroed
-// temporary and reach acc through a rounding float32 add; otherwise the truncation, relative
-// to the whole running sum, dominates the error.
+// core truncates while adding into its accumulator, so the products go into zeroed temporaries
+// and reach acc through a rounding float32 add; otherwise the truncation, relative to the whole
+// running sum, dominates the error. The main product stays separate from the cross terms: when
+// it is infinite (an infinite operand), a cross term can be inf * 0 = NaN, and IEEE float32
+// would give the infinity, so a non-finite main product is added alone.
 template <typename T, bool Use3xTf32, int MT, int NT>
 __device__ __forceinline__ void
 mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]);
@@ -344,13 +348,13 @@ mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) 
         for (int mt = 0; mt < MT; ++mt)
 #pragma unroll
             for (int nt = 0; nt < NT; ++nt) {
-                float t[4] = {0.f, 0.f, 0.f, 0.f};
-                mma<T>(t, as[mt], bf[nt][0], bf[nt][1]);
-                mma<T>(t, af[mt], bs[nt][0], bs[nt][1]);
-                mma<T>(t, af[mt], bf[nt][0], bf[nt][1]);
+                float cross[4] = {0.f, 0.f, 0.f, 0.f}, main[4] = {0.f, 0.f, 0.f, 0.f};
+                mma<T>(cross, as[mt], bf[nt][0], bf[nt][1]);
+                mma<T>(cross, af[mt], bs[nt][0], bs[nt][1]);
+                mma<T>(main, af[mt], bf[nt][0], bf[nt][1]);
 #pragma unroll
                 for (int e = 0; e < 4; ++e)
-                    acc[mt][nt][e] += t[e];
+                    acc[mt][nt][e] += isfinite(main[e]) ? main[e] + cross[e] : main[e];
             }
     } else {
 #pragma unroll
@@ -1334,6 +1338,18 @@ smCount() {
 // unions.
 constexpr int64_t kLocalWindow = int64_t(1) << 16;
 
+// sortedRows regrouped into windows of kLocalWindow nearby rows, each in Gray order. Built with
+// the topology, so no execute call writes topology state another stream might read. Undefined
+// for maps of at most one window, whose windowed order is the global one.
+torch::Tensor
+windowedRowOrder(torch::Tensor const &sortedRows) {
+    if (sortedRows.numel() <= kLocalWindow)
+        return {};
+    auto const window = torch::div(sortedRows, kLocalWindow, "floor");
+    auto const perm   = std::get<1>(torch::sort(window, std::optional<bool>(true), 0));
+    return sortedRows.index_select(0, perm);
+}
+
 // gridDim.z limit; the weight gradient's splits run along z.
 constexpr int64_t kMaxGridZ = 65535;
 
@@ -1345,14 +1361,7 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     bool local = topo.outputTotalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
     if (gTestOverrides.localRowOrder)
         local = *gTestOverrides.localRowOrder;
-    if (!local)
-        return topo.sortedRows;
-    if (!topo.localRows.defined()) {
-        auto const window = torch::div(topo.sortedRows, kLocalWindow, "floor");
-        auto const perm   = std::get<1>(torch::sort(window, std::optional<bool>(true), 0));
-        topo.localRows    = topo.sortedRows.index_select(0, perm);
-    }
-    return topo.localRows;
+    return local && topo.localRows.defined() ? topo.localRows : topo.sortedRows;
 }
 
 template <typename Cfg, typename T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel = false>
@@ -2154,7 +2163,7 @@ largeKernelTopology(GridBatchData const &featureGrid,
 
     MaskedIGemmTopology topo{.neighborMap        = nbr,
                              .sortedRows         = fwd.sorted,
-                             .localRows          = torch::Tensor(),
+                             .localRows          = windowedRowOrder(fwd.sorted),
                              .rowMasks           = rowWords.select(2, 0),
                              .pairIn             = pairIn,
                              .pairOut            = pairOut,
@@ -2176,7 +2185,7 @@ largeKernelTopology(GridBatchData const &featureGrid,
     topo.reverse         = std::make_shared<MaskedIGemmTopology const>(
         MaskedIGemmTopology{.neighborMap        = rev.nbr,
                                     .sortedRows         = rev.sorted,
-                                    .localRows          = torch::Tensor(),
+                                    .localRows          = windowedRowOrder(rev.sorted),
                                     .rowMasks           = rev.rowWords.select(2, 0),
                                     .pairIn             = none,
                                     .pairOut            = none,
@@ -2376,7 +2385,7 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
 
     MaskedIGemmTopology topo{.neighborMap        = nbr,
                              .sortedRows         = sortedRows,
-                             .localRows          = torch::Tensor(),
+                             .localRows          = windowedRowOrder(sortedRows),
                              .rowMasks           = rowMasks,
                              .pairIn             = pairIn,
                              .pairOut            = pairOut,
@@ -2407,21 +2416,22 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
             revMasks.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    auto const none = torch::empty({0}, i32);
-    topo.reverse    = std::make_shared<MaskedIGemmTopology const>(
+    auto const none          = torch::empty({0}, i32);
+    auto const revSortedRows = torch::argsort(revCode).to(torch::kInt32);
+    topo.reverse             = std::make_shared<MaskedIGemmTopology const>(
         MaskedIGemmTopology{.neighborMap        = rev,
-                               .sortedRows         = torch::argsort(revCode).to(torch::kInt32),
-                               .localRows          = torch::Tensor(),
-                               .rowMasks           = revMasks,
-                               .pairIn             = none,
-                               .pairOut            = none,
-                               .pairOffsets        = none,
-                               .pairBlockOffsets   = none,
-                               .outputTotalVoxels  = NIn,
-                               .featureTotalVoxels = N,
-                               .kernelVolume       = K,
-                               .kernelSize         = kernelSize,
-                               .reverse            = nullptr});
+                                        .sortedRows         = revSortedRows,
+                                        .localRows          = windowedRowOrder(revSortedRows),
+                                        .rowMasks           = revMasks,
+                                        .pairIn             = none,
+                                        .pairOut            = none,
+                                        .pairOffsets        = none,
+                                        .pairBlockOffsets   = none,
+                                        .outputTotalVoxels  = NIn,
+                                        .featureTotalVoxels = N,
+                                        .kernelVolume       = K,
+                                        .kernelSize         = kernelSize,
+                                        .reverse            = nullptr});
     return topo;
 }
 

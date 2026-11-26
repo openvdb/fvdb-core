@@ -85,6 +85,15 @@ class ConvolutionTransformCompatibility:
     registration_offset: torch.Tensor | None
 
 
+def _finite_grid_transform(grid_data) -> bool:
+    """True when a grid's origins are finite and its voxel sizes finite and nonzero."""
+    return bool(
+        torch.isfinite(grid_data.origins).all()
+        and torch.isfinite(grid_data.voxel_sizes).all()
+        and (grid_data.voxel_sizes != 0).all()
+    )
+
+
 def _transform_compatibility(
     fine_grid: GridBatch, coarse_grid: GridBatch, geometry: _fvdb_cpp.ConvolutionGeometry
 ) -> ConvolutionTransformCompatibility:
@@ -110,8 +119,13 @@ def _transform_compatibility(
     fine_data = _get_grid_data(fine_grid)
     coarse_data = _get_grid_data(coarse_grid)
 
-    # A stride-1 transform between a grid and itself is compatible by construction.
-    if all(step == 1 for step in geometry.stride) and fine_data.is_same(coarse_data):
+    # A stride-1 transform between a grid and itself is compatible by construction, provided the
+    # transform is finite; other grids take the general path, which rejects non-finite ones.
+    if (
+        all(step == 1 for step in geometry.stride)
+        and fine_data.is_same(coarse_data)
+        and _finite_grid_transform(fine_data)
+    ):
         return ConvolutionTransformCompatibility(
             fine_grid_count=fine_grid.grid_count,
             coarse_grid_count=coarse_grid.grid_count,
@@ -1350,6 +1364,17 @@ class ConvolutionPlan:
         with backend.fallback_lock:
             return self._masked_igemm_fallback_locked(backend)
 
+    def _finish_lazy_build(self) -> None:
+        """Wait for a rulebook built inside execute before caching it.
+
+        Plans built once may be executed on several CUDA streams, and a caller who synchronizes
+        after building the plan cannot know about rulebooks built later. Synchronizing once here
+        means a cached rulebook is always complete, whichever stream reads it next.
+        """
+        device = self._source_grid.device
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+
     def _masked_igemm_fallback_locked(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
         forward = backend.fallback.get("gather_scatter")
         if forward is None:
@@ -1362,12 +1387,14 @@ class ConvolutionPlan:
                 torch.tensor(self._geometry.kernel_size, dtype=torch.int32),
                 torch.tensor(self._geometry.stride, dtype=torch.int32),
             )
+            self._finish_lazy_build()
             backend.fallback["gather_scatter"] = forward
         if not self._transposed:
             return forward
         reverse = backend.fallback.get("gather_scatter_transposed")
         if reverse is None:
             reverse = _fvdb_cpp.gs_reverse_topology(forward)
+            self._finish_lazy_build()
             backend.fallback["gather_scatter_transposed"] = reverse
         return reverse
 
@@ -1492,12 +1519,7 @@ class ConvolutionPlan:
         # Shared grid data makes the registration diagnostic exact only for a finite transform.
         # The general path rejects non-finite origins and zero voxel sizes through a non-finite
         # registration offset, so the fast path must reject them too.
-        grid_data = _get_grid_data(source_grid)
-        if not bool(
-            torch.isfinite(grid_data.origins).all()
-            and torch.isfinite(grid_data.voxel_sizes).all()
-            and (grid_data.voxel_sizes != 0).all()
-        ):
+        if not _finite_grid_transform(_get_grid_data(source_grid)):
             raise ValueError("Convolution grid transform must have finite origins and finite, nonzero voxel sizes.")
         # Preserve the general path's construction-time channel-pair validation.
         for channel_pair in channel_pairs:
