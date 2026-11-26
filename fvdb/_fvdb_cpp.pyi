@@ -157,9 +157,9 @@ class MaskedIGemmTopology:
     @property
     def pair_offsets(self) -> torch.Tensor: ...
     @property
-    def total_voxels(self) -> int: ...
+    def feature_total_voxels(self) -> int: ...
     @property
-    def input_voxels(self) -> int: ...
+    def output_total_voxels(self) -> int: ...
     @property
     def reverse_map(self) -> torch.Tensor | None: ...
     @property
@@ -171,13 +171,13 @@ class MaskedIGemmTopology:
     @property
     def kernel_size(self) -> list[int]: ...
 
-def migemm_build_topology(
+def masked_igemm_build_topology(
     feature_grid: GridBatchData,
     output_grid: GridBatchData,
     kernel_size: Vec3iOrScalar,
     stride: Vec3iOrScalar,
 ) -> MaskedIGemmTopology: ...
-def migemm_conv(
+def masked_igemm_conv(
     features: torch.Tensor,
     weights: torch.Tensor,
     bias: torch.Tensor | None,
@@ -185,7 +185,7 @@ def migemm_conv(
     transposed: bool = False,
     precise: bool = False,
 ) -> torch.Tensor: ...
-def migemm_conv_backward(
+def masked_igemm_conv_backward(
     grad_output: torch.Tensor,
     features: torch.Tensor,
     weights: torch.Tensor,
@@ -195,8 +195,8 @@ def migemm_conv_backward(
     transposed: bool = False,
     precise: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]: ...
-def migemm_column_sum(x: torch.Tensor) -> torch.Tensor: ...
-def migemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...
+def masked_igemm_column_sum(x: torch.Tensor) -> torch.Tensor: ...
+def masked_igemm_supports(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool: ...
 def rasterize_num_contributing_gaussians(
     means2d: torch.Tensor,
     conics: torch.Tensor,

@@ -61,7 +61,7 @@ def _tf32(enabled: bool):
 
 def _build_topology(feature_grid: GridBatch, output_grid: GridBatch, kernel_size, stride=1):
     as_vec = lambda v: torch.tensor(v if isinstance(v, (tuple, list)) else (v,) * 3, dtype=torch.int32)
-    return _fvdb_cpp.migemm_build_topology(
+    return _fvdb_cpp.masked_igemm_build_topology(
         _get_grid_data(feature_grid), _get_grid_data(output_grid), as_vec(kernel_size), as_vec(stride)
     )
 
@@ -275,7 +275,7 @@ class TestMaskedIGemm(unittest.TestCase):
             ("k5_narrow", 5, 1, 3, 20, torch.float16),
         ]
     )
-    def test_wide_kernel(self, _, kernel_size, stride, cin, cout, dtype):
+    def test_large_kernel(self, _, kernel_size, stride, cin, cout, dtype):
         grid = _random_grid(2500, 10, batch=2)
         plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid, expert_config=CONFIG)
         ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, stride, grid)
@@ -283,7 +283,7 @@ class TestMaskedIGemm(unittest.TestCase):
         self._compare_plans(plan, ref_plan, cin, cout, dtype, tol)
 
     @parameterized.expand([("factory", True), ("from_plan", False)])
-    def test_wide_transpose(self, _, factory):
+    def test_large_kernel_transpose(self, _, factory):
         fine = _random_grid(2500, 10, batch=2)
         coarse = fine.conv_grid(5, 2)
         if factory:
@@ -297,7 +297,7 @@ class TestMaskedIGemm(unittest.TestCase):
         self._compare_plans(plan, ref_plan, 64, 32, torch.float16, 4e-3)
 
     @parameterized.expand([("split2", 2), ("split5", 5)])
-    def test_wide_split_k(self, _, splits):
+    def test_large_kernel_split_k(self, _, splits):
         # Split-K starts a CTA's tap walk mid-chunk.
         os.environ["FVDB_MIGEMM_SPLIT"] = str(splits)
         try:
@@ -319,7 +319,7 @@ class TestMaskedIGemm(unittest.TestCase):
         return dense
 
     @parameterized.expand([("k5", 5), ("k7", 7), ("k33", (11, 3, 1))])
-    def test_wide_compact_map(self, _, kernel_size):
+    def test_large_kernel_compact_map(self, _, kernel_size):
         grid = _random_grid(1500, 8)
         topo = _build_topology(grid, grid, kernel_size)
         ks = kernel_size if isinstance(kernel_size, tuple) else (kernel_size,) * 3
@@ -352,7 +352,7 @@ class TestMaskedIGemm(unittest.TestCase):
         ranks = [rank(int(o)) for o in topo.sorted_rows.cpu()]
         self.assertEqual(ranks, sorted(ranks))
 
-    def test_wide_compact_reverse_map(self):
+    def test_large_kernel_compact_reverse_map(self):
         # A strided map stores its reverse compactly: input row i lists, in tap order, every output
         # row o that reads it, so (i, k, o) is a reverse entry exactly when (o, k, i) is a forward one.
         fine = _random_grid(2000, 9)
@@ -542,11 +542,11 @@ class TestMaskedIGemm(unittest.TestCase):
         x = torch.randn(grid.total_voxels, 64, device="cuda", dtype=torch.float16)
         w = torch.randn(64, 64, 3, 3, 3, device="cuda", dtype=torch.float16)
         with self.assertRaisesRegex(RuntimeError, "same device"):
-            _fvdb_cpp.migemm_conv(x, w.cpu(), None, topo)
+            _fvdb_cpp.masked_igemm_conv(x, w.cpu(), None, topo)
         with self.assertRaisesRegex(RuntimeError, "dtype"):
-            _fvdb_cpp.migemm_conv(x, w.float(), None, topo)
+            _fvdb_cpp.masked_igemm_conv(x, w.float(), None, topo)
         with self.assertRaisesRegex(RuntimeError, "bias"):
-            _fvdb_cpp.migemm_conv(x, w, torch.zeros(64, device="cuda"), topo)
+            _fvdb_cpp.masked_igemm_conv(x, w, torch.zeros(64, device="cuda"), topo)
 
     @parameterized.expand(
         [
@@ -559,7 +559,7 @@ class TestMaskedIGemm(unittest.TestCase):
     )
     def test_column_sum(self, _, rows, cols, dtype):
         x = torch.randn(rows, cols, device="cuda").to(dtype)
-        y = _fvdb_cpp.migemm_column_sum(x)
+        y = _fvdb_cpp.masked_igemm_column_sum(x)
         ref = x.double().sum(0)
         self.assertEqual(y.dtype, dtype)
         self.assertLess(
@@ -568,13 +568,13 @@ class TestMaskedIGemm(unittest.TestCase):
 
     def test_supports(self):
         cuda = torch.device("cuda", torch.cuda.current_device())
-        self.assertTrue(_fvdb_cpp.migemm_supports(64, 32, torch.float16, cuda))
-        self.assertFalse(_fvdb_cpp.migemm_supports(64, 32, torch.float16, torch.device("cpu")))
-        self.assertFalse(_fvdb_cpp.migemm_supports(0, 64, torch.float16, cuda))
-        self.assertFalse(_fvdb_cpp.migemm_supports(64, 0, torch.float16, cuda))
-        self.assertTrue(_fvdb_cpp.migemm_supports(48, 8, torch.float16, cuda))
-        self.assertFalse(_fvdb_cpp.migemm_supports(12, 64, torch.float16, cuda))
-        self.assertFalse(_fvdb_cpp.migemm_supports(64, 4, torch.float16, cuda))
+        self.assertTrue(_fvdb_cpp.masked_igemm_supports(64, 32, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(64, 32, torch.float16, torch.device("cpu")))
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(0, 64, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(64, 0, torch.float16, cuda))
+        self.assertTrue(_fvdb_cpp.masked_igemm_supports(48, 8, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(12, 64, torch.float16, cuda))
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(64, 4, torch.float16, cuda))
 
     def _compare_plans(self, plan, ref_plan, cin, cout, dtype, tol, *, native=True):
         """Forward, input, weight and bias gradients of ``plan`` against float32 gather-scatter."""
@@ -656,7 +656,7 @@ class TestMaskedIGemm(unittest.TestCase):
         topo = _build_topology(fine, fine.conv_grid(3, 2), 3, 2)
         nbr, rev = topo.neighbor_map.long(), topo.reverse_map.long()
         self.assertEqual(tuple(rev.shape), (fine.total_voxels, 27))
-        self.assertEqual(topo.input_voxels, fine.total_voxels)
+        self.assertEqual(topo.feature_total_voxels, fine.total_voxels)
         self.assertEqual(int((nbr >= 0).sum()), int((rev >= 0).sum()))
         o, k = torch.nonzero(nbr >= 0, as_tuple=True)
         self.assertTrue(torch.equal(rev[nbr[o, k], k], o))

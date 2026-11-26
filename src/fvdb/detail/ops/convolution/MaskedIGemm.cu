@@ -77,7 +77,7 @@ weightsFromRows(torch::Tensor const &rows, nanovdb::Coord const &ks) {
 
 // flip maps tap k to the weights of tap K-1-k, its mirror image. A submanifold transposed
 // convolution is the forward convolution with every tap flipped.
-struct TapToRow {
+struct TapToWeightRow {
     int k1, k2, k0;
     bool flip;
 
@@ -114,13 +114,13 @@ cpAsync16(void *dst, void const *src, bool pred) {
 
 // Four 8x8 16-bit tiles from shared memory, plain or transposed.
 __device__ __forceinline__ void
-ldsm4(uint32_t (&r)[4], void const *src) {
+ldmatrixX4(uint32_t (&r)[4], void const *src) {
     cute::SM75_U32x4_LDSM_N::copy(
         *static_cast<cute::uint128_t const *>(src), r[0], r[1], r[2], r[3]);
 }
 
 __device__ __forceinline__ void
-ldsm4T(uint32_t (&r)[4], void const *src) {
+ldmatrixX4Trans(uint32_t (&r)[4], void const *src) {
     cute::SM75_U16x8_LDSM_T::copy(
         *static_cast<cute::uint128_t const *>(src), r[0], r[1], r[2], r[3]);
 }
@@ -150,7 +150,7 @@ mma(float (&c)[4], uint32_t const (&a)[4], uint32_t b0, uint32_t b1) {
 template <typename T> struct Elem {
     static constexpr int CHUNK = 16 / int(sizeof(T)); // elements per 16-byte chunk
     static constexpr int BK    = 4 * CHUNK;           // k-tile width in elements
-    static constexpr int KSTEP = BK / 2;              // MMA k per instruction
+    static constexpr int MMA_K = BK / 2;              // MMA k per instruction
 };
 
 // Round a loaded fragment register to TF32 (no-op for 16-bit types). Adding half an ulp lets
@@ -159,7 +159,7 @@ template <typename T> struct Elem {
 // skip the add, which would carry a NaN payload into the sign bit.
 template <typename T>
 __device__ __forceinline__ uint32_t
-prep(uint32_t x) {
+roundToTf32(uint32_t x) {
     if constexpr (sizeof(T) == 4) {
         if (isfinite(__uint_as_float(x)))
             x += 0x1000u;
@@ -168,13 +168,13 @@ prep(uint32_t x) {
 }
 
 // Fragments for 3xTF32 stay unrounded until mmaTiles splits them.
-template <typename T, bool PRECISE>
+template <typename T, bool Use3xTf32>
 __device__ __forceinline__ uint32_t
-prepIf(uint32_t x) {
-    if constexpr (PRECISE)
+roundUnless3xTf32(uint32_t x) {
+    if constexpr (Use3xTf32)
         return x;
     else
-        return prep<T>(x);
+        return roundToTf32<T>(x);
 }
 
 // Split a float32 into TF32 parts: big is the value rounded to TF32 and small the rounded
@@ -188,16 +188,16 @@ splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
         return;
     }
     big   = (x + 0x1000u) & 0xffffe000u;
-    small = prep<float>(__float_as_uint(f - __uint_as_float(big)));
+    small = roundToTf32<float>(__float_as_uint(f - __uint_as_float(big)));
 }
 
-// acc += A * B over a warp's MT x NT fragments. PRECISE (float32 only) computes 3xTF32:
+// acc += A * B over a warp's MT x NT fragments. Use3xTf32 (float32 only) computes 3xTF32:
 // small * big, big * small, then big * big, which carries ~22 mantissa bits through TF32
 // tensor cores. The small * small term is below float32 rounding and is dropped. The tensor
 // core truncates while adding into its accumulator, so the three products go into a zeroed
 // temporary and reach acc through a rounding float32 add; otherwise the truncation, relative
 // to the whole running sum, dominates the error.
-template <typename T, bool PRECISE, int MT, int NT>
+template <typename T, bool Use3xTf32, int MT, int NT>
 __device__ __forceinline__ void
 mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]);
 
@@ -246,45 +246,45 @@ toFloat(__nv_bfloat16 x) {
 //   Rows of 4 chunks (32 elements): XOR with bits 1-2 of the row.
 //   Rows of 8+ chunks: XOR the low 3 chunk bits with the row's low 3 bits.
 __device__ __forceinline__ int
-swz4(int row, int chunk) {
+swizzle4(int row, int chunk) {
     return chunk ^ ((row >> 1) & 3);
 }
 
 __device__ __forceinline__ int
-swz8(int row, int chunk) {
+swizzle8(int row, int chunk) {
     return chunk ^ (row & 7);
 }
 
-// [k][m|n] tiles. 16-bit types read them with ldmatrix.trans and use swz8. float32 reads
+// [k][m|n] tiles. 16-bit types read them with ldmatrix.trans and use swizzle8. float32 reads
 // them element-wise, with lane (g, t) reading rows t and t + 4; XOR with bits 0-1 of the row,
 // shifted past the chunk's low bit, so those 32 lanes hit distinct banks.
 template <typename T>
 __device__ __forceinline__ int
-swzKN(int row, int chunk) {
+swizzleKN(int row, int chunk) {
     if constexpr (sizeof(T) == 4)
         return chunk ^ ((row & 3) << 1);
     else
-        return swz8(row, chunk);
+        return swizzle8(row, chunk);
 }
 
 // [k][m|n] tiles W elements wide. 16-bit rows of an odd multiple of 4 chunks (W = 32, 96, ...)
-// alternate between the two halves of the 128-byte bank window, so swz4 keeps 8 consecutive
-// rows on distinct banks; rows of a multiple of 8 chunks use swzKN.
+// alternate between the two halves of the 128-byte bank window, so swizzle4 keeps 8 consecutive
+// rows on distinct banks; rows of a multiple of 8 chunks use swizzleKN.
 template <typename T, int W>
 __device__ __forceinline__ int
-swzRow(int row, int chunk) {
+swizzleRow(int row, int chunk) {
     constexpr int chunks = W * int(sizeof(T)) / 16;
     static_assert(chunks % 4 == 0, "rows must span a multiple of 4 chunks");
     if constexpr (sizeof(T) == 2 && chunks % 8 != 0)
-        return swz4(row, chunk);
+        return swizzle4(row, chunk);
     else
-        return swzKN<T>(row, chunk);
+        return swizzleKN<T>(row, chunk);
 }
 
-template <typename T, bool PRECISE, int MT, int NT>
+template <typename T, bool Use3xTf32, int MT, int NT>
 __device__ __forceinline__ void
 mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) {
-    if constexpr (PRECISE) {
+    if constexpr (Use3xTf32) {
         static_assert(sizeof(T) == 4, "3xTF32 applies to float32");
         uint32_t as[MT][4], bs[NT][2];
 #pragma unroll
@@ -323,9 +323,9 @@ mmaTiles(float (&acc)[MT][NT][4], uint32_t (&af)[MT][4], uint32_t (&bf)[NT][2]) 
 // =============================================================================
 
 constexpr int kMaxTaps = 32;
-// Kernels of more than kMaxTaps taps (WIDE) stage the neighbor columns of kChunkTaps taps at a
-// time.
-constexpr int kChunkTaps = 32;
+// Large kernels (more than kMaxTaps taps) stage the neighbor columns of their taps in groups of
+// kStagedTaps.
+constexpr int kStagedTaps = 32;
 
 template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct TileConfig {
     static constexpr int BM      = BM_;
@@ -340,12 +340,12 @@ template <int BM_, int BN_, int WM_, int WN_, int STAGES_> struct TileConfig {
     static_assert(BN >= 32, "B rows must span at least 4 chunks");
 };
 
-template <typename Cfg, typename T, bool WIDE = false>
+template <typename Cfg, typename T, bool LargeKernel = false>
 constexpr int
 smemBytes(int K) {
     int const tiles = Cfg::STAGES * (Cfg::BM + Cfg::BN) * Elem<T>::BK * int(sizeof(T));
-    if constexpr (WIDE)
-        return tiles + Cfg::BM * kChunkTaps * 4 + Cfg::BM * 4 + 2 * K * 4 + (K + 31) / 32 * 4 + 16;
+    if constexpr (LargeKernel)
+        return tiles + Cfg::BM * kStagedTaps * 4 + Cfg::BM * 4 + 2 * K * 4 + (K + 31) / 32 * 4 + 16;
     else
         return tiles + Cfg::BM * K * 4 + Cfg::BM * 4 + 2 * kMaxTaps * 4 + 16;
 }
@@ -354,49 +354,49 @@ smemBytes(int K) {
 // channels. The last k-tile and the last n-tile may be partial: loads past Kc or Nc zero-fill
 // and stores past Nc are skipped.
 //
-// B_KMAJOR selects the weight operand layout per tap:
+// KMajorWeights selects the weight operand layout per tap:
 //   false (forward):        B[k][n] at W + row * Kc * Nc + k * Nc + n
 //   true  (input gradient): B[k][n] at W + row * Kc * Nc + n * Kc + k
 // With splits > 1, CTA z of a tile runs its share of the tile's (tap, k-tile)
 // iterations and adds float32 partials into outAcc instead of writing out.
 //
-// WIDE runs kernels of more than kMaxTaps taps: rowMasks holds (K + 31) / 32 words per row, and
-// the neighbor columns of the tile's taps are staged kChunkTaps taps at a time as the loader
-// reaches them.
-template <typename Cfg, typename T, bool B_KMAJOR, bool PRECISE, bool WIDE = false>
+// LargeKernel runs kernels of more than kMaxTaps taps: neighborMap is compact and rowMaskWords
+// holds a (mask, base) pair per 32-tap word (see largeKernelTopology), and the neighbor columns of
+// the tile's taps are staged in groups of kStagedTaps as the loader reaches them.
+template <typename Cfg, typename T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel = false>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmKernel(T const *__restrict__ A,
                   T const *__restrict__ W,
                   T const *__restrict__ bias,
                   T *__restrict__ out,
                   float *__restrict__ outAcc,
-                  int32_t const *__restrict__ nbr,
+                  int32_t const *__restrict__ neighborMap,
                   int32_t const *__restrict__ sortedRows,
-                  int32_t const *__restrict__ rowMasks,
+                  int32_t const *__restrict__ rowMaskWords,
                   int N,
                   int Kc,
                   int Nc,
                   int K,
                   int splits,
-                  TapToRow tapToRow) {
+                  TapToWeightRow tapToRow) {
     constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Elem<T>::BK, STAGES = Cfg::STAGES;
-    constexpr int CE = Elem<T>::CHUNK, KSTEP = Elem<T>::KSTEP;
+    constexpr int CHUNK_ELEMS = Elem<T>::CHUNK, MMA_K = Elem<T>::MMA_K;
     constexpr int THREADS = Cfg::THREADS, MT = Cfg::MT, NT = Cfg::NT;
     constexpr int A_STAGE = BM * BK, B_STAGE = BK * BN;
 
-    [[maybe_unused]] int const maskWords = (K + 31) / 32; // WIDE only
-    constexpr int TAP_SLOTS              = WIDE ? 0 : kMaxTaps;
-    int const tapSlots                   = WIDE ? K : TAP_SLOTS;
+    [[maybe_unused]] int const maskWords = (K + 31) / 32; // LargeKernel only
+    constexpr int TAP_SLOTS              = LargeKernel ? 0 : kMaxTaps;
+    int const tapSlots                   = LargeKernel ? K : TAP_SLOTS;
 
     extern __shared__ __align__(128) unsigned char smem[];
-    T *sA           = reinterpret_cast<T *>(smem);
-    T *sB           = sA + STAGES * A_STAGE;
-    int32_t *sNbr   = reinterpret_cast<int32_t *>(sB + STAGES * B_STAGE);
-    int32_t *sRows  = sNbr + BM * (WIDE ? kChunkTaps : K);
-    int32_t *sTaps  = sRows + BM;
-    int32_t *sWRow  = sTaps + tapSlots;
-    uint32_t *sMask = reinterpret_cast<uint32_t *>(sWRow + tapSlots);
-    int32_t *sNTaps = reinterpret_cast<int32_t *>(sMask + (WIDE ? maskWords : 1));
+    T *sA               = reinterpret_cast<T *>(smem);
+    T *sB               = sA + STAGES * A_STAGE;
+    int32_t *sNbr       = reinterpret_cast<int32_t *>(sB + STAGES * B_STAGE);
+    int32_t *sRows      = sNbr + BM * (LargeKernel ? kStagedTaps : K);
+    int32_t *sTaps      = sRows + BM;
+    int32_t *sWeightRow = sTaps + tapSlots;
+    uint32_t *sMask     = reinterpret_cast<uint32_t *>(sWeightRow + tapSlots);
+    int32_t *sNTaps     = reinterpret_cast<int32_t *>(sMask + (LargeKernel ? maskWords : 1));
 
     int const tid    = threadIdx.x;
     int const lane   = tid & 31;
@@ -408,7 +408,7 @@ maskedIGemmKernel(T const *__restrict__ A,
     int const n0     = nTile * BN;
 
     // ---- Stage the tile's rows, tap union, and neighbor columns of the union ----
-    if constexpr (WIDE) {
+    if constexpr (LargeKernel) {
         for (int w = tid; w < maskWords; w += THREADS)
             sMask[w] = 0;
     } else if (tid == 0) {
@@ -418,9 +418,9 @@ maskedIGemmKernel(T const *__restrict__ A,
     for (int r = tid; r < BM; r += THREADS) {
         int const o = (row0 + r < N) ? sortedRows[row0 + r] : -1;
         sRows[r]    = o;
-        if constexpr (WIDE) {
+        if constexpr (LargeKernel) {
             for (int w = 0; w < maskWords; ++w) {
-                uint32_t m = o >= 0 ? uint32_t(rowMasks[(int64_t(o) * maskWords + w) * 2]) : 0u;
+                uint32_t m = o >= 0 ? uint32_t(rowMaskWords[(int64_t(o) * maskWords + w) * 2]) : 0u;
 #if FVDB_MIGEMM_SM80
                 m = __reduce_or_sync(__activemask(), m);
 #endif
@@ -428,7 +428,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                     atomicOr(sMask + w, m);
             }
         } else {
-            uint32_t m = o >= 0 ? uint32_t(rowMasks[o]) : 0u;
+            uint32_t m = o >= 0 ? uint32_t(rowMaskWords[o]) : 0u;
 #if FVDB_MIGEMM_SM80
             m = __reduce_or_sync(__activemask(), m);
 #endif
@@ -439,22 +439,22 @@ maskedIGemmKernel(T const *__restrict__ A,
     __syncthreads();
     if (tid == 0) {
         int n = 0;
-        if constexpr (WIDE) {
+        if constexpr (LargeKernel) {
             for (int w = 0; w < maskWords; ++w) {
                 uint32_t m = sMask[w];
                 while (m) {
-                    int const tap = 32 * w + __ffs(m) - 1;
-                    sTaps[n]      = tap;
-                    sWRow[n++]    = tapToRow(tap);
+                    int const tap   = 32 * w + __ffs(m) - 1;
+                    sTaps[n]        = tap;
+                    sWeightRow[n++] = tapToRow(tap);
                     m &= m - 1;
                 }
             }
         } else {
             uint32_t m = *sMask;
             while (m) {
-                int const tap = __ffs(m) - 1;
-                sTaps[n]      = tap;
-                sWRow[n++]    = tapToRow(tap);
+                int const tap   = __ffs(m) - 1;
+                sTaps[n]        = tap;
+                sWeightRow[n++] = tapToRow(tap);
                 m &= m - 1;
             }
         }
@@ -462,11 +462,11 @@ maskedIGemmKernel(T const *__restrict__ A,
     }
     __syncthreads();
     int const nTaps = *sNTaps;
-    if constexpr (!WIDE) {
+    if constexpr (!LargeKernel) {
         for (int i = tid; i < BM * nTaps; i += THREADS) {
             int const r = i / nTaps;
             int const o = sRows[r];
-            sNbr[i]     = o >= 0 ? nbr[int64_t(o) * K + sTaps[i - r * nTaps]] : -1;
+            sNbr[i]     = o >= 0 ? neighborMap[int64_t(o) * K + sTaps[i - r * nTaps]] : -1;
         }
         __syncthreads();
     }
@@ -479,30 +479,30 @@ maskedIGemmKernel(T const *__restrict__ A,
         return;
 
     // ---- Async tile loads ----
-    // Each thread copies A_CHUNKS 16-byte chunks of A (rows aR + i * A_RSTEP, chunk aCh) and
+    // Each thread copies A_CHUNKS 16-byte chunks of A (rows aRow + i * A_RSTEP, chunk aChunk) and
     // B_CHUNKS of B per stage. The loader walks (tap, k-tile) in order: pointers advance one
     // k-tile per load and are rebuilt from the neighbor columns and weight rows only when the
     // tap changes, so the loop does no division.
     constexpr int A_CHUNKS = BM * 4 / THREADS, A_RSTEP = THREADS / 4;
     constexpr int B_CHUNKS = BN * 4 / THREADS;
-    constexpr int B_ROW    = B_KMAJOR ? 4 : BN / CE; // chunks per B shared-memory row
+    constexpr int B_ROW    = KMajorWeights ? 4 : BN / CHUNK_ELEMS; // chunks per B shared-memory row
     // When the threads tile B rows, each thread's chunks share a column and step by B_RSTEP
     // rows; otherwise (B rows of 12 chunks) each chunk keeps its own offsets.
     constexpr bool B_TILED = THREADS % B_ROW == 0;
     constexpr int B_RSTEP  = B_TILED ? THREADS / B_ROW : 0;
     static_assert(BM * 4 % THREADS == 0 && BN * 4 % THREADS == 0, "chunks must tile the CTA");
     static_assert(A_RSTEP % 8 == 0, "per-thread swizzles must repeat");
-    static_assert(B_TILED || !B_KMAJOR, "k-major B rows are 4 chunks");
+    static_assert(B_TILED || !KMajorWeights, "k-major B rows are 4 chunks");
 
-    int const aR = tid >> 2, aCh = tid & 3;
-    int const bR = tid / B_ROW, bCh = tid % B_ROW;
-    int const aDst = aR * BK + swz4(aR, aCh) * CE;
+    int const aRow = tid >> 2, aChunk = tid & 3;
+    int const bRowIdx = tid / B_ROW, bChunk = tid % B_ROW;
+    int const aDst = aRow * BK + swizzle4(aRow, aChunk) * CHUNK_ELEMS;
     // B source offset of chunk 0 within a tap's weight block, the step between chunks, and
     // the step between k-tiles.
-    int64_t const bOff =
-        B_KMAJOR ? int64_t(n0 + bR) * Kc + bCh * CE : int64_t(bR) * Nc + n0 + bCh * CE;
-    int64_t const bStep = B_KMAJOR ? int64_t(B_RSTEP) * Kc : int64_t(B_RSTEP) * Nc;
-    int64_t const bKt   = B_KMAJOR ? int64_t(BK) : int64_t(BK) * Nc;
+    int64_t const bOff       = KMajorWeights ? int64_t(n0 + bRowIdx) * Kc + bChunk * CHUNK_ELEMS
+                                             : int64_t(bRowIdx) * Nc + n0 + bChunk * CHUNK_ELEMS;
+    int64_t const bStep      = KMajorWeights ? int64_t(B_RSTEP) * Kc : int64_t(B_RSTEP) * Nc;
+    int64_t const bKTileStep = KMajorWeights ? int64_t(BK) : int64_t(BK) * Nc;
     int bDst[B_TILED ? 1 : B_CHUNKS], bSrc[B_TILED ? 1 : B_CHUNKS];
     int bRow[B_TILED ? 1 : B_CHUNKS];
     bool bColOk[B_TILED ? 1 : B_CHUNKS];
@@ -510,37 +510,38 @@ maskedIGemmKernel(T const *__restrict__ A,
 #pragma unroll
         for (int i = 0; i < B_CHUNKS; ++i) {
             int const c = tid + i * THREADS, r = c / B_ROW, ch = c % B_ROW;
-            bDst[i]   = r * BN + swzRow<T, BN>(r, ch) * CE;
-            bSrc[i]   = r * Nc + ch * CE;
+            bDst[i]   = r * BN + swizzleRow<T, BN>(r, ch) * CHUNK_ELEMS;
+            bSrc[i]   = r * Nc + ch * CHUNK_ELEMS;
             bRow[i]   = r;
-            bColOk[i] = n0 + ch * CE < Nc;
+            bColOk[i] = n0 + ch * CHUNK_ELEMS < Nc;
         }
     }
     // Rows of B along n (k-major) or columns (n-major) that exist in this n-tile.
-    bool const bNOk = B_KMAJOR ? true : n0 + bCh * CE < Nc;
+    bool const bColsInRange = KMajorWeights ? true : n0 + bChunk * CHUNK_ELEMS < Nc;
 
-    int ldTi = itBase / kTiles, ldKt = itBase - ldTi * kTiles;
+    int loadTap = itBase / kTiles, loadKTile = itBase - loadTap * kTiles;
     T const *aPtr[A_CHUNKS];
     bool aOk[A_CHUNKS];
     T const *bPtr = nullptr;
-    // WIDE: sNbr holds the neighbor columns of taps [chunkBase, chunkBase + chunkN). Every thread
-    // calls load() at the same iterations, so restaging inside it can use CTA barriers.
-    [[maybe_unused]] int chunkBase = 0, chunkN = 0;
-    [[maybe_unused]] auto stageChunk = [&](int first) {
-        __syncthreads(); // every thread has read the previous chunk
-        chunkBase = first;
-        chunkN    = min(kChunkTaps, nTaps - first);
-        for (int i = tid; i < BM * chunkN; i += THREADS) {
-            int const r = i / chunkN;
+    // LargeKernel: sNbr holds the neighbor columns of the tap group [tapGroupBase, tapGroupBase +
+    // tapGroupSize). Every thread calls load() at the same iterations, so restaging inside it can
+    // use CTA barriers.
+    [[maybe_unused]] int tapGroupBase = 0, tapGroupSize = 0;
+    [[maybe_unused]] auto stageTapGroup = [&](int first) {
+        __syncthreads(); // every thread has read the previous tap group
+        tapGroupBase = first;
+        tapGroupSize = min(kStagedTaps, nTaps - first);
+        for (int i = tid; i < BM * tapGroupSize; i += THREADS) {
+            int const r = i / tapGroupSize;
             int const o = sRows[r];
             int32_t v   = -1;
             if (o >= 0) {
-                // Compact map: rowMasks holds (mask, base) per 32-tap word (see wideTopology).
-                int const tap    = sTaps[first + i - r * chunkN];
+                // Compact map: rowMaskWords holds (mask, base) per 32-tap word.
+                int const tap    = sTaps[first + i - r * tapGroupSize];
                 int64_t const e  = (int64_t(o) * maskWords + tap / 32) * 2;
-                uint32_t const m = uint32_t(rowMasks[e]);
+                uint32_t const m = uint32_t(rowMaskWords[e]);
                 if ((m >> (tap % 32)) & 1u)
-                    v = nbr[rowMasks[e + 1] + __popc(m & ((1u << (tap % 32)) - 1u))];
+                    v = neighborMap[rowMaskWords[e + 1] + __popc(m & ((1u << (tap % 32)) - 1u))];
             }
             sNbr[i] = v;
         }
@@ -549,26 +550,28 @@ maskedIGemmKernel(T const *__restrict__ A,
     auto setTap = [&]() {
 #pragma unroll
         for (int i = 0; i < A_CHUNKS; ++i) {
-            int const src = WIDE ? sNbr[(aR + i * A_RSTEP) * chunkN + ldTi - chunkBase]
-                                 : sNbr[(aR + i * A_RSTEP) * nTaps + ldTi];
+            int const src = LargeKernel
+                                ? sNbr[(aRow + i * A_RSTEP) * tapGroupSize + loadTap - tapGroupBase]
+                                : sNbr[(aRow + i * A_RSTEP) * nTaps + loadTap];
             aOk[i]        = src >= 0;
-            aPtr[i]       = A + (aOk[i] ? int64_t(src) * Kc + aCh * CE : 0) + ldKt * BK;
+            aPtr[i] = A + (aOk[i] ? int64_t(src) * Kc + aChunk * CHUNK_ELEMS : 0) + loadKTile * BK;
         }
-        bPtr = W + int64_t(sWRow[ldTi]) * Kc * Nc + (B_TILED ? bOff : n0) + ldKt * bKt;
+        bPtr = W + int64_t(sWeightRow[loadTap]) * Kc * Nc + (B_TILED ? bOff : n0) +
+               loadKTile * bKTileStep;
     };
     if (nIter > 0) {
-        if constexpr (WIDE)
-            stageChunk(ldTi);
+        if constexpr (LargeKernel)
+            stageTapGroup(loadTap);
         setTap();
     }
 
     auto load = [&](int stage) {
-        int const k0    = ldKt * BK;
-        T *a            = sA + stage * A_STAGE;
-        bool const aKOk = k0 + aCh * CE < Kc;
+        int const k0         = loadKTile * BK;
+        T *a                 = sA + stage * A_STAGE;
+        bool const aKInRange = k0 + aChunk * CHUNK_ELEMS < Kc;
 #pragma unroll
         for (int i = 0; i < A_CHUNKS; ++i) {
-            bool const ok = aOk[i] && aKOk;
+            bool const ok = aOk[i] && aKInRange;
             cpAsync16(a + aDst + i * A_RSTEP * BK, ok ? aPtr[i] : A, ok);
             aPtr[i] += BK;
         }
@@ -579,24 +582,27 @@ maskedIGemmKernel(T const *__restrict__ A,
                 bool const ok = bColOk[i] && k0 + bRow[i] < Kc;
                 cpAsync16(b + bDst[i], ok ? bPtr + bSrc[i] : W, ok);
             } else {
-                int const r = bR + i * B_RSTEP;
-                if constexpr (B_KMAJOR) {
-                    bool const ok = n0 + r < Nc && k0 + bCh * CE < Kc;
-                    cpAsync16(b + r * BK + swz4(r, bCh) * CE, ok ? bPtr + i * bStep : W, ok);
+                int const r = bRowIdx + i * B_RSTEP;
+                if constexpr (KMajorWeights) {
+                    bool const ok = n0 + r < Nc && k0 + bChunk * CHUNK_ELEMS < Kc;
+                    cpAsync16(b + r * BK + swizzle4(r, bChunk) * CHUNK_ELEMS,
+                              ok ? bPtr + i * bStep : W,
+                              ok);
                 } else {
-                    bool const ok = bNOk && k0 + r < Kc;
-                    cpAsync16(
-                        b + r * BN + swzRow<T, BN>(r, bCh) * CE, ok ? bPtr + i * bStep : W, ok);
+                    bool const ok = bColsInRange && k0 + r < Kc;
+                    cpAsync16(b + r * BN + swizzleRow<T, BN>(r, bChunk) * CHUNK_ELEMS,
+                              ok ? bPtr + i * bStep : W,
+                              ok);
                 }
             }
         }
-        bPtr += bKt;
-        if (++ldKt == kTiles) {
-            ldKt = 0;
-            if (++ldTi < nTaps) {
-                if constexpr (WIDE) {
-                    if (ldTi == chunkBase + chunkN)
-                        stageChunk(ldTi);
+        bPtr += bKTileStep;
+        if (++loadKTile == kTiles) {
+            loadKTile = 0;
+            if (++loadTap < nTaps) {
+                if constexpr (LargeKernel) {
+                    if (loadTap == tapGroupBase + tapGroupSize)
+                        stageTapGroup(loadTap);
                 }
                 setTap();
             }
@@ -635,50 +641,51 @@ maskedIGemmKernel(T const *__restrict__ A,
         // Each k-step spans two 16-byte chunks for every element type; for float32,
         // ldmatrix's 8x8 16-bit tiles are 8x4 float tiles, which match TF32 fragments.
 #pragma unroll
-        for (int kk = 0; kk < BK / KSTEP; ++kk) {
+        for (int kk = 0; kk < BK / MMA_K; ++kk) {
             uint32_t af[MT][4];
 #pragma unroll
             for (int mt = 0; mt < MT; ++mt) {
                 int const r  = wm0 + mt * 16 + (lane & 15);
                 int const ch = kk * 2 + (lane >> 4);
-                ldsm4(af[mt], a + r * BK + swz4(r, ch) * CE);
+                ldmatrixX4(af[mt], a + r * BK + swizzle4(r, ch) * CHUNK_ELEMS);
 #pragma unroll
                 for (int e = 0; e < 4; ++e)
-                    af[mt][e] = prepIf<T, PRECISE>(af[mt][e]);
+                    af[mt][e] = roundUnless3xTf32<T, Use3xTf32>(af[mt][e]);
             }
             uint32_t bf[NT][2];
 #pragma unroll
             for (int np = 0; np < NT / 2; ++np) {
                 uint32_t t[4];
-                if constexpr (B_KMAJOR) {
+                if constexpr (KMajorWeights) {
                     int const nr = wn0 + np * 16 + (lane & 7) + ((lane >> 4) & 1) * 8;
                     int const ch = kk * 2 + ((lane >> 3) & 1);
-                    ldsm4(t, b + nr * BK + swz4(nr, ch) * CE);
+                    ldmatrixX4(t, b + nr * BK + swizzle4(nr, ch) * CHUNK_ELEMS);
                 } else if constexpr (sizeof(T) == 4) {
                     // ldmatrix cannot transpose 32-bit data; read N-major fragments
                     // element-wise: b0 = B[t][g], b1 = B[t + 4][g].
-                    int const g = lane >> 2, k = kk * KSTEP + (lane & 3);
+                    int const g = lane >> 2, k = kk * MMA_K + (lane & 3);
 #pragma unroll
                     for (int h = 0; h < 2; ++h) {
                         int const n  = wn0 + np * 16 + h * 8 + g;
                         auto const e = [&](int kr) {
                             return __float_as_uint(
-                                b[kr * BN + swzRow<T, BN>(kr, n / CE) * CE + n % CE]);
+                                b[kr * BN + swizzleRow<T, BN>(kr, n / CHUNK_ELEMS) * CHUNK_ELEMS +
+                                  n % CHUNK_ELEMS]);
                         };
                         t[2 * h]     = e(k);
                         t[2 * h + 1] = e(k + 4);
                     }
                 } else {
-                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
-                    int const ch = (wn0 + np * 16) / CE + (lane >> 4);
-                    ldsm4T(t, b + kr * BN + swzRow<T, BN>(kr, ch) * CE);
+                    int const kr = kk * MMA_K + (lane & 7) + ((lane >> 3) & 1) * 8;
+                    int const ch = (wn0 + np * 16) / CHUNK_ELEMS + (lane >> 4);
+                    ldmatrixX4Trans(t, b + kr * BN + swizzleRow<T, BN>(kr, ch) * CHUNK_ELEMS);
                 }
-                bf[2 * np][0]     = prepIf<T, PRECISE>(t[0]);
-                bf[2 * np][1]     = prepIf<T, PRECISE>(t[1]);
-                bf[2 * np + 1][0] = prepIf<T, PRECISE>(t[2]);
-                bf[2 * np + 1][1] = prepIf<T, PRECISE>(t[3]);
+                bf[2 * np][0]     = roundUnless3xTf32<T, Use3xTf32>(t[0]);
+                bf[2 * np][1]     = roundUnless3xTf32<T, Use3xTf32>(t[1]);
+                bf[2 * np + 1][0] = roundUnless3xTf32<T, Use3xTf32>(t[2]);
+                bf[2 * np + 1][1] = roundUnless3xTf32<T, Use3xTf32>(t[3]);
             }
-            mmaTiles<T, PRECISE>(acc, af, bf);
+            mmaTiles<T, Use3xTf32>(acc, af, bf);
         }
     }
     cute::cp_async_wait<0>();
@@ -747,7 +754,7 @@ wgradSmemBytes() {
            Cfg::STAGES * 2 * Cfg::BK * 4;
 }
 
-template <typename Cfg, typename T, bool PRECISE>
+template <typename Cfg, typename T, bool Use3xTf32>
 __global__ void __launch_bounds__(Cfg::THREADS)
 maskedIGemmWgradKernel(T const *__restrict__ X,
                        T const *__restrict__ dY,
@@ -761,9 +768,9 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                        int Ci,
                        int Co,
                        int splits,
-                       TapToRow tapToRow) {
+                       TapToWeightRow tapToRow) {
     constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Cfg::BK, STAGES = Cfg::STAGES;
-    constexpr int CE = Elem<T>::CHUNK, KSTEP = Elem<T>::KSTEP;
+    constexpr int CHUNK_ELEMS = Elem<T>::CHUNK, MMA_K = Elem<T>::MMA_K;
     constexpr int THREADS = Cfg::THREADS, MT = Cfg::MT, NT = Cfg::NT;
     constexpr int A_STAGE = BK * BM, B_STAGE = BK * BN;
 
@@ -823,27 +830,27 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
         T *a                = sA + stage * A_STAGE;
         T *b                = sB + stage * B_STAGE;
 #pragma unroll
-        for (int i = 0; i < (BK * BM / CE + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BK * BM / CHUNK_ELEMS + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BK * BM / CE) {
-                int const kr  = c / (BM / CE);
-                int const ch  = c % (BM / CE);
+            if (c < BK * BM / CHUNK_ELEMS) {
+                int const kr  = c / (BM / CHUNK_ELEMS);
+                int const ch  = c % (BM / CHUNK_ELEMS);
                 int const src = slot[kr];
-                bool const ok = src >= 0 && m0 + ch * CE < Ci;
-                T const *g    = X + (ok ? int64_t(src) * Ci + m0 + ch * CE : 0);
-                cpAsync16(a + kr * BM + swzRow<T, BM>(kr, ch) * CE, g, ok);
+                bool const ok = src >= 0 && m0 + ch * CHUNK_ELEMS < Ci;
+                T const *g    = X + (ok ? int64_t(src) * Ci + m0 + ch * CHUNK_ELEMS : 0);
+                cpAsync16(a + kr * BM + swizzleRow<T, BM>(kr, ch) * CHUNK_ELEMS, g, ok);
             }
         }
 #pragma unroll
-        for (int i = 0; i < (BK * BN / CE + THREADS - 1) / THREADS; ++i) {
+        for (int i = 0; i < (BK * BN / CHUNK_ELEMS + THREADS - 1) / THREADS; ++i) {
             int const c = tid + i * THREADS;
-            if (c < BK * BN / CE) {
-                int const kr  = c / (BN / CE);
-                int const ch  = c % (BN / CE);
+            if (c < BK * BN / CHUNK_ELEMS) {
+                int const kr  = c / (BN / CHUNK_ELEMS);
+                int const ch  = c % (BN / CHUNK_ELEMS);
                 int const o   = slot[BK + kr];
-                bool const ok = o >= 0 && n0 + ch * CE < Co;
-                T const *g    = dY + (ok ? int64_t(o) * Co + n0 + ch * CE : 0);
-                cpAsync16(b + kr * BN + swzRow<T, BN>(kr, ch) * CE, g, ok);
+                bool const ok = o >= 0 && n0 + ch * CHUNK_ELEMS < Co;
+                T const *g    = dY + (ok ? int64_t(o) * Co + n0 + ch * CHUNK_ELEMS : 0);
+                cpAsync16(b + kr * BN + swizzleRow<T, BN>(kr, ch) * CHUNK_ELEMS, g, ok);
             }
         }
     };
@@ -872,12 +879,14 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
 #pragma unroll
             for (int r = 0; r < 2; ++r) {
                 int const m = wm0 + mt * 16 + g + 8 * r;
-                aOff[mt][r] = t * BM + swzRow<T, BM>(t, m / CE) * CE + m % CE;
+                aOff[mt][r] =
+                    t * BM + swizzleRow<T, BM>(t, m / CHUNK_ELEMS) * CHUNK_ELEMS + m % CHUNK_ELEMS;
             }
 #pragma unroll
         for (int nt = 0; nt < NT; ++nt) {
             int const n = wn0 + nt * 8 + g;
-            bOff[nt]    = t * BN + swzRow<T, BN>(t, n / CE) * CE + n % CE;
+            bOff[nt] =
+                t * BN + swizzleRow<T, BN>(t, n / CHUNK_ELEMS) * CHUNK_ELEMS + n % CHUNK_ELEMS;
         }
         // Keep the offsets in registers; otherwise ptxas rebuilds them from the lane index
         // in every iteration.
@@ -923,44 +932,45 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
         T const *a = sA + (it % STAGES) * A_STAGE;
         T const *b = sB + (it % STAGES) * B_STAGE;
 #pragma unroll
-        for (int kk = 0; kk < BK / KSTEP; ++kk) {
+        for (int kk = 0; kk < BK / MMA_K; ++kk) {
             uint32_t af[MT][4];
             uint32_t bf[NT][2];
             if constexpr (sizeof(T) == 4) {
 #pragma unroll
                 for (int h = 0; h < 2; ++h) {
-                    int const k = kk * KSTEP + 4 * h;
+                    int const k = kk * MMA_K + 4 * h;
 #pragma unroll
                     for (int mt = 0; mt < MT; ++mt) {
-                        af[mt][2 * h] =
-                            prepIf<T, PRECISE>(__float_as_uint(a[aOff[mt][0] + k * BM]));
-                        af[mt][2 * h + 1] =
-                            prepIf<T, PRECISE>(__float_as_uint(a[aOff[mt][1] + k * BM]));
+                        af[mt][2 * h] = roundUnless3xTf32<T, Use3xTf32>(
+                            __float_as_uint(a[aOff[mt][0] + k * BM]));
+                        af[mt][2 * h + 1] = roundUnless3xTf32<T, Use3xTf32>(
+                            __float_as_uint(a[aOff[mt][1] + k * BM]));
                     }
 #pragma unroll
                     for (int nt = 0; nt < NT; ++nt)
-                        bf[nt][h] = prepIf<T, PRECISE>(__float_as_uint(b[bOff[nt] + k * BN]));
+                        bf[nt][h] =
+                            roundUnless3xTf32<T, Use3xTf32>(__float_as_uint(b[bOff[nt] + k * BN]));
                 }
             } else {
 #pragma unroll
                 for (int mt = 0; mt < MT; ++mt) {
-                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 4) & 1) * 8;
-                    int const ch = (wm0 + mt * 16) / CE + ((lane >> 3) & 1);
-                    ldsm4T(af[mt], a + kr * BM + swzRow<T, BM>(kr, ch) * CE);
+                    int const kr = kk * MMA_K + (lane & 7) + ((lane >> 4) & 1) * 8;
+                    int const ch = (wm0 + mt * 16) / CHUNK_ELEMS + ((lane >> 3) & 1);
+                    ldmatrixX4Trans(af[mt], a + kr * BM + swizzleRow<T, BM>(kr, ch) * CHUNK_ELEMS);
                 }
 #pragma unroll
                 for (int np = 0; np < NT / 2; ++np) {
                     uint32_t t[4];
-                    int const kr = kk * KSTEP + (lane & 7) + ((lane >> 3) & 1) * 8;
-                    int const ch = (wn0 + np * 16) / CE + (lane >> 4);
-                    ldsm4T(t, b + kr * BN + swzRow<T, BN>(kr, ch) * CE);
+                    int const kr = kk * MMA_K + (lane & 7) + ((lane >> 3) & 1) * 8;
+                    int const ch = (wn0 + np * 16) / CHUNK_ELEMS + (lane >> 4);
+                    ldmatrixX4Trans(t, b + kr * BN + swizzleRow<T, BN>(kr, ch) * CHUNK_ELEMS);
                     bf[2 * np][0]     = t[0];
                     bf[2 * np][1]     = t[1];
                     bf[2 * np + 1][0] = t[2];
                     bf[2 * np + 1][1] = t[3];
                 }
             }
-            mmaTiles<T, PRECISE>(acc, af, bf);
+            mmaTiles<T, Use3xTf32>(acc, af, bf);
         }
 
         if (warp == 0)
@@ -1280,7 +1290,7 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     int device = 0, l2 = 0;
     C10_CUDA_CHECK(cudaGetDevice(&device));
     C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
-    bool local = topo.totalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
+    bool local = topo.outputTotalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
     if (char const *env = std::getenv("FVDB_MIGEMM_ORDER"))
         local = std::string(env) == "local";
     if (!local)
@@ -1293,7 +1303,7 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     return topo.localRows;
 }
 
-template <typename Cfg, typename T, bool B_KMAJOR, bool PRECISE, bool WIDE = false>
+template <typename Cfg, typename T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel = false>
 void
 launchConv(torch::Tensor const &A,
            torch::Tensor const &Wrows,
@@ -1304,10 +1314,10 @@ launchConv(torch::Tensor const &A,
            int Kc,
            int Nc,
            cudaStream_t stream) {
-    int const N    = int(topo.totalVoxels);
+    int const N    = int(topo.outputTotalVoxels);
     int const K    = int(topo.kernelVolume);
-    int const smem = smemBytes<Cfg, T, WIDE>(K);
-    auto kernel    = maskedIGemmKernel<Cfg, T, B_KMAJOR, PRECISE, WIDE>;
+    int const smem = smemBytes<Cfg, T, LargeKernel>(K);
+    auto kernel    = maskedIGemmKernel<Cfg, T, KMajorWeights, Use3xTf32, LargeKernel>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
     int const tiles = ((N + Cfg::BM - 1) / Cfg::BM) * ((Nc + Cfg::BN - 1) / Cfg::BN);
 
@@ -1342,7 +1352,7 @@ launchConv(torch::Tensor const &A,
     if (splits > 1)
         acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
 
-    TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], flipTaps};
+    TapToWeightRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], flipTaps};
     dim3 const grid(tiles, splits);
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(A.data_ptr()),
@@ -1352,7 +1362,7 @@ launchConv(torch::Tensor const &A,
         splits > 1 ? acc.data_ptr<float>() : nullptr,
         topo.neighborMap.data_ptr<int32_t>(),
         rowOrder(topo, int64_t(N) * Kc * A.element_size()).data_ptr<int32_t>(),
-        (WIDE ? topo.rowWords : topo.rowMasks).data_ptr<int32_t>(),
+        (LargeKernel ? topo.rowWords : topo.rowMasks).data_ptr<int32_t>(),
         N,
         Kc,
         Nc,
@@ -1365,7 +1375,7 @@ launchConv(torch::Tensor const &A,
 }
 
 // Default tile shape by output width.
-template <typename T, bool B_KMAJOR, bool PRECISE, bool WIDE>
+template <typename T, bool KMajorWeights, bool Use3xTf32, bool LargeKernel>
 void
 dispatchConvTiles(torch::Tensor const &A,
                   torch::Tensor const &Wrows,
@@ -1381,23 +1391,23 @@ dispatchConvTiles(torch::Tensor const &A,
     // narrow output (48, say) takes one wider tile instead of re-gathering its rows per tile.
     int const Np = (Nc + 31) / 32 * 32;
     if (Np % 128 == 0) {
-        launchConv<TileConfig<128, 128, 2, 2, 2>, T, B_KMAJOR, PRECISE, WIDE>(
+        launchConv<TileConfig<128, 128, 2, 2, 2>, T, KMajorWeights, Use3xTf32, LargeKernel>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Np % 64 == 0) {
-        launchConv<TileConfig<128, 64, 4, 1, 2>, T, B_KMAJOR, PRECISE, WIDE>(
+        launchConv<TileConfig<128, 64, 4, 1, 2>, T, KMajorWeights, Use3xTf32, LargeKernel>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else if (Np % 96 == 0) {
-        launchConv<TileConfig<128, 96, 4, 1, 2>, T, B_KMAJOR, PRECISE, WIDE>(
+        launchConv<TileConfig<128, 96, 4, 1, 2>, T, KMajorWeights, Use3xTf32, LargeKernel>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     } else {
         // 32-wide stages are small enough for a third stage at two CTAs per SM.
-        launchConv<TileConfig<128, 32, 4, 1, 3>, T, B_KMAJOR, PRECISE, WIDE>(
+        launchConv<TileConfig<128, 32, 4, 1, 3>, T, KMajorWeights, Use3xTf32, LargeKernel>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
     }
 }
 
 // Tile shape by output width. FVDB_MIGEMM_CFG=<BM>x<BN>x<STAGES> overrides it for tuning.
-template <typename T, bool B_KMAJOR, bool PRECISE>
+template <typename T, bool KMajorWeights, bool Use3xTf32>
 void
 dispatchConv(torch::Tensor const &A,
              torch::Tensor const &Wrows,
@@ -1411,18 +1421,18 @@ dispatchConv(torch::Tensor const &A,
     if (topo.kernelVolume > kMaxTaps) {
         // Kernels of more than kMaxTaps taps run the default tiles only, which bounds the extra
         // instantiations; FVDB_MIGEMM_CFG does not apply.
-        dispatchConvTiles<T, B_KMAJOR, PRECISE, true>(
+        dispatchConvTiles<T, KMajorWeights, Use3xTf32, true>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
         return;
     }
-    if constexpr (!PRECISE) {
+    if constexpr (!Use3xTf32) {
         char const *env       = std::getenv("FVDB_MIGEMM_CFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                               \
-    if (cfg == #BM "x" #BN "x" #ST) {                                     \
-        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, B_KMAJOR, PRECISE>( \
-            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);         \
-        return;                                                           \
+#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                                      \
+    if (cfg == #BM "x" #BN "x" #ST) {                                            \
+        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, KMajorWeights, Use3xTf32>( \
+            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);                \
+        return;                                                                  \
     }
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
         FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
@@ -1446,11 +1456,11 @@ dispatchConv(torch::Tensor const &A,
         FVDB_MIGEMM_TRY(64, 32, 2, 1, 2)
 #undef FVDB_MIGEMM_TRY
     }
-    dispatchConvTiles<T, B_KMAJOR, PRECISE, false>(
+    dispatchConvTiles<T, KMajorWeights, Use3xTf32, false>(
         A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
 }
 
-template <typename Cfg, typename T, bool PRECISE>
+template <typename Cfg, typename T, bool Use3xTf32>
 torch::Tensor
 launchWgrad(torch::Tensor const &X,
             torch::Tensor const &dY,
@@ -1460,7 +1470,7 @@ launchWgrad(torch::Tensor const &X,
             cudaStream_t stream) {
     int const K    = int(topo.kernelVolume);
     int const smem = wgradSmemBytes<Cfg, T>();
-    auto kernel    = maskedIGemmWgradKernel<Cfg, T, PRECISE>;
+    auto kernel    = maskedIGemmWgradKernel<Cfg, T, Use3xTf32>;
     C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
 
     int const sms       = smCount();
@@ -1483,7 +1493,7 @@ launchWgrad(torch::Tensor const &X,
     C10_CUDA_CHECK(cudaGetDevice(&device));
     C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
     double const groups = double(std::max(1, perSm) * sms) / double(tiles * K);
-    double const bytes  = double(topo.totalVoxels) * (Ci + Co) * X.element_size();
+    double const bytes  = double(topo.outputTotalVoxels) * (Ci + Co) * X.element_size();
     auto const local    = int64_t(std::ceil(groups * bytes / (l2 / 4.0)));
     int const rowBlocks = int(topo.pairBlockOffsets.size(1));
     bool rowSplit       = !env && local > splits && rowBlocks > 1;
@@ -1501,7 +1511,7 @@ launchWgrad(torch::Tensor const &X,
     else
         rows = torch::empty({K, Ci, Co}, X.options());
 
-    TapToRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], false};
+    TapToWeightRow const ttr{topo.kernelSize[1], topo.kernelSize[2], topo.kernelSize[0], false};
     dim3 const grid(tiles, K, unsigned(splits));
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(X.data_ptr()),
@@ -1529,7 +1539,7 @@ round32(int c) {
 // Channel counts not divisible by 128 use 64-, 96- or 32-wide tiles on each side, whichever
 // divides the count rounded up to 32 first, so each CTA gathers its rows once per 64 or 96
 // channels where possible.
-template <typename T, int BM, int WM, bool PRECISE>
+template <typename T, int BM, int WM, bool Use3xTf32>
 torch::Tensor
 launchWgradByCo(torch::Tensor const &X,
                 torch::Tensor const &dY,
@@ -1538,13 +1548,15 @@ launchWgradByCo(torch::Tensor const &X,
                 int Co,
                 cudaStream_t stream) {
     if (round32(Co) % 64 == 0)
-        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 64, WM, 2, 2>, T, Use3xTf32>(
+            X, dY, topo, Ci, Co, stream);
     if (round32(Co) % 96 == 0)
-        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
-    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgrad<WgradConfig<BM, 96, WM, 2, 2>, T, Use3xTf32>(
+            X, dY, topo, Ci, Co, stream);
+    return launchWgrad<WgradConfig<BM, 32, WM, 1, 2>, T, Use3xTf32>(X, dY, topo, Ci, Co, stream);
 }
 
-template <typename T, bool PRECISE>
+template <typename T, bool Use3xTf32>
 torch::Tensor
 launchWgradNarrow(torch::Tensor const &X,
                   torch::Tensor const &dY,
@@ -1553,13 +1565,13 @@ launchWgradNarrow(torch::Tensor const &X,
                   int Co,
                   cudaStream_t stream) {
     if (round32(Ci) % 64 == 0)
-        return launchWgradByCo<T, 64, 2, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgradByCo<T, 64, 2, Use3xTf32>(X, dY, topo, Ci, Co, stream);
     if (round32(Ci) % 96 == 0)
-        return launchWgradByCo<T, 96, 2, PRECISE>(X, dY, topo, Ci, Co, stream);
-    return launchWgradByCo<T, 32, 1, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgradByCo<T, 96, 2, Use3xTf32>(X, dY, topo, Ci, Co, stream);
+    return launchWgradByCo<T, 32, 1, Use3xTf32>(X, dY, topo, Ci, Co, stream);
 }
 
-template <typename T, bool PRECISE>
+template <typename T, bool Use3xTf32>
 torch::Tensor
 dispatchWgrad(torch::Tensor const &X,
               torch::Tensor const &dY,
@@ -1571,16 +1583,16 @@ dispatchWgrad(torch::Tensor const &X,
         // float32 reads fragments element-wise, so wide warp tiles amortize the loads;
         // at 128x128, 16-row stages keep two CTAs resident per SM.
         if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T, PRECISE>(
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3, 16>, T, Use3xTf32>(
                 X, dY, topo, Ci, Co, stream);
-        return launchWgradNarrow<T, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T, Use3xTf32>(X, dY, topo, Ci, Co, stream);
     } else {
         char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
         std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                             \
-    if (cfg == #BM "x" #BN "x" #ST) {                                    \
-        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T, PRECISE>( \
-            X, dY, topo, Ci, Co, stream);                                \
+#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                               \
+    if (cfg == #BM "x" #BN "x" #ST) {                                      \
+        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T, Use3xTf32>( \
+            X, dY, topo, Ci, Co, stream);                                  \
     }
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
         FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
@@ -1594,9 +1606,9 @@ dispatchWgrad(torch::Tensor const &X,
         FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
 #undef FVDB_MIGEMM_TRYW
         if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
-            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T, PRECISE>(
+            return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T, Use3xTf32>(
                 X, dY, topo, Ci, Co, stream);
-        return launchWgradNarrow<T, PRECISE>(X, dY, topo, Ci, Co, stream);
+        return launchWgradNarrow<T, Use3xTf32>(X, dY, topo, Ci, Co, stream);
     }
 }
 
@@ -1606,7 +1618,7 @@ checkConv(torch::Tensor const &features,
           MaskedIGemmTopology const &topo,
           bool transposed,
           char const *name) {
-    int64_t const inRows = transposed ? topo.totalVoxels : topo.inputVoxels;
+    int64_t const inRows = transposed ? topo.outputTotalVoxels : topo.featureTotalVoxels;
     TORCH_CHECK(features.is_cuda(), name, ": features must be on CUDA");
     TORCH_CHECK(weights.device() == features.device() &&
                     topo.neighborMap.device() == features.device(),
@@ -1652,7 +1664,7 @@ inputRows(MaskedIGemmTopology const &topo) {
     return topo.reverse ? RowMap{*topo.reverse, false} : RowMap{topo, true};
 }
 
-template <bool B_KMAJOR>
+template <bool KMajorWeights>
 void
 runConv(torch::Tensor const &A,
         torch::Tensor const &Wrows,
@@ -1665,16 +1677,16 @@ runConv(torch::Tensor const &A,
         cudaStream_t stream) {
     auto const st = A.scalar_type();
     if (st == torch::kFloat16)
-        dispatchConv<__half, B_KMAJOR, false>(
+        dispatchConv<__half, KMajorWeights, false>(
             A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
     else if (st == torch::kBFloat16)
-        dispatchConv<__nv_bfloat16, B_KMAJOR, false>(
+        dispatchConv<__nv_bfloat16, KMajorWeights, false>(
             A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
     else if (precise)
-        dispatchConv<float, B_KMAJOR, true>(
+        dispatchConv<float, KMajorWeights, true>(
             A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
     else
-        dispatchConv<float, B_KMAJOR, false>(
+        dispatchConv<float, KMajorWeights, false>(
             A, Wrows, bias, out, map.topo, map.flip, Kc, Nc, stream);
 }
 
@@ -1742,14 +1754,14 @@ columnSumKernel(T const *__restrict__ x, int64_t N, int C, float *__restrict__ o
 // Compact neighbor maps (kernels of more than kMaxTaps taps)
 // =============================================================================
 //
-// A dense [N, K] map grows with K: 343 taps over millions of rows is tens of GiB. Wide kernels
+// A dense [N, K] map grows with K: 343 taps over millions of rows is tens of GiB. Large kernels
 // keep only each row's present neighbors, in tap order, at neighborMap[neighborOffsets[o] ...].
 // rowWords[o, w] = (mask, base) for taps 32w..32w+31: the word's tap bits and the compact index of
 // its first present tap, so tap t's neighbor is neighborMap[base + popc(mask & below(t % 32))].
-// Rows are probed a chunk at a time into a dense scratch and compacted, so the dense map never
+// Rows are probed a batch at a time into a dense scratch and compacted, so the dense map never
 // exists in full and every tap is probed once.
 
-constexpr int64_t kWideChunkBytes = int64_t(256) << 20; // dense scratch per probe chunk
+constexpr int64_t kProbeBatchBytes = int64_t(256) << 20; // dense scratch per probe batch
 
 __device__ __forceinline__ uint32_t
 bitsBelow(int b) {
@@ -1759,9 +1771,9 @@ bitsBelow(int b) {
 // Probe rows [r0, r1) of rowGrid into scratch[(row - r0) * K + k] (a probeGrid row or -1). The
 // forward map's rows are output voxels probing input voxels at fine = stride * coarse + tap -
 // padding; the reverse map's rows are input voxels probing the output voxel that reads them.
-template <bool REVERSE>
+template <bool Reverse>
 void
-probeChunkScan(GridBatchData const &rowGrid,
+probeBatchScan(GridBatchData const &rowGrid,
                GridBatchData const &probeGrid,
                ConvolutionGeometry const &geometry,
                int K,
@@ -1787,7 +1799,7 @@ probeChunkScan(GridBatchData const &rowGrid,
                                          // inside if constexpr.
                                          nanovdb::Coord const tap = geometry.tapCoord(k);
                                          nanovdb::Coord probe;
-                                         if constexpr (REVERSE) {
+                                         if constexpr (Reverse) {
                                              if (!geometry.coarseFromFine(ijk, tap, probe)) {
                                                  row[k] = -1;
                                                  continue;
@@ -1802,10 +1814,10 @@ probeChunkScan(GridBatchData const &rowGrid,
                                  });
 }
 
-// Tap masks (rowWords[row, w].mask) and degrees of a probed chunk, one warp per row: lane b reads
+// Tap masks (rowWords[row, w].mask) and degrees of a probed batch, one warp per row: lane b reads
 // tap 32w + b, so the warp's ballot is the row's mask word w.
 __global__ void
-chunkMaskKernel(int32_t const *__restrict__ scratch,
+batchMaskKernel(int32_t const *__restrict__ scratch,
                 int64_t rows,
                 int K,
                 int W,
@@ -1829,9 +1841,9 @@ chunkMaskKernel(int32_t const *__restrict__ scratch,
     }
 }
 
-// Write a probed chunk's present neighbors at their chunk-local offsets, one warp per row.
+// Write a probed batch's present neighbors at their batch-local offsets, one warp per row.
 __global__ void
-chunkCompactKernel(int32_t const *__restrict__ scratch,
+batchCompactKernel(int32_t const *__restrict__ scratch,
                    int64_t rows,
                    int K,
                    int32_t const *__restrict__ start,
@@ -1872,7 +1884,10 @@ rowBaseKernel(int32_t const *__restrict__ offsets,
 // signed int64 that sorts like the unsigned 64-bit value. A rank bit is the XOR of the mask bits at
 // and above it, so a word's rank is its own prefix XOR flipped by the parity of the words above it.
 __global__ void
-wideKeyKernel(int32_t const *__restrict__ rowWords, int64_t N, int W, int64_t *__restrict__ keys) {
+multiWordGrayKeyKernel(int32_t const *__restrict__ rowWords,
+                       int64_t N,
+                       int W,
+                       int64_t *__restrict__ keys) {
     for (int64_t row = blockIdx.x * int64_t(blockDim.x) + threadIdx.x; row < N;
          row += int64_t(gridDim.x) * blockDim.x) {
         uint32_t parity = 0, high = 0;
@@ -1895,10 +1910,10 @@ wideKeyKernel(int32_t const *__restrict__ rowWords, int64_t N, int W, int64_t *_
 // Rows ordered by the Gray rank of their whole tap mask: stable sorts from the least to the
 // most significant 64-bit key.
 torch::Tensor
-wideRowOrder(torch::Tensor const &rowWords, int64_t N, int64_t W, cudaStream_t stream) {
+multiWordRowOrder(torch::Tensor const &rowWords, int64_t N, int64_t W, cudaStream_t stream) {
     auto keys = torch::empty({(W + 1) / 2, N}, rowWords.options().dtype(torch::kInt64));
     if (N > 0) {
-        wideKeyKernel<<<gridStrideBlocks(N), 256, 0, stream>>>(
+        multiWordGrayKeyKernel<<<gridStrideBlocks(N), 256, 0, stream>>>(
             rowWords.data_ptr<int32_t>(), N, int(W), keys.data_ptr<int64_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -1914,7 +1929,7 @@ wideRowOrder(torch::Tensor const &rowWords, int64_t N, int64_t W, cudaStream_t s
 // Weight-gradient pair lists from the masks and compact map, as pairCountKernel/pairFillKernel.
 // Dynamic shared memory holds the per-warp counts: kPairBlock / 32 * K int32.
 __global__ void
-pairCountWideKernel(
+pairCountMultiWordKernel(
     int32_t const *__restrict__ rowWords, int N, int K, int W, int32_t *__restrict__ blockCounts) {
     extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
     int const row  = blockIdx.x * kPairBlock + threadIdx.x;
@@ -1938,15 +1953,15 @@ pairCountWideKernel(
 }
 
 __global__ void
-pairFillWideKernel(int32_t const *__restrict__ rowWords,
-                   int32_t const *__restrict__ nbr,
-                   int32_t const *__restrict__ offsets,
-                   int32_t const *__restrict__ blockOffsets,
-                   int N,
-                   int K,
-                   int W,
-                   int32_t *__restrict__ pairIn,
-                   int32_t *__restrict__ pairOut) {
+pairFillMultiWordKernel(int32_t const *__restrict__ rowWords,
+                        int32_t const *__restrict__ nbr,
+                        int32_t const *__restrict__ offsets,
+                        int32_t const *__restrict__ blockOffsets,
+                        int N,
+                        int K,
+                        int W,
+                        int32_t *__restrict__ pairIn,
+                        int32_t *__restrict__ pairOut) {
     extern __shared__ int32_t warpCounts[]; // [kPairBlock / 32][K]
     int const row  = blockIdx.x * kPairBlock + threadIdx.x;
     int const warp = threadIdx.x >> 5;
@@ -1987,9 +2002,9 @@ struct CompactMap {
     torch::Tensor sorted;   ///< int32 [rows], rows by Gray rank of their tap mask
 };
 
-// Probe rowGrid's rows a chunk at a time into a dense scratch, compact each chunk, then derive the
+// Probe rowGrid's rows a batch at a time into a dense scratch, compact each batch, then derive the
 // row offsets, word bases and Gray-rank row order.
-template <bool REVERSE>
+template <bool Reverse>
 CompactMap
 buildCompactMap(GridBatchData const &rowGrid,
                 GridBatchData const &probeGrid,
@@ -2003,13 +2018,14 @@ buildCompactMap(GridBatchData const &rowGrid,
     auto rowWords = torch::empty({rows, W, 2}, i32);
     auto degrees  = torch::empty({rows}, i32);
     std::vector<torch::Tensor> parts;
-    int64_t const chunk = std::max<int64_t>(1, kWideChunkBytes / (K * int64_t(sizeof(int32_t))));
-    auto scratch        = torch::empty({std::min(chunk, rows), K}, i32);
-    for (int64_t r0 = 0; r0 < rows; r0 += chunk) {
-        int64_t const r1 = std::min(rows, r0 + chunk), n = r1 - r0;
-        probeChunkScan<REVERSE>(
+    int64_t const batchRows =
+        std::max<int64_t>(1, kProbeBatchBytes / (K * int64_t(sizeof(int32_t))));
+    auto scratch = torch::empty({std::min(batchRows, rows), K}, i32);
+    for (int64_t r0 = 0; r0 < rows; r0 += batchRows) {
+        int64_t const r1 = std::min(rows, r0 + batchRows), n = r1 - r0;
+        probeBatchScan<Reverse>(
             rowGrid, probeGrid, geometry, int(K), r0, r1, scratch.data_ptr<int32_t>());
-        chunkMaskKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+        batchMaskKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
             scratch.data_ptr<int32_t>(),
             n,
             int(K),
@@ -2018,13 +2034,13 @@ buildCompactMap(GridBatchData const &rowGrid,
             degrees.data_ptr<int32_t>() + r0);
         C10_CUDA_KERNEL_LAUNCH_CHECK();
         torch::Tensor const d = degrees.slice(0, r0, r1);
-        // Exclusive offsets within the chunk; a chunk holds fewer than 2^31 entries.
+        // Exclusive offsets within the batch; a batch holds fewer than 2^31 entries.
         torch::Tensor const start = torch::cumsum(d, 0, torch::kInt32) - d;
         torch::Tensor const last  = start[n - 1] + d[n - 1];
         int64_t const size        = last.item<int64_t>();
         torch::Tensor part        = torch::empty({size}, i32);
         if (size > 0) {
-            chunkCompactKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
+            batchCompactKernel<<<gridStrideBlocks(n * 32), 256, 0, stream>>>(
                 scratch.data_ptr<int32_t>(),
                 n,
                 int(K),
@@ -2041,22 +2057,22 @@ buildCompactMap(GridBatchData const &rowGrid,
     auto offsets = torch::zeros({rows + 1}, i32);
     if (rows > 0) {
         TORCH_CHECK(nbr.size(0) < std::numeric_limits<int32_t>::max(),
-                    "maskedIGemmTopology: neighbor pairs exceed the int32 index");
+                    "maskedIGemmSparseConvTopology: neighbor pairs exceed the int32 index");
         offsets.slice(0, 1).copy_(torch::cumsum(degrees, 0, torch::kInt32));
         rowBaseKernel<<<gridStrideBlocks(rows), 256, 0, stream>>>(
             offsets.data_ptr<int32_t>(), rows, int(W), rowWords.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
-    auto sorted = wideRowOrder(rowWords, rows, W, stream);
+    auto sorted = multiWordRowOrder(rowWords, rows, W, stream);
     return {nbr, offsets, rowWords, sorted};
 }
 
 MaskedIGemmTopology
-wideTopology(GridBatchData const &featureGrid,
-             GridBatchData const &outputGrid,
-             ConvolutionGeometry const &geometry,
-             nanovdb::Coord kernelSize,
-             bool submanifold) {
+largeKernelTopology(GridBatchData const &featureGrid,
+                    GridBatchData const &outputGrid,
+                    ConvolutionGeometry const &geometry,
+                    nanovdb::Coord kernelSize,
+                    bool submanifold) {
     int64_t const K   = geometry.kernelVolume();
     int64_t const W   = (K + 31) / 32;
     int64_t const N   = outputGrid.totalVoxels();
@@ -2077,12 +2093,12 @@ wideTopology(GridBatchData const &featureGrid,
     int const pairSmem   = int(kPairBlock / 32 * K * sizeof(int32_t));
     if (pairSmem > 48 * 1024) {
         C10_CUDA_CHECK(cudaFuncSetAttribute(
-            pairCountWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
+            pairCountMultiWordKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
         C10_CUDA_CHECK(cudaFuncSetAttribute(
-            pairFillWideKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
+            pairFillMultiWordKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, pairSmem));
     }
     if (blocks > 0) {
-        pairCountWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
+        pairCountMultiWordKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
             rowWords.data_ptr<int32_t>(), int(N), int(K), int(W), blockCounts.data_ptr<int32_t>());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
     }
@@ -2093,7 +2109,7 @@ wideTopology(GridBatchData const &featureGrid,
     auto pairIn  = torch::empty({P}, i32);
     auto pairOut = torch::empty({P}, i32);
     if (blocks > 0 && P > 0) {
-        pairFillWideKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
+        pairFillMultiWordKernel<<<blocks, kPairBlock, pairSmem, stream>>>(
             rowWords.data_ptr<int32_t>(),
             nbr.data_ptr<int32_t>(),
             offsets.data_ptr<int32_t>(),
@@ -2153,8 +2169,8 @@ wideTopology(GridBatchData const &featureGrid,
 // =============================================================================
 
 torch::Tensor
-columnSum(torch::Tensor x) {
-    TORCH_CHECK(x.is_cuda() && x.dim() == 2, "columnSum: x must be a 2-D CUDA tensor");
+maskedIGemmColumnSum(torch::Tensor x) {
+    TORCH_CHECK(x.is_cuda() && x.dim() == 2, "maskedIGemmColumnSum: x must be a 2-D CUDA tensor");
     int64_t const N = x.size(0), C = x.size(1);
     int const V     = 16 / int(x.element_size());
     bool const fast = (x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kBFloat16 ||
@@ -2206,19 +2222,20 @@ maskedIGemmSupports(int64_t inChannels,
 }
 
 MaskedIGemmTopology
-maskedIGemmTopology(GridBatchData const &featureGrid,
-                    GridBatchData const &outputGrid,
-                    nanovdb::Coord kernelSize,
-                    nanovdb::Coord stride) {
-    TORCH_CHECK(outputGrid.device().is_cuda(), "maskedIGemmTopology: grids must be on CUDA");
+maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
+                              GridBatchData const &outputGrid,
+                              nanovdb::Coord kernelSize,
+                              nanovdb::Coord stride) {
+    TORCH_CHECK(outputGrid.device().is_cuda(),
+                "maskedIGemmSparseConvTopology: grids must be on CUDA");
     TORCH_CHECK(featureGrid.device() == outputGrid.device(),
-                "maskedIGemmTopology: grids must be on the same device");
+                "maskedIGemmSparseConvTopology: grids must be on the same device");
     TORCH_CHECK(featureGrid.batchSize() == outputGrid.batchSize(),
-                "maskedIGemmTopology: grids must have the same batch size");
+                "maskedIGemmSparseConvTopology: grids must have the same batch size");
     bool odd = true;
     for (int d = 0; d < 3; ++d) {
         TORCH_CHECK(kernelSize[d] > 0 && stride[d] > 0,
-                    "maskedIGemmTopology: kernel sizes and strides must be positive");
+                    "maskedIGemmSparseConvTopology: kernel sizes and strides must be positive");
         odd &= kernelSize[d] % 2 == 1;
     }
     // A submanifold map is its own reverse with mirrored taps; other maps store the reverse.
@@ -2229,12 +2246,12 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
     int64_t const NIn = featureGrid.totalVoxels();
     TORCH_CHECK(N < std::numeric_limits<int32_t>::max() &&
                     NIn < std::numeric_limits<int32_t>::max(),
-                "maskedIGemmTopology: too many voxels");
+                "maskedIGemmSparseConvTopology: too many voxels");
 
     c10::cuda::CUDAGuard guard(outputGrid.device());
-    // Kernels of more than kMaxTaps taps keep compact maps (wideTopology).
+    // Kernels of more than kMaxTaps taps keep compact maps (largeKernelTopology).
     if (K > kMaxTaps)
-        return wideTopology(featureGrid, outputGrid, geometry, kernelSize, submanifold);
+        return largeKernelTopology(featureGrid, outputGrid, geometry, kernelSize, submanifold);
     auto const i32 = torch::dtype(torch::kInt32).device(outputGrid.device());
     auto nbr       = torch::empty({N, K}, i32);
     auto code      = torch::empty({N}, i32);
@@ -2286,7 +2303,7 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
     auto tapEnds    = torch::cumsum(blockCounts.sum(1, false, torch::kInt64), 0);
     int64_t const P = tapEnds[K - 1].item<int64_t>();
     TORCH_CHECK(P < std::numeric_limits<int32_t>::max(),
-                "maskedIGemmTopology: ",
+                "maskedIGemmSparseConvTopology: ",
                 P,
                 " neighbor pairs exceed the int32 pair index");
     auto offsets = torch::zeros({K + 1}, i32);
@@ -2357,13 +2374,13 @@ maskedIGemmTopology(GridBatchData const &featureGrid,
 }
 
 torch::Tensor
-maskedIGemmConv(torch::Tensor features,
-                torch::Tensor weights,
-                std::optional<torch::Tensor> bias,
-                MaskedIGemmTopology const &topo,
-                bool transposed,
-                bool precise) {
-    checkConv(features, weights, topo, transposed, "maskedIGemmConv");
+maskedIGemmSparseConv(torch::Tensor features,
+                      torch::Tensor weights,
+                      std::optional<torch::Tensor> bias,
+                      MaskedIGemmTopology const &topo,
+                      bool transposed,
+                      bool precise) {
+    checkConv(features, weights, topo, transposed, "maskedIGemmSparseConv");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
     features      = features.contiguous();
@@ -2372,36 +2389,36 @@ maskedIGemmConv(torch::Tensor features,
     torch::Tensor b;
     if (bias.has_value() && bias->defined()) {
         TORCH_CHECK(bias->dim() == 1 && bias->size(0) == Co,
-                    "maskedIGemmConv: bias must be [C_out]");
+                    "maskedIGemmSparseConv: bias must be [C_out]");
         TORCH_CHECK(bias->device() == features.device() && bias->scalar_type() == st,
-                    "maskedIGemmConv: bias must match the features' device and dtype");
+                    "maskedIGemmSparseConv: bias must match the features' device and dtype");
         b = bias->contiguous();
     }
     // The transpose runs the forward kernel over the input rows' map.
     RowMap const map = transposed ? inputRows(topo) : RowMap{topo, false};
-    auto out         = torch::empty({map.topo.totalVoxels, Co}, features.options());
-    if (map.topo.totalVoxels > 0)
+    auto out         = torch::empty({map.topo.outputTotalVoxels, Co}, features.options());
+    if (map.topo.outputTotalVoxels > 0)
         runConv<false>(
             features, Wrows, b, out, map, Ci, Co, precise, c10::cuda::getCurrentCUDAStream());
     return out;
 }
 
 std::tuple<torch::Tensor, torch::Tensor>
-maskedIGemmConvBackward(torch::Tensor gradOutput,
-                        torch::Tensor features,
-                        torch::Tensor weights,
-                        MaskedIGemmTopology const &topo,
-                        bool needFeatures,
-                        bool needWeights,
-                        bool transposed,
-                        bool precise) {
-    checkConv(features, weights, topo, transposed, "maskedIGemmConvBackward");
-    int64_t const outRows = transposed ? topo.inputVoxels : topo.totalVoxels;
+maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
+                              torch::Tensor features,
+                              torch::Tensor weights,
+                              MaskedIGemmTopology const &topo,
+                              bool needFeatures,
+                              bool needWeights,
+                              bool transposed,
+                              bool precise) {
+    checkConv(features, weights, topo, transposed, "maskedIGemmSparseConvBackward");
+    int64_t const outRows = transposed ? topo.featureTotalVoxels : topo.outputTotalVoxels;
     TORCH_CHECK(gradOutput.dim() == 2 && gradOutput.size(0) == outRows &&
                     gradOutput.size(1) == weights.size(0),
-                "maskedIGemmConvBackward: grad_output must be [N_out, C_out]");
+                "maskedIGemmSparseConvBackward: grad_output must be [N_out, C_out]");
     TORCH_CHECK(gradOutput.device() == features.device(),
-                "maskedIGemmConvBackward: grad_output must be on the features' device");
+                "maskedIGemmSparseConvBackward: grad_output must be on the features' device");
     c10::cuda::CUDAGuard guard(features.device());
     auto const st = features.scalar_type();
     features      = features.contiguous();
@@ -2414,7 +2431,7 @@ maskedIGemmConvBackward(torch::Tensor gradOutput,
         // The input gradient runs the transposed weights over the other direction's map.
         RowMap const map = transposed ? RowMap{topo, false} : inputRows(topo);
         gradFeatures     = torch::empty({features.size(0), Ci}, features.options());
-        if (map.topo.totalVoxels > 0)
+        if (map.topo.outputTotalVoxels > 0)
             runConv<true>(
                 gradOutput, weightRows(weights), {}, gradFeatures, map, Co, Ci, precise, stream);
     }

@@ -582,7 +582,7 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         ctx.transposed = transposed
         ctx.precise = precise
         ctx.has_bias = bias is not None
-        return _fvdb_cpp.migemm_conv(features, weights, bias, topo, transposed, precise)
+        return _fvdb_cpp.masked_igemm_conv(features, weights, bias, topo, transposed, precise)
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
@@ -591,10 +591,10 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
         grad_output = grad_output.contiguous()
         grad_feat, grad_w = None, None
         if need_feat or need_w:
-            grad_feat, grad_w = _fvdb_cpp.migemm_conv_backward(
+            grad_feat, grad_w = _fvdb_cpp.masked_igemm_conv_backward(
                 grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed, ctx.precise
             )
-        grad_b = _fvdb_cpp.migemm_column_sum(grad_output) if ctx.has_bias and need_b else None
+        grad_b = _fvdb_cpp.masked_igemm_column_sum(grad_output) if ctx.has_bias and need_b else None
         return grad_feat, grad_w, grad_b, None, None, None
 
 
@@ -669,7 +669,7 @@ def _pad_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
 
 def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
     """True when the masked_igemm kernels cover this call."""
-    return _fvdb_cpp.migemm_supports(in_channels, out_channels, dtype, device)
+    return _fvdb_cpp.masked_igemm_supports(in_channels, out_channels, dtype, device)
 
 
 def _warn_masked_igemm_fallback(reason: str, hint: str, stacklevel: int) -> None:
@@ -1551,7 +1551,7 @@ class ConvolutionPlan:
             if source_grid.device.type == "cuda":
                 # The topology always maps the forward direction, coarse output rows to fine input rows.
                 fine, coarse = (target_grid, source_grid) if transposed else (source_grid, target_grid)
-                topology = _fvdb_cpp.migemm_build_topology(
+                topology = _fvdb_cpp.masked_igemm_build_topology(
                     _get_grid_data(fine), _get_grid_data(coarse), kernel_size, stride
                 )
                 return _MaskedIGemmBackend(topology=topology)

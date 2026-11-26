@@ -49,57 +49,59 @@ struct MaskedIGemmTopology {
     /// int32 [K, ceil(N / 256)], first pair of each tap at or after each 256-row boundary
     torch::Tensor pairBlockOffsets;
 
-    int64_t totalVoxels;       ///< Output rows (rows of neighborMap)
-    int64_t inputVoxels;       ///< Input rows (the values neighborMap holds)
-    int64_t kernelVolume;      ///< k0 * k1 * k2
-    nanovdb::Coord kernelSize; ///< [k0, k1, k2]
+    int64_t outputTotalVoxels;  ///< Output rows (rows of neighborMap)
+    int64_t featureTotalVoxels; ///< Input rows (the values neighborMap holds)
+    int64_t kernelVolume;       ///< k0 * k1 * k2
+    nanovdb::Coord kernelSize;  ///< [k0, k1, k2]
 
     /// Map from input rows to the output rows reading them per tap, with its row order and
     /// masks; no pair lists. Null for submanifold maps.
     std::shared_ptr<MaskedIGemmTopology const> reverse;
     // Kernels of more than 32 taps keep a compact map: neighborMap is int32 [P], each row's present
     // neighbors in tap order, and rowMasks is int32 [N, W] with W = ceil(K / 32) mask words.
-    torch::Tensor neighborOffsets; ///< int32 [N + 1], start of each row in neighborMap (wide only)
+    torch::Tensor
+        neighborOffsets; ///< int32 [N + 1], start of each row in neighborMap (large kernels only)
     /// int32 [N, W, 2], (mask, base) per 32-tap word: tap t's neighbor is
-    /// neighborMap[base + popc(mask & below(t % 32))] when its bit is set (wide only)
+    /// neighborMap[base + popc(mask & below(t % 32))] when its bit is set (large kernels only)
     torch::Tensor rowWords;
 };
 
 /// Build the map from @p outputGrid's voxels to @p featureGrid's voxels for convolution with
 /// @p kernelSize and @p stride (fine = stride * coarse + tap - paddingBefore).
-MaskedIGemmTopology maskedIGemmTopology(GridBatchData const &featureGrid,
-                                        GridBatchData const &outputGrid,
-                                        nanovdb::Coord kernelSize,
-                                        nanovdb::Coord stride);
+MaskedIGemmTopology maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
+                                                  GridBatchData const &outputGrid,
+                                                  nanovdb::Coord kernelSize,
+                                                  nanovdb::Coord stride);
 
 /// Forward: weights are a (C_out, C_in, k0, k1, k2) tensor, bias an optional [C_out] tensor
 /// added in the epilogue. Weights and bias must match the features' device and dtype.
 /// @p transposed runs the transposed convolution, from the topology's output rows to its
 /// input rows. @p precise computes float32 as 3xTF32 (near-float32 accuracy) instead of TF32;
 /// other dtypes ignore it. Returns [N_out, C_out].
-torch::Tensor maskedIGemmConv(torch::Tensor features,
+torch::Tensor maskedIGemmSparseConv(torch::Tensor features,
+                                    torch::Tensor weights,
+                                    std::optional<torch::Tensor> bias,
+                                    MaskedIGemmTopology const &topo,
+                                    bool transposed = false,
+                                    bool precise    = false);
+
+/// Backward of maskedIGemmSparseConv with the same @p transposed and @p precise: returns
+/// (grad_features [N, C_in], grad_weights shaped like weights). Each is an undefined tensor when
+/// its need flag is false.
+std::tuple<torch::Tensor, torch::Tensor>
+maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
+                              torch::Tensor features,
                               torch::Tensor weights,
-                              std::optional<torch::Tensor> bias,
                               MaskedIGemmTopology const &topo,
+                              bool needFeatures,
+                              bool needWeights,
                               bool transposed = false,
                               bool precise    = false);
 
-/// Backward of maskedIGemmConv with the same @p transposed and @p precise: returns (grad_features
-/// [N, C_in], grad_weights shaped like weights). Each is an undefined tensor when its need flag is
-/// false.
-std::tuple<torch::Tensor, torch::Tensor> maskedIGemmConvBackward(torch::Tensor gradOutput,
-                                                                 torch::Tensor features,
-                                                                 torch::Tensor weights,
-                                                                 MaskedIGemmTopology const &topo,
-                                                                 bool needFeatures,
-                                                                 bool needWeights,
-                                                                 bool transposed = false,
-                                                                 bool precise    = false);
-
 /// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32.
-torch::Tensor columnSum(torch::Tensor x);
+torch::Tensor maskedIGemmColumnSum(torch::Tensor x);
 
-/// True when maskedIGemmConv can run these channel counts and dtype on @p device.
+/// True when maskedIGemmSparseConv can run these channel counts and dtype on @p device.
 bool maskedIGemmSupports(int64_t inChannels,
                          int64_t outChannels,
                          torch::ScalarType dtype,

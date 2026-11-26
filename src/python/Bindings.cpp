@@ -684,8 +684,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def_readonly("pair_in", &MIGTopo::pairIn)
         .def_readonly("pair_out", &MIGTopo::pairOut)
         .def_readonly("pair_offsets", &MIGTopo::pairOffsets)
-        .def_readonly("total_voxels", &MIGTopo::totalVoxels)
-        .def_readonly("input_voxels", &MIGTopo::inputVoxels)
+        .def_readonly("output_total_voxels", &MIGTopo::outputTotalVoxels)
+        .def_readonly("feature_total_voxels", &MIGTopo::featureTotalVoxels)
         .def_property_readonly("reverse_map",
                                [](const MIGTopo &t) -> std::optional<torch::Tensor> {
                                    if (!t.reverse)
@@ -710,12 +710,12 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         });
 
     m.def(
-        "migemm_build_topology",
+        "masked_igemm_build_topology",
         [](const fvdb::GridBatchData &featureGrid,
            const fvdb::GridBatchData &outputGrid,
            const torch::Tensor &kernelSize,
            const torch::Tensor &stride) -> MIGTopo {
-            return fvdb::detail::ops::maskedIGemmTopology(
+            return fvdb::detail::ops::maskedIGemmSparseConvTopology(
                 featureGrid, outputGrid, pyToCoord(kernelSize), pyToCoord(stride));
         },
         "Build the masked implicit GEMM topology from output_grid's voxels to feature_grid's.",
@@ -725,14 +725,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("stride"));
 
     m.def(
-        "migemm_conv",
+        "masked_igemm_conv",
         [](torch::Tensor features,
            torch::Tensor weights,
            std::optional<torch::Tensor> bias,
            const MIGTopo &topo,
            bool transposed,
            bool precise) -> torch::Tensor {
-            return fvdb::detail::ops::maskedIGemmConv(
+            return fvdb::detail::ops::maskedIGemmSparseConv(
                 features, weights, bias, topo, transposed, precise);
         },
         "Masked implicit GEMM sparse convolution with an optional fused bias. transposed runs "
@@ -745,7 +745,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("precise")    = false);
 
     m.def(
-        "migemm_conv_backward",
+        "masked_igemm_conv_backward",
         [](torch::Tensor grad_output,
            torch::Tensor features,
            torch::Tensor weights,
@@ -754,18 +754,18 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
            bool need_weights,
            bool transposed,
            bool precise) -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
-            auto [gf, gw] = fvdb::detail::ops::maskedIGemmConvBackward(grad_output,
-                                                                       features,
-                                                                       weights,
-                                                                       topo,
-                                                                       need_features,
-                                                                       need_weights,
-                                                                       transposed,
-                                                                       precise);
+            auto [gf, gw] = fvdb::detail::ops::maskedIGemmSparseConvBackward(grad_output,
+                                                                             features,
+                                                                             weights,
+                                                                             topo,
+                                                                             need_features,
+                                                                             need_weights,
+                                                                             transposed,
+                                                                             precise);
             return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
                     gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
         },
-        "Backward of migemm_conv: (grad_features, grad_weights), None where not needed.",
+        "Backward of masked_igemm_conv: (grad_features, grad_weights), None where not needed.",
         py::arg("grad_output"),
         py::arg("features"),
         py::arg("weights"),
@@ -775,14 +775,14 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("transposed")    = false,
         py::arg("precise")       = false);
 
-    m.def("migemm_column_sum",
-          &fvdb::detail::ops::columnSum,
+    m.def("masked_igemm_column_sum",
+          &fvdb::detail::ops::maskedIGemmColumnSum,
           "Sum over the rows of a 2-D CUDA tensor, accumulated in float32 (the bias gradient).",
           py::arg("x"));
 
-    m.def("migemm_supports",
+    m.def("masked_igemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
-          "True when migemm_conv supports these channel counts and dtype on the device.",
+          "True when masked_igemm_conv supports these channel counts and dtype on the device.",
           py::arg("in_channels"),
           py::arg("out_channels"),
           py::arg("dtype"),
