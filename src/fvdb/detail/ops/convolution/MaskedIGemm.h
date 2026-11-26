@@ -107,10 +107,6 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                               bool transposed = false,
                               bool precise    = false);
 
-/// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32 for
-/// float16, bfloat16 and float32 inputs (other dtypes use torch's sum).
-torch::Tensor maskedIGemmColumnSum(torch::Tensor x);
-
 /// Choices that are otherwise made from the grid size and the device, forced so tests can reach
 /// every code path on any GPU. Unset fields leave the heuristics in charge; set counts must be at
 /// least 1. For tests only.

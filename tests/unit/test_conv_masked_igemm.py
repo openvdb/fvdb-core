@@ -696,15 +696,18 @@ class TestMaskedIGemm(unittest.TestCase):
             ("float", 100000, 64, torch.float32),
             ("small", 100, 64, torch.float16),
             ("wide", 1000, 4096, torch.float16),
+            ("empty", 0, 64, torch.float16),
         ]
     )
-    def test_column_sum(self, _, rows, cols, dtype):
+    def test_bias_gradient(self, _, rows, cols, dtype):
         x = torch.randn(rows, cols, device="cuda").to(dtype)
-        y = _fvdb_cpp.masked_igemm_column_sum(x)
+        with _tf32(True):  # float32 must not take the TF32 matmul path
+            y = convolution_plan._bias_gradient(x)
         ref = x.double().sum(0)
         self.assertEqual(y.dtype, dtype)
         self.assertLess(
-            ((y.double() - ref).abs().max() / ref.abs().max()).item(), 1e-2 if dtype != torch.float32 else 1e-5
+            ((y.double() - ref).abs().max() / ref.abs().max().clamp_min(1e-12)).item(),
+            1e-2 if dtype != torch.float32 else 1e-5,
         )
 
     def test_supports(self):

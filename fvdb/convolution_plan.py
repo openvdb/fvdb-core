@@ -578,6 +578,18 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
         return grad_feat, grad_w, None, None, None, None, None
 
 
+def _bias_gradient(grad_output: torch.Tensor) -> torch.Tensor:
+    """Sum of grad_output over its rows, the bias gradient.
+
+    16-bit gradients sum as a cuBLAS matrix-vector product with a ones vector, which accumulates in
+    float32 and runs up to 3x faster than ``sum(0)`` on tall gradients. float32 uses ``sum(0)``: a
+    float32 product would follow the TF32 setting.
+    """
+    if grad_output.dtype in (torch.float16, torch.bfloat16):
+        return (grad_output.new_ones(1, grad_output.shape[0]) @ grad_output).view(-1)
+    return grad_output.sum(0)
+
+
 class _MaskedIGemmConvFn(torch.autograd.Function):
     """Autograd wrapper for the masked implicit GEMM convolution with optional fused bias."""
 
@@ -608,7 +620,7 @@ class _MaskedIGemmConvFn(torch.autograd.Function):
             grad_feat, grad_w = _fvdb_cpp.masked_igemm_conv_backward(
                 grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed, ctx.precise
             )
-        grad_b = _fvdb_cpp.masked_igemm_column_sum(grad_output) if ctx.has_bias and need_b else None
+        grad_b = _bias_gradient(grad_output) if ctx.has_bias and need_b else None
         return grad_feat, grad_w, grad_b, None, None, None
 
 

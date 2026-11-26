@@ -775,11 +775,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("transposed")    = false,
         py::arg("precise")       = false);
 
-    m.def("masked_igemm_column_sum",
-          &fvdb::detail::ops::maskedIGemmColumnSum,
-          "Sum over the rows of a 2-D CUDA tensor, accumulated in float32 (the bias gradient).",
-          py::arg("x"));
-
     m.def("masked_igemm_supports",
           &fvdb::detail::ops::maskedIGemmSupports,
           "True when masked_igemm_conv supports these channel counts and dtype on the device.",
