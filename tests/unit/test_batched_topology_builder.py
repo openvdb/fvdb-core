@@ -267,6 +267,30 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "far-flung refine x2")
         self._check_against_expected(coarsened, [_expected_coarsen_ijk(c, 2) for c in coords], "far-flung coarsen x2")
 
+    def test_failed_run_releases_builder_scratch(self):
+        # One voxel pair per source upper node, 4096 apart in x, so refining needs 128 speculative
+        # root tiles and about 2 GiB of densified lower masks. Cap the allocator well below that:
+        # the run fails after allocating its roots and upper masks, and must not leave them held
+        # by the cached builder. The next run must still work.
+        coords = [
+            torch.tensor([[k * 2048 + 10, 10, 10] for k in range(128)], dtype=torch.int32),
+        ]
+        grid = _build(coords, "cuda")
+        device = torch.device("cuda", torch.cuda.current_device())
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated(device)
+        total = torch.cuda.get_device_properties(device).total_memory
+        torch.cuda.set_per_process_memory_fraction((baseline + 512 * 1024 * 1024) / total, device)
+        try:
+            with self.assertRaises(RuntimeError):
+                grid.refined_grid(2)
+        finally:
+            torch.cuda.set_per_process_memory_fraction(1.0, device)
+        torch.cuda.synchronize()
+        self.assertLessEqual(torch.cuda.memory_allocated(device), baseline)
+        refined = grid.refined_grid(2)
+        self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "refine after OOM")
+
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
         # multi-grid handle produced by the batched builder.

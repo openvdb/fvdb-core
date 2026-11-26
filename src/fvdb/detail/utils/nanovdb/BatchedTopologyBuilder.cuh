@@ -399,19 +399,20 @@ copyGridHeaders(PassTables t) {
 // ---------------------------------------------------------------------------------------------
 
 /// A cached builder and the mutex a builder run holds while it uses it.
+/// `builder` is created by the first run that finds it null, and reset by a run that throws.
 struct CachedTopologyBuilder {
     std::mutex mutex;
     std::unique_ptr<TopologyBuilderT> builder;
 };
 
-/// The process's builder for `stream` on `device`, created on first use under that device. The key
-/// needs the device: a null handle names a different default stream on every device, and a
-/// builder's event and scratch belong to the device it was created on. Threads share the entry and
-/// take its mutex for each builder run. Builders are never destroyed, so none is torn down after
-/// CUDA shuts down and the pinned host staging is allocated once rather than per pass. Each
-/// (device, stream) a pass has run on keeps its builder's pinned staging and small per-grid tables
-/// for the life of the process; the densified masks and other per-run scratch are released at the
-/// end of every run.
+/// The process's cache entry for `stream` on `device`. The key needs the device: a null handle
+/// names a different default stream on every device, and a builder's event and scratch belong to
+/// the device it was created on. Threads share the entry and take its mutex for each builder run.
+/// Entries are never destroyed, so no builder is torn down after CUDA shuts down and the pinned
+/// host staging is allocated once rather than per pass. Each (device, stream) a pass has run on
+/// keeps its builder's pinned staging and small per-grid tables for the life of the process; the
+/// densified masks and other per-run scratch are released at the end of every run, and a run that
+/// throws drops its builder entirely (see buildChunk).
 inline CachedTopologyBuilder &
 cachedTopologyBuilder(const torch::Device &device, cudaStream_t stream) {
     TORCH_CHECK(device.is_cuda() && device.has_index(),
@@ -423,13 +424,28 @@ cachedTopologyBuilder(const torch::Device &device, cudaStream_t stream) {
     std::lock_guard<std::mutex> lock(*mutex);
     auto &entry = (*cached)[Key{device.index(), stream}];
     if (!entry) {
-        c10::cuda::CUDAGuard deviceGuard(device);
-        auto created     = std::make_unique<CachedTopologyBuilder>();
-        created->builder = std::make_unique<TopologyBuilderT>(stream);
-        entry            = std::move(created);
+        entry = std::make_unique<CachedTopologyBuilder>();
     }
     return *entry;
 }
+
+/// Drops a cached builder when the run using it throws. A run that fails after allocating, e.g.
+/// an out-of-memory error from getBuffer, skips processLowerNodes, which releases the densified
+/// masks, so the builder would otherwise hold them for the life of the process. The stream is
+/// synchronized first so that the pinned staging is not freed under an in-flight copy; its status
+/// is ignored, since the run is already failing.
+struct DropBuilderOnFailure {
+    CachedTopologyBuilder &cached;
+    cudaStream_t stream;
+    bool succeeded = false;
+
+    ~DropBuilderOnFailure() {
+        if (!succeeded) {
+            (void)cudaStreamSynchronize(stream);
+            cached.builder.reset();
+        }
+    }
+};
 
 /// FVDB_TOPOLOGY_MAX_TILES: the most speculative root tiles one builder run takes (default 64,
 /// about 1 GiB of densified masks). A grid needing more runs alone. Unset or empty uses 64; any
@@ -607,8 +623,10 @@ processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPass
                 tiles, nanovdb::CoordBBox(refineCoord(b.min()), refineCoord(b.max()).offsetBy(1)));
             break;
         case TopologyPassSpec::Op::Coarsen:
-            topo::insertProcessedTile<RootT>(
-                tiles, coarsenCoord((b.min() >> UpperT::TOTAL) << UpperT::TOTAL));
+            // The coarsened upper node spans 2048 voxels from coarsenCoord(origin), inside one
+            // root tile, so any of its coordinates names that tile. Using b.min() rather than the
+            // tile origin keeps coarsenCoord's -n + 1 from overflowing in the lowest root tile.
+            topo::insertProcessedTile<RootT>(tiles, coarsenCoord(b.min()));
             break;
         case TopologyPassSpec::Op::BoxDilate:
             topo::insertProcessedTiles<RootT>(
@@ -685,11 +703,16 @@ buildChunk(const BatchedTopologySource &src,
                 " tile maps do not fit a source of ",
                 src.grids.size(),
                 " grids");
-    namespace topo                = nanovdb::tools::cuda::topology::detail;
-    using Op                      = TopologyPassSpec::Op;
-    const int32_t n               = last - first;
+    namespace topo  = nanovdb::tools::cuda::topology::detail;
+    using Op        = TopologyPassSpec::Op;
+    const int32_t n = last - first;
+    c10::cuda::CUDAGuard deviceGuard(src.device);
     CachedTopologyBuilder &cached = cachedTopologyBuilder(src.device, stream);
     std::lock_guard<std::mutex> builderLock(cached.mutex);
+    if (!cached.builder) {
+        cached.builder = std::make_unique<TopologyBuilderT>(stream);
+    }
+    DropBuilderOnFailure dropOnFailure{cached, stream};
     TopologyBuilderT &builder = *cached.builder;
 
     // 1. Speculative roots.
@@ -772,6 +795,7 @@ buildChunk(const BatchedTopologySource &src,
     builder.processBBox(stream);
     builder.postProcessGridTree(stream);
     result.chunks.push_back(std::move(buffer));
+    dropOnFailure.succeeded = true;
 }
 
 /// Runs one batched topology pass over all grids of `src`: one host wait for the source roots,
