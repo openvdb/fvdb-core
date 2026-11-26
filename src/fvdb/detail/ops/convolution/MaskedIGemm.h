@@ -8,9 +8,11 @@
 // accumulates every tap any of its rows uses in registers. Forward and input
 // gradient need no atomics, except that split-K (several CTAs per tile, chosen
 // to fill the last wave) adds float32 partials atomically. Rows are grouped by
-// the Gray rank of their tap
-// mask so tiles skip the taps none of their rows use. The weight gradient
-// reduces over per-tap (input, output) pair lists.
+// the Gray rank of their tap mask so tiles skip the taps none of their rows
+// use. The weight gradient reduces over per-tap (input, output) pair lists,
+// split across CTAs with the same atomics. Under
+// torch.use_deterministic_algorithms(True) nothing splits, so every result is
+// bitwise repeatable.
 //
 // Supports any stride and any kernel size whose per-tap state fits the device's
 // shared memory (several thousand taps), and the transposed direction of each, on

@@ -30,6 +30,7 @@
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 
+#include <ATen/Context.h>
 #include <c10/cuda/CUDAException.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
@@ -59,6 +60,24 @@ namespace {
 
 // Set only by tests (setMaskedIGemmTestOverrides); unset fields leave the heuristics in charge.
 constinit MaskedIGemmTestOverrides gTestOverrides;
+
+// torch.use_deterministic_algorithms(True). Split kernels normally add float partials into one
+// buffer with atomics, in run-dependent order. In deterministic mode each split gets its own slice
+// of the buffer, which exactly one CTA writes per element, and the slices are summed in a fixed
+// order afterwards. The column sum, whose blocks always share outputs, uses torch's reduction.
+bool
+deterministicAlgorithms() {
+    return at::globalContext().deterministicAlgorithms();
+}
+
+// Bound on the per-split scratch in deterministic mode; splits beyond it are dropped.
+constexpr int64_t kDeterministicScratchBytes = int64_t(256) << 20;
+
+int64_t
+deterministicSplits(int64_t splits, int64_t sliceElements) {
+    int64_t const fit = kDeterministicScratchBytes / std::max<int64_t>(1, sliceElements * 4);
+    return std::clamp<int64_t>(fit, 1, splits);
+}
 
 // Element types the tensor-core kernels run.
 template <typename T>
@@ -431,6 +450,7 @@ maskedIGemmKernel(T const *__restrict__ A,
                   int Nc,
                   int K,
                   int splits,
+                  int64_t splitStride,
                   TapToWeightRow tapToRow) {
     constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Elem<T>::BK, STAGES = Cfg::STAGES;
     constexpr int CHUNK_ELEMS = Elem<T>::CHUNK, MMA_K = Elem<T>::MMA_K;
@@ -761,8 +781,9 @@ maskedIGemmKernel(T const *__restrict__ A,
                 if (col + nt * 8 >= Nc)
                     continue;
                 if (splits > 1) {
-                    atomicAdd(outAcc + base + nt * 8, acc[mt][nt][2 * h]);
-                    atomicAdd(outAcc + base + nt * 8 + 1, acc[mt][nt][2 * h + 1]);
+                    float *const dst = outAcc + blockIdx.y * splitStride + base + nt * 8;
+                    atomicAdd(dst, acc[mt][nt][2 * h]);
+                    atomicAdd(dst + 1, acc[mt][nt][2 * h + 1]);
                 } else {
                     float b0 = 0.f, b1 = 0.f;
                     if (bias) {
@@ -824,6 +845,7 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                        int Ci,
                        int Co,
                        int splits,
+                       int64_t splitStride,
                        TapToWeightRow tapToRow) {
     constexpr int BM = Cfg::BM, BN = Cfg::BN, BK = Cfg::BK, STAGES = Cfg::STAGES;
     constexpr int CHUNK_ELEMS = Elem<T>::CHUNK, MMA_K = Elem<T>::MMA_K;
@@ -1049,8 +1071,9 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
                     continue;
                 int64_t const idx = tapBase + int64_t(m) * Co + n;
                 if (splits > 1) {
-                    atomicAdd(dWAcc + idx, acc[mt][nt][2 * h]);
-                    atomicAdd(dWAcc + idx + 1, acc[mt][nt][2 * h + 1]);
+                    float *const dst = dWAcc + blockIdx.z * splitStride + idx;
+                    atomicAdd(dst, acc[mt][nt][2 * h]);
+                    atomicAdd(dst + 1, acc[mt][nt][2 * h + 1]);
                 } else {
                     storePair<T>(dWOut + idx, acc[mt][nt][2 * h], acc[mt][nt][2 * h + 1]);
                 }
@@ -1412,9 +1435,12 @@ launchConv(torch::Tensor const &A,
     }
     if (gTestOverrides.splits)
         splits = std::clamp(*gTestOverrides.splits, 1, maxSplits);
+    bool const perSplit = splits > 1 && deterministicAlgorithms();
+    if (perSplit)
+        splits = int(deterministicSplits(splits, int64_t(N) * Nc));
     torch::Tensor acc;
     if (splits > 1)
-        acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
+        acc = torch::zeros({perSplit ? splits : 1, N, Nc}, out.options().dtype(torch::kFloat32));
 
     TapToWeightRow const ttr{.k1   = topo.kernelSize[1],
                              .k2   = topo.kernelSize[2],
@@ -1435,10 +1461,13 @@ launchConv(torch::Tensor const &A,
         Nc,
         K,
         splits,
+        perSplit ? int64_t(N) * Nc : 0,
         ttr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    if (splits > 1)
-        out.copy_(bias.defined() ? acc + bias : acc);
+    if (splits > 1) {
+        auto const total = perSplit ? acc.sum(0) : acc.select(0, 0);
+        out.copy_(bias.defined() ? total + bias : total);
+    }
 }
 
 // Default tile shape by output width.
@@ -1537,9 +1566,14 @@ launchWgrad(torch::Tensor const &X,
         splits   = std::clamp<int64_t>(*gTestOverrides.weightRowSplits, 1, rowBlocks);
     }
 
+    splits              = std::min<int64_t>(splits, kMaxGridZ);
+    bool const perSplit = splits > 1 && deterministicAlgorithms();
+    if (perSplit)
+        splits = deterministicSplits(splits, int64_t(K) * Ci * Co);
+
     torch::Tensor rows, acc;
     if (splits > 1)
-        acc = torch::zeros({K, Ci, Co}, X.options().dtype(torch::kFloat32));
+        acc = torch::zeros({perSplit ? splits : 1, K, Ci, Co}, X.options().dtype(torch::kFloat32));
     else
         rows = torch::empty({K, Ci, Co}, X.options());
 
@@ -1547,7 +1581,6 @@ launchWgrad(torch::Tensor const &X,
                              .k2   = topo.kernelSize[2],
                              .k0   = topo.kernelSize[0],
                              .flip = false};
-    splits = std::min<int64_t>(splits, kMaxGridZ);
     dim3 const grid(tiles, K, unsigned(splits));
     kernel<<<grid, Cfg::THREADS, smem, stream>>>(
         reinterpret_cast<T const *>(X.data_ptr()),
@@ -1562,9 +1595,12 @@ launchWgrad(torch::Tensor const &X,
         Ci,
         Co,
         int(splits),
+        perSplit ? int64_t(K) * Ci * Co : 0,
         ttr);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
-    return splits > 1 ? acc.to(X.scalar_type()) : rows;
+    if (splits == 1)
+        return rows;
+    return (perSplit ? acc.sum(0) : acc.select(0, 0)).to(X.scalar_type());
 }
 
 int
@@ -2227,8 +2263,9 @@ maskedIGemmColumnSum(torch::Tensor x) {
     bool const fast = (x.scalar_type() == torch::kFloat16 || x.scalar_type() == torch::kBFloat16 ||
                        x.scalar_type() == torch::kFloat32) &&
                       C > 0 && C % V == 0 && C / V <= kColumnSumThreads;
-    // Below ~1M elements the three launches here cost more than torch's single reduction.
-    if (!fast || N * C < (int64_t(1) << 20))
+    // Below ~1M elements the three launches here cost more than torch's single reduction. The
+    // kernel combines its blocks with atomics, so deterministic mode uses torch's reduction too.
+    if (!fast || N * C < (int64_t(1) << 20) || deterministicAlgorithms())
         return x.sum(0);
     c10::cuda::CUDAGuard guard(x.device());
     x = x.contiguous();

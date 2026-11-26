@@ -202,6 +202,46 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertTrue(w.grad.is_contiguous())
         self.assertEqual(w.grad.view(-1).numel(), w.numel())
 
+    @parameterized.expand(
+        [
+            # Many channels on a small grid: the forward and input gradient split K.
+            ("split_k", 48, 256, 1),
+            ("split_k_strided", 48, 256, 2),
+            # A larger grid at C = 64: the weight and bias gradients split.
+            ("weight_splits", 96, 64, 1),
+            ("weight_splits_strided", 128, 64, 2),
+        ]
+    )
+    def test_deterministic_algorithms(self, _, res, channels, stride):
+        # Split kernels add float partials with atomics in run-dependent order (each case above
+        # differs run to run without the flag). torch.use_deterministic_algorithms(True) must
+        # turn that off so that every result repeats bitwise.
+        torch.manual_seed(0)
+        grid = _shell_grid(res)
+        target = grid if stride == 1 else grid.conv_grid(3, stride)
+        plan = ConvolutionPlan.from_grid_batch(3, stride, grid, target, expert_config=CONFIG)
+        x = torch.randn(grid.total_voxels, channels, device="cuda")
+        w = torch.randn(channels, channels, 3, 3, 3, device="cuda") / (channels * 27) ** 0.5
+        b = torch.randn(channels, device="cuda")
+        gy = torch.randn(target.total_voxels, channels, device="cuda")
+
+        def run():
+            xx, ww, bb = (t.clone().requires_grad_(True) for t in (x, w, b))
+            y = plan.execute(xx, ww, bb)
+            y.backward(gy)
+            return y.detach(), xx.grad, ww.grad, bb.grad
+
+        previous = torch.are_deterministic_algorithms_enabled()
+        torch.use_deterministic_algorithms(True)
+        try:
+            runs = [run() for _ in range(5)]
+        finally:
+            torch.use_deterministic_algorithms(previous)
+        self.assertNotIn("gather_scatter", plan._backend.fallback)
+        for name, i in (("forward", 0), ("input gradient", 1), ("weight gradient", 2), ("bias gradient", 3)):
+            for r in runs[1:]:
+                self.assertTrue(torch.equal(r[i], runs[0][i]), name)
+
     def test_misaligned_views_run(self):
         # cp.async needs 16-byte-aligned operands; a contiguous view that starts mid-buffer is
         # copied into fresh storage instead of faulting.
