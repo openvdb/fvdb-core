@@ -1,8 +1,8 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// Batched topology passes: builds ALL grids of a batch in one pass of NanoVDB's batch-capable
-// tools::cuda::TopologyBuilder.
+// Batched topology passes: builds all grids of a batch per pass with NanoVDB's batch-capable
+// tools::cuda::TopologyBuilder, in as few builder runs as the root-tile cap below allows.
 //
 // NanoVDB's morphology builders (RefineGrid, CoarsenGrid, DilateGrid) build one grid per call, with
 // several stream synchronizations each, and fvdb would then lay the single-grid results end to end.
@@ -12,10 +12,12 @@
 //   roots   one kernel gathers every source grid's upper-node bounding boxes, read back with one
 //           host wait; the host derives each output grid's speculative root tiles from them the way
 //           NanoVDB's single-grid consumers do;
-//   masks   one launch over all source leaves fills the builder's densified child masks, through
-//           NanoVDB's Refine/Coarsen internal-node functors or fvdb's BoxDilate marking;
-//   build   the builder counts nodes (its one host wait), allocates one buffer, and writes every
-//           node; a second launch over all source leaves writes the leaf value masks.
+//   masks   per builder run, one launch over the run's source leaves fills the builder's densified
+//           child masks, through NanoVDB's Refine/Coarsen internal-node functors or fvdb's
+//           BoxDilate marking;
+//   build   the builder waits for its node counts (and, from a pass's second run on, for its pinned
+//           staging), allocates the run's buffer, and writes every node; a second launch over the
+//           run's source leaves writes the leaf value masks.
 //
 // The builder densifies 32^3 lower-node masks (about 16.5 MiB of scratch) per speculative root
 // tile, so a pass splits the batch into chunks of consecutive grids holding at most
@@ -52,9 +54,9 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
-#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -71,6 +73,9 @@ using RootT  = nanovdb::NanoRoot<BuildT>;
 using UpperT = nanovdb::NanoUpper<BuildT>;
 using LowerT = nanovdb::NanoLower<BuildT>;
 using LeafT  = nanovdb::NanoLeaf<BuildT>;
+
+using LeafMaskT                   = nanovdb::Mask<LeafT::LOG2DIM>;
+constexpr uint32_t kLeafMaskWords = LeafMaskT::WORD_COUNT;
 
 using ProcessedTileMap = nanovdb::tools::cuda::topology::detail::ProcessedTileMap<RootT>;
 using TopologyBuilderT = nanovdb::tools::cuda::TopologyBuilder<BuildT, BuilderResource>;
@@ -180,7 +185,8 @@ boxDilatedContribution(const uint64_t *src,
                        const nanovdb::Coord &boxLo,
                        const nanovdb::Coord &boxHi,
                        const nanovdb::Coord &db,
-                       uint64_t out[8]) {
+                       uint64_t out[kLeafMaskWords]) {
+    static_assert(kLeafMaskWords == 8, "the shifts below assume an 8^3 leaf of eight 64-bit words");
     // z-stage, then y-stage (per word), then x-stage (word permutation).
     uint64_t wz[8], wy[8];
     for (int i = 0; i < 8; ++i) {
@@ -323,13 +329,13 @@ fillInternalMasks(PassTables t,
             morph::CoarsenInternalNodesFunctor<BuildT>()(local, t.src[g], t.root[g], upper, lower);
         } else {
             const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
-            uint64_t contribution[8];
+            uint64_t contribution[kLeafMaskWords];
             if (!boxDilatedContribution(
                     srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
                 continue;
             }
             const RootT *root           = t.root[g];
-            const nanovdb::Coord origin = srcLeaf.origin() + (db << 3);
+            const nanovdb::Coord origin = srcLeaf.origin() + (db << LeafT::TOTAL);
             const uint32_t upperChild   = UpperT::CoordToOffset(origin);
             const int64_t tileIndex     = root->probeTile(origin) - root->tile(0);
             upper[tileIndex].setOnAtomic(upperChild);
@@ -357,14 +363,15 @@ fillLeafMasks(PassTables t, int64_t numItems, nanovdb::Coord boxLo, nanovdb::Coo
             morph::CoarsenLeafMasksFunctor<BuildT>()(local, t.src[g], t.dst[g]);
         } else {
             const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
-            uint64_t contribution[8];
+            uint64_t contribution[kLeafMaskWords];
             if (!boxDilatedContribution(
                     srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
                 continue;
             }
-            const LeafT *dstLeaf = t.dst[g]->tree().root().probeLeaf(srcLeaf.origin() + (db << 3));
-            auto &dstMask        = const_cast<nanovdb::Mask<3> &>(dstLeaf->valueMask());
-            for (int w = 0; w < 8; ++w) {
+            const LeafT *dstLeaf =
+                t.dst[g]->tree().root().probeLeaf(srcLeaf.origin() + (db << LeafT::TOTAL));
+            auto &dstMask = const_cast<LeafMaskT &>(dstLeaf->valueMask());
+            for (uint32_t w = 0; w < kLeafMaskWords; ++w) {
                 if (contribution[w]) {
                     nanovdb::util::atomicOr(&dstMask.words()[w], contribution[w]);
                 }
@@ -425,12 +432,22 @@ cachedTopologyBuilder(const torch::Device &device, cudaStream_t stream) {
 }
 
 /// FVDB_TOPOLOGY_MAX_TILES: the most speculative root tiles one builder run takes (default 64,
-/// about 1 GiB of densified masks). A grid needing more runs alone.
+/// about 1 GiB of densified masks). A grid needing more runs alone. Unset or empty uses 64; any
+/// other value that is not a positive integer in range throws.
 inline int64_t
 maxTilesPerChunk() {
     const char *env = std::getenv("FVDB_TOPOLOGY_MAX_TILES");
-    const int64_t n = env != nullptr ? std::atoll(env) : 0;
-    return n > 0 ? n : 64;
+    if (env == nullptr || *env == '\0') {
+        return 64;
+    }
+    char *end             = nullptr;
+    errno                 = 0;
+    const long long value = std::strtoll(env, &end, 10);
+    TORCH_CHECK(*end == '\0' && errno != ERANGE && value > 0,
+                "FVDB_TOPOLOGY_MAX_TILES must be a positive integer, got \"",
+                env,
+                "\"");
+    return int64_t(value);
 }
 
 /// Root tiles a grid with index bounding box `bbox` can occupy: a bound on its upper nodes.
@@ -441,7 +458,7 @@ rootTilesOverlapping(const nanovdb::CoordBBox &bbox) {
     }
     int64_t n = 1;
     for (int a = 0; a < 3; ++a) {
-        n *= int64_t(bbox.max()[a] >> 12) - int64_t(bbox.min()[a] >> 12) + 1;
+        n *= int64_t(bbox.max()[a] >> UpperT::TOTAL) - int64_t(bbox.min()[a] >> UpperT::TOTAL) + 1;
     }
     return n;
 }
@@ -466,7 +483,7 @@ template <typename T>
 inline int64_t
 tableEntry(T *ptr) {
     static_assert(sizeof(T *) == sizeof(int64_t));
-    return int64_t(reinterpret_cast<uintptr_t>(ptr));
+    return int64_t(reinterpret_cast<std::uintptr_t>(ptr));
 }
 
 inline BatchedTopologySource
@@ -505,9 +522,25 @@ sourceFromResult(const BatchedTopologyResult &result, const torch::Device &devic
     return src;
 }
 
+/// Throws unless `src` holds at least one grid and one leaf count and upper-node bound per grid.
+inline void
+checkTopologySource(const BatchedTopologySource &src) {
+    TORCH_CHECK(!src.grids.empty(), "batched topology pass requires at least one grid");
+    TORCH_CHECK(src.leafCounts.size() == src.grids.size() &&
+                    src.upperCapacity.size() == src.grids.size(),
+                "batched topology pass: source has ",
+                src.grids.size(),
+                " grids but ",
+                src.leafCounts.size(),
+                " leaf counts and ",
+                src.upperCapacity.size(),
+                " upper-node bounds");
+}
+
 /// Each source grid's upper-node bounding boxes, read back with one host wait.
 inline std::vector<std::vector<nanovdb::CoordBBox>>
 readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
+    checkTopologySource(src);
     const int32_t numGrids = int32_t(src.grids.size());
     std::vector<int64_t> upperStart(numGrids + 1, 0), gridTable(numGrids);
     for (int32_t g = 0; g < numGrids; ++g) {
@@ -574,7 +607,8 @@ processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPass
                 tiles, nanovdb::CoordBBox(refineCoord(b.min()), refineCoord(b.max()).offsetBy(1)));
             break;
         case TopologyPassSpec::Op::Coarsen:
-            topo::insertProcessedTile<RootT>(tiles, coarsenCoord((b.min() >> 12) << 12));
+            topo::insertProcessedTile<RootT>(
+                tiles, coarsenCoord((b.min() >> UpperT::TOTAL) << UpperT::TOTAL));
             break;
         case TopologyPassSpec::Op::BoxDilate:
             topo::insertProcessedTiles<RootT>(
@@ -639,6 +673,18 @@ buildChunk(const BatchedTopologySource &src,
            const std::vector<ProcessedTileMap> &tiles,
            BatchedTopologyResult &result,
            cudaStream_t stream) {
+    checkTopologySource(src);
+    TORCH_CHECK(0 <= first && first < last && size_t(last) <= src.grids.size() &&
+                    tiles.size() == src.grids.size(),
+                "buildChunk: grids [",
+                first,
+                ", ",
+                last,
+                ") with ",
+                tiles.size(),
+                " tile maps do not fit a source of ",
+                src.grids.size(),
+                " grids");
     namespace topo                = nanovdb::tools::cuda::topology::detail;
     using Op                      = TopologyPassSpec::Op;
     const int32_t n               = last - first;
@@ -729,7 +775,8 @@ buildChunk(const BatchedTopologySource &src,
 }
 
 /// Runs one batched topology pass over all grids of `src`: one host wait for the source roots,
-/// then one per chunk for its node counts. `stream` must be `src.device`'s current torch stream:
+/// then per chunk one for its node counts and, after the first chunk, one for the builder's pinned
+/// staging to come free. `stream` must be `src.device`'s current torch stream:
 /// the pass's device tables are torch tensors, allocated and freed on that stream.
 inline BatchedTopologyResult
 runBatchedTopologyPass(const BatchedTopologySource &src,
@@ -742,8 +789,8 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
     TORCH_CHECK(stream == storageStream(src.device),
                 "batched topology pass: stream must be the current torch stream of ",
                 src.device);
+    checkTopologySource(src);
     const int32_t numGrids = int32_t(src.grids.size());
-    TORCH_CHECK(numGrids > 0, "batched topology pass requires at least one grid");
     if (pass.op == TopologyPassSpec::Op::BoxDilate) {
         for (int a = 0; a < 3; ++a) {
             TORCH_CHECK(pass.boxLo[a] >= -1 && pass.boxLo[a] <= 0 && pass.boxHi[a] >= 0 &&

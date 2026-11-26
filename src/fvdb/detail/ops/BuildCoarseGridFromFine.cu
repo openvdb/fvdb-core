@@ -56,9 +56,9 @@ coarseGridStorageFromFineCUDA(const GridBatchData &fineGridBatch,
                               const nanovdb::Coord &branchingFactor) {
     // fvdb coarsening maps fine voxel f to floor(f / factor); a factor-2 coarsen pass maps f to
     // floor(f / 2) (coarsenCoord is exactly floor(n/2) for all n, and each 2^3 fine block is
-    // unioned). So a uniform power-of-two factor is that many batched coarsen passes
-    // over the whole batch (BatchedTopologyBuilder) -- no coordinate list, no per-member builds.
-    // Non-power-of-two / non-uniform factors keep the coordinate path.
+    // unioned). So a uniform power-of-two factor is that many batched coarsen passes over the
+    // whole batch (BatchedTopologyBuilder) -- no coordinate list. Non-power-of-two / non-uniform
+    // factors keep the coordinate path.
     const int nPasses = uniformPowerOfTwoLog2(branchingFactor);
     if (nPasses < 0) {
         JaggedTensor coords = ops::coarseIJKForFineGrid(fineGridBatch, branchingFactor);
@@ -74,9 +74,9 @@ coarseGridStorageFromFineCUDA(const GridBatchData &fineGridBatch,
         return ops::contiguousGridStorage(fineGridBatch);
     }
 
-    // All batch members are coarsened together, one batched pass per factor of 2: a single output
-    // storage, two host waits per pass, no per-member builds or storage merging
-    // (issue #755). Empty members become valid empty grids inline.
+    // All batch members are coarsened together, one batched pass per factor of 2 (issue #755). A
+    // pass runs in as few TopologyBuilder runs as FVDB_TOPOLOGY_MAX_TILES allows, and the last
+    // pass's runs end up in one storage. Empty members become valid empty grids inline.
     const std::vector<batched::TopologyPassSpec> passes(nPasses,
                                                         batched::TopologyPassSpec::coarsen());
     return batched::batchedTopologyStorage(fineGridBatch, passes, stream);

@@ -4,8 +4,9 @@
 """Equivalence tests for the batched topology builder (issues #755, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
-one NanoVDB build + merge per member. These tests pin the batched results against:
+``conv_transpose_grid`` for K == S) build all batch members together, in one or more
+TopologyBuilder runs per pass, instead of one NanoVDB build + merge per member. These tests pin the
+batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -242,6 +243,13 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
                     torch.equal(chunked.bbox_at(b).cpu(), unchunked.bbox_at(b).cpu()),
                     f"{msg}: bbox of member {b}",
                 )
+
+    @parameterized.expand([("1e3",), ("64k",), ("abc",), ("-5",), ("0",), ("99999999999999999999",)])
+    def test_invalid_max_tiles_env_raises(self, value):
+        grid = _build(_tricky_batches()["single_grid"], "cuda")
+        with mock.patch.dict(os.environ, {"FVDB_TOPOLOGY_MAX_TILES": value}):
+            with self.assertRaisesRegex(RuntimeError, "FVDB_TOPOLOGY_MAX_TILES must be a positive integer"):
+                grid.refined_grid(2)
 
     def test_far_flung_voxels_do_not_size_upper_readback_by_bbox(self):
         # Two voxels at +-1e6 span about 489^3 root tiles of bbox but hold only two upper nodes.
