@@ -180,6 +180,27 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertNotIn("gather_scatter", plan._backend.fallback)
         self.assertLess(_rel_err(y, yr), 4e-3)
 
+    @parameterized.expand(
+        [
+            ("gather_scatter", "default", False),
+            ("gather_scatter_transposed", "default", True),
+            ("masked_igemm", "masked_igemm", False),
+            ("masked_igemm_transposed", "masked_igemm", True),
+        ]
+    )
+    def test_plain_weights_get_contiguous_gradient(self, _, backend, transposed):
+        # Module weights get a gradient in their (k2, k1, k0, C_in, C_out) storage; plain
+        # (C_out, C_in, k0, k1, k2) weights get a contiguous gradient, so it can be flattened.
+        grid = _random_grid(1500, 10)
+        build = ConvolutionPlan.from_grid_batch_transposed if transposed else ConvolutionPlan.from_grid_batch
+        plan = build((3, 3, 2), 2, grid, expert_config={"backend": backend})
+        x = torch.randn(plan.source_grid_batch.total_voxels, 16, device="cuda", requires_grad=True)
+        w = torch.randn(32, 16, 3, 3, 2, device="cuda", requires_grad=True)
+        y = plan.execute(x, w)
+        y.backward(torch.ones_like(y))
+        self.assertTrue(w.grad.is_contiguous())
+        self.assertEqual(w.grad.view(-1).numel(), w.numel())
+
     def test_anisotropic_kernel(self):
         self._check(_random_grid(2000, 10), 64, 64, (3, 5, 1), torch.float16)
 

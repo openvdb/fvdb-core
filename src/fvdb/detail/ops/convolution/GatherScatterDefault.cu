@@ -652,10 +652,15 @@ weightRow(int64_t k, nanovdb::Coord const &ks) {
     return (k2 * ks[1] + k1) * ks[0] + k0;
 }
 
-// Inverse of weightRows: a (C_out, C_in, k0, k1, k2) view with the module's strides.
+// The weight gradient in the weights' own layout: a free (C_out, C_in, k0, k1, k2) view of the
+// rows for module weights, which are stored as (k2, k1, k0, C_in, C_out), and one copy into a
+// contiguous tensor for any other layout, so callers can flatten it.
 static torch::Tensor
-weightsFromRows(torch::Tensor const &rows, nanovdb::Coord const &ks) {
-    return rows.view({ks[2], ks[1], ks[0], rows.size(1), rows.size(2)}).permute({4, 3, 2, 1, 0});
+weightGradFromRows(torch::Tensor const &rows, torch::Tensor const &weights) {
+    auto const grad =
+        rows.view({weights.size(4), weights.size(3), weights.size(2), rows.size(1), rows.size(2)})
+            .permute({4, 3, 2, 1, 0});
+    return weights.permute({4, 3, 2, 1, 0}).is_contiguous() ? grad : grad.contiguous();
 }
 
 // =============================================================================
@@ -799,7 +804,7 @@ struct gs_default_backward_op {
         auto grad_W_flat = torch::zeros({K, C_in, C_out}, features.options());
 
         if (O == 0 || K == 0 || TP == 0) {
-            return {grad_features, weightsFromRows(grad_W_flat, topo.kernelSize)};
+            return {grad_features, weightGradFromRows(grad_W_flat, weights)};
         }
 
         auto off_acc = topo.offsets.accessor<int64_t, 1>();
@@ -834,7 +839,7 @@ struct gs_default_backward_op {
             mmOutSafe(gw_k, fb_k.t(), gb_k);
         }
 
-        return {grad_features, weightsFromRows(grad_W_flat, topo.kernelSize)};
+        return {grad_features, weightGradFromRows(grad_W_flat, weights)};
     }
 
     using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;

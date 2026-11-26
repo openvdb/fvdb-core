@@ -73,9 +73,15 @@ weightRows(torch::Tensor const &weights) {
         .contiguous();
 }
 
+// The weight gradient in the weights' own layout: a free (C_out, C_in, k0, k1, k2) view of the
+// rows for module weights, which are stored as (k2, k1, k0, C_in, C_out), and one copy into a
+// contiguous tensor for any other layout, so callers can flatten it.
 torch::Tensor
-weightsFromRows(torch::Tensor const &rows, nanovdb::Coord const &ks) {
-    return rows.view({ks[2], ks[1], ks[0], rows.size(1), rows.size(2)}).permute({4, 3, 2, 1, 0});
+weightGradFromRows(torch::Tensor const &rows, torch::Tensor const &weights) {
+    auto const grad =
+        rows.view({weights.size(4), weights.size(3), weights.size(2), rows.size(1), rows.size(2)})
+            .permute({4, 3, 2, 1, 0});
+    return weights.permute({4, 3, 2, 1, 0}).is_contiguous() ? grad : grad.contiguous();
 }
 
 // flip maps tap k to the weights of tap K-1-k, its mirror image. A submanifold transposed
@@ -2393,7 +2399,7 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                                         .transpose(1, 2)
                                         .contiguous()
                                   : runWgrad(features, gradOutput, topo, Ci, Co, precise, stream);
-        gradWeights         = weightsFromRows(gradRows, topo.kernelSize);
+        gradWeights         = weightGradFromRows(gradRows, weights);
     }
     return {gradFeatures, gradWeights};
 }
