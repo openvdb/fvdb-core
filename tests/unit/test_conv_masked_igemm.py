@@ -215,9 +215,12 @@ class TestMaskedIGemm(unittest.TestCase):
             # differ run to run without the flag; other GPUs may choose differently.
             ("heuristic_c256", 48, 256, 1, {}),
             ("heuristic_c64", 96, 64, 1, {}),
+            # 16-bit: the bias gradient must avoid cuBLAS, which older PyTorch versions reject in
+            # deterministic mode without CUBLAS_WORKSPACE_CONFIG.
+            ("float16", 96, 64, 1, {"weight_row_splits": 4}, torch.float16),
         ]
     )
-    def test_deterministic_algorithms(self, _, res, channels, stride, overrides):
+    def test_deterministic_algorithms(self, _, res, channels, stride, overrides, dtype=torch.float32):
         # Split kernels add float partials with atomics in run-dependent order.
         # torch.use_deterministic_algorithms(True) gives each split its own slice, summed in a
         # fixed order, so every result must repeat bitwise.
@@ -225,10 +228,10 @@ class TestMaskedIGemm(unittest.TestCase):
         grid = _shell_grid(res)
         target = grid if stride == 1 else grid.conv_grid(3, stride)
         plan = ConvolutionPlan.from_grid_batch(3, stride, grid, target, expert_config=CONFIG)
-        x = torch.randn(grid.total_voxels, channels, device="cuda")
-        w = torch.randn(channels, channels, 3, 3, 3, device="cuda") / (channels * 27) ** 0.5
-        b = torch.randn(channels, device="cuda")
-        gy = torch.randn(target.total_voxels, channels, device="cuda")
+        x = torch.randn(grid.total_voxels, channels, device="cuda", dtype=dtype)
+        w = (torch.randn(channels, channels, 3, 3, 3, device="cuda") / (channels * 27) ** 0.5).to(dtype)
+        b = torch.randn(channels, device="cuda", dtype=dtype)
+        gy = torch.randn(target.total_voxels, channels, device="cuda", dtype=dtype)
 
         def run():
             xx, ww, bb = (t.clone().requires_grad_(True) for t in (x, w, b))
@@ -719,6 +722,9 @@ class TestMaskedIGemm(unittest.TestCase):
         self.assertTrue(_fvdb_cpp.masked_igemm_supports(48, 8, torch.float16, cuda))
         self.assertFalse(_fvdb_cpp.masked_igemm_supports(12, 64, torch.float16, cuda))
         self.assertFalse(_fvdb_cpp.masked_igemm_supports(64, 4, torch.float16, cuda))
+        # A device index past the last GPU is unsupported, not an internal error.
+        missing = torch.device("cuda", torch.cuda.device_count())
+        self.assertFalse(_fvdb_cpp.masked_igemm_supports(64, 64, torch.float16, missing))
 
     def _compare_plans(self, plan, ref_plan, cin, cout, dtype, tol, *, native=True):
         """Forward, input, weight and bias gradients of ``plan`` against float32 gather-scatter."""

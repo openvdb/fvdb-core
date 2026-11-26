@@ -33,6 +33,7 @@
 #include <ATen/Context.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAException.h>
+#include <c10/cuda/CUDAFunctions.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <torch/types.h>
@@ -1304,6 +1305,12 @@ constexpr int kPairBlock = 256;
 // a dense map; a compact map lists the row's present neighbors in tap order from offsets[row].
 // Dynamic shared memory holds the per-warp tap counts, kPairBlock / 32 * K int32.
 
+// Dynamic shared memory of the pair kernels for a kernel of K taps.
+constexpr int64_t
+pairSmemBytes(int64_t K) {
+    return int64_t(kPairBlock / 32) * K * int64_t(sizeof(int32_t));
+}
+
 // warpCounts[warp * K + k]: how many of the warp's 32 rows have a tap-k neighbor.
 __device__ __forceinline__ void
 countWarpTaps(int32_t const *__restrict__ rowMasks,
@@ -1316,11 +1323,11 @@ countWarpTaps(int32_t const *__restrict__ rowMasks,
     int const warp = threadIdx.x >> 5;
     for (int w = 0; w < W; ++w) {
         uint32_t const m = row < N ? uint32_t(rowMasks[(int64_t(row) * W + w) * maskStride]) : 0u;
-        int const kEnd   = min(32, K - 32 * w);
+        int const kEnd   = min(kMaskWordBits, K - kMaskWordBits * w);
         for (int b = 0; b < kEnd; ++b) {
             uint32_t const bits = __ballot_sync(0xffffffffu, (m >> b) & 1u);
             if ((threadIdx.x & 31) == 0)
-                warpCounts[warp * K + 32 * w + b] = __popc(bits);
+                warpCounts[warp * K + kMaskWordBits * w + b] = __popc(bits);
         }
     }
 }
@@ -1365,9 +1372,9 @@ pairFillKernel(int32_t const *__restrict__ rowMasks,
     [[maybe_unused]] int32_t src = Compact && row < N ? offsets[row] : 0; // next compact entry
     for (int w = 0; w < W; ++w) {
         uint32_t const m = row < N ? uint32_t(rowMasks[(int64_t(row) * W + w) * maskStride]) : 0u;
-        int const kEnd   = min(32, K - 32 * w);
+        int const kEnd   = min(kMaskWordBits, K - kMaskWordBits * w);
         for (int b = 0; b < kEnd; ++b) {
-            int const k         = 32 * w + b;
+            int const k         = kMaskWordBits * w + b;
             uint32_t const bits = __ballot_sync(0xffffffffu, (m >> b) & 1u);
             if (!((m >> b) & 1u))
                 continue;
@@ -1403,7 +1410,7 @@ buildPairLists(torch::Tensor const &rowMasks,
     auto const i32       = rowMasks.options();
     int64_t const blocks = (N + kPairBlock - 1) / kPairBlock;
     auto blockCounts     = torch::zeros({K, blocks}, i32); // tap-major, so scans run along rows
-    int const smem       = int(kPairBlock / 32 * K * int64_t(sizeof(int32_t)));
+    int const smem       = int(pairSmemBytes(K));
     auto const fill      = compact ? pairFillKernel<true> : pairFillKernel<false>;
     if (smem > 48 * 1024) {
         C10_CUDA_CHECK(cudaFuncSetAttribute(
@@ -1741,7 +1748,7 @@ launchWgradNarrow(torch::Tensor const &X,
     return launchWgradByCo<T, 32, 1, Use3xTf32>(X, dY, topo, Ci, Co, stream);
 }
 
-template <typename T, bool Use3xTf32>
+template <MmaElement T, bool Use3xTf32>
 torch::Tensor
 dispatchWgrad(torch::Tensor const &X,
               torch::Tensor const &dY,
@@ -2166,10 +2173,8 @@ largeKernelTopology(GridBatchData const &featureGrid,
                     nanovdb::Coord kernelSize,
                     bool submanifold) {
     int64_t const K   = geometry.kernelVolume();
-    int64_t const W   = maskWordsFor(K);
     int64_t const N   = outputGrid.totalVoxels();
     int64_t const NIn = featureGrid.totalVoxels();
-    auto const i32    = torch::dtype(torch::kInt32).device(outputGrid.device());
     auto stream       = c10::cuda::getCurrentCUDAStream();
 
     // ---- Forward map: output rows, each listing the input rows it reads ----
@@ -2230,6 +2235,8 @@ maskedIGemmSupports(int64_t inChannels,
     if (!typeOk || !device.is_cuda() || inChannels <= 0 || outChannels <= 0 ||
         inChannels % 8 != 0 || outChannels % 8 != 0)
         return false;
+    if (device.has_index() && device.index() >= c10::cuda::device_count())
+        return false;
     auto const *props = device.has_index() ? at::cuda::getDeviceProperties(device.index())
                                            : at::cuda::getCurrentDeviceProperties();
     return props->major >= 8;
@@ -2267,9 +2274,8 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
     // hold per-tap state in shared memory, which bounds the kernel volume.
     if (K > kMaxTaps) {
         auto const optin = int64_t(at::cuda::getCurrentDeviceProperties()->sharedMemPerBlockOptin);
-        int64_t const need =
-            std::max<int64_t>(int64_t(kPairBlock / 32) * K * int64_t(sizeof(int32_t)),
-                              smemBytes<TileConfig<128, 128, 2, 2, 2>, float, true>(int(K)));
+        int64_t const need = std::max<int64_t>(
+            pairSmemBytes(K), smemBytes<TileConfig<128, 128, 2, 2, 2>, float, true>(int(K)));
         TORCH_CHECK(need <= optin,
                     "maskedIGemmSparseConvTopology: a kernel of ",
                     K,

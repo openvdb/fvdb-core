@@ -581,11 +581,14 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
 def _bias_gradient(grad_output: torch.Tensor) -> torch.Tensor:
     """Sum of grad_output over its rows, the bias gradient.
 
-    16-bit gradients sum as a cuBLAS matrix-vector product with a ones vector, which accumulates in
-    float32 and runs up to 3x faster than ``sum(0)`` on tall gradients. float32 uses ``sum(0)``: a
-    float32 product would follow the TF32 setting.
+    16-bit gradients sum as a cuBLAS matrix-vector product with a ones vector, up to 3x faster than
+    ``sum(0)`` on tall gradients. cuBLAS accumulates in float32; when it splits the rows, PyTorch's
+    ``allow_fp16_reduced_precision_reduction`` / ``allow_bf16_reduced_precision_reduction`` settings
+    decide whether the partial sums combine in float32, as for any 16-bit matmul. ``sum(0)`` serves
+    float32, where a product would follow the TF32 setting, and deterministic mode, where older
+    PyTorch versions reject cuBLAS calls unless ``CUBLAS_WORKSPACE_CONFIG`` is set.
     """
-    if grad_output.dtype in (torch.float16, torch.bfloat16):
+    if grad_output.dtype in (torch.float16, torch.bfloat16) and not torch.are_deterministic_algorithms_enabled():
         return (grad_output.new_ones(1, grad_output.shape[0]) @ grad_output).view(-1)
     return grad_output.sum(0)
 
