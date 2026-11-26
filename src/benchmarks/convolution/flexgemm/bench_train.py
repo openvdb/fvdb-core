@@ -67,10 +67,16 @@ def main():
         feats, coords, shape = sphere_coords(RES, C, args.batch, dtype, solid=args.workload == "solid")
         row = {"N": int(coords.shape[0])}
         cells = []
+
+        def measure(name):
+            # The step, and the model, grads and topology it holds, is freed on return, so the next
+            # backend's process-wide peak memory does not include it.
+            step = make_step(name, feats, coords, shape, args.batch, C, L, args.topology)
+            return time_cuda(step, iters=args.iters)
+
         for name in backends:
             try:
-                step = make_step(name, feats, coords, shape, args.batch, C, L, args.topology)
-                ms, gb = time_cuda(step, iters=args.iters)
+                ms, gb = measure(name)
                 row[name] = {"ms": ms, "peak_gb": gb}
                 cells.append(f"{ms:9.2f} ms {gb:6.2f} GB")
             except Exception as e:  # report and keep going, e.g. unsupported dtype or OOM
