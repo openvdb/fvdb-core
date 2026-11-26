@@ -1,21 +1,25 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-// AtomicAdd.cuh — Tag-dispatched atomic add for CPU and GPU.
+// AtomicAdd.cuh — Tag-dispatched atomic helpers for CPU and GPU.
 //
-// Provides a single __hostdev__ function that selects the right atomic
-// implementation based on the dispatch tag's device coordinate:
+// Provides __hostdev__ functions that select the right atomic implementation
+// based on the dispatch tag's device coordinate:
 //
-//   CPU:  std::atomic_ref<T> for float/double (C++20, relaxed ordering)
-//         CAS loop with float promotion for half/bfloat16
-//   GPU:  CUDA atomicAdd (with half/bfloat16 → native type conversion)
+//   atomic_add                  Atomic add for float, double, half and bfloat16 values.
+//     CPU:  std::atomic_ref<T> for float/double (C++20, relaxed ordering)
+//           CAS loop with float promotion for half/bfloat16
+//     GPU:  CUDA atomicAdd (with half/bfloat16 → native type conversion)
+//
+//   atomic_fetch_increment_i32  Fetch-and-increment for int32 counters.
+//     CPU:  std::atomic_ref<int32_t>::fetch_add (relaxed ordering)
+//     GPU:  warp-aggregated atomicAdd via cooperative_groups::labeled_partition
+//           (sm_70+; plain atomicAdd on older architectures)
 //
 // Usage inside a __hostdev__ callback:
 //
 //     atomic_add(tg, &out_v(row, col), value);
-//
-// Counters hit by many threads (e.g. per-tap counts in a two-pass build) should use
-// atomic_fetch_increment_i32, which warp-aggregates the atomic on GPU.
+//     int32_t const slot = atomic_fetch_increment_i32(tg, &counters[k]);
 //
 #ifndef FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
 #define FVDB_DETAIL_DISPATCH_ATOMICADD_CUH
@@ -32,12 +36,12 @@
 #include <c10/util/BFloat16.h>
 #include <c10/util/Half.h>
 
+#include <cooperative_groups.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
-
-#include <cstdint>
 #endif
 
+#include <cstdint>
 #include <type_traits>
 
 namespace fvdb {
@@ -145,36 +149,17 @@ atomic_add(Tag /*tg*/, T *dst, T src) {
 #endif
 }
 
-/// @brief Device-dispatched atomic fetch-and-add for int32_t.
-///
-/// Returns the old value at @p dst before the addition -- needed for
-/// assigning unique write positions in parallel fill passes.
-///
-/// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
-/// @param tg    Tag instance (selects CPU vs GPU path).
-/// @param dst   Pointer to the destination value.
-/// @param val   Value to add atomically.
-/// @return      The value at @p dst immediately before the addition.
-template <typename Tag>
-    requires ::dispatch::with_type<Tag, torch::DeviceType>
-__hostdev__ int32_t
-atomic_fetch_add_i32(Tag /*tg*/, int32_t *dst, int32_t val) {
-#if defined(__CUDA_ARCH__)
-    return atomicAdd(dst, val);
-#else
-    if constexpr (::dispatch::cpu_tag<Tag>) {
-        return std::atomic_ref<int32_t>(*dst).fetch_add(val, std::memory_order_relaxed);
-    }
-    return 0;
-#endif
-}
-
 /// @brief Device-dispatched atomic fetch-and-increment for int32_t, warp-aggregated on GPU.
 ///
-/// Prefer this over atomic_fetch_add_i32(tg, dst, 1) when many threads increment a small set of
-/// counters. On GPU, the lanes of a warp that target the same address issue one atomic for the
-/// whole group, and each lane receives a distinct value in [old, old + groupSize). As with
-/// independent atomics, which lane receives which value is unspecified.
+/// Returns a unique pre-increment value per calling thread -- used to assign write positions
+/// in parallel fill passes and to count hits on a small set of counters. On GPU (sm_70+), the
+/// lanes of a warp that target the same address issue one atomic for the whole group, and each
+/// lane receives a distinct value in [old, old + groupSize); this avoids serializing the atomic
+/// unit when many threads hit the same counter. As with independent atomics, which lane
+/// receives which value is unspecified.
+///
+/// The host-side instantiation for a non-CPU tag is never executed (device tags only run in
+/// device code); it exists so the __hostdev__ template compiles and returns 0.
 ///
 /// @tparam Tag  A dispatch tag carrying at least a torch::DeviceType.
 /// @param tg    Tag instance (selects CPU vs GPU path).
@@ -182,23 +167,25 @@ atomic_fetch_add_i32(Tag /*tg*/, int32_t *dst, int32_t val) {
 /// @return      A unique pre-increment value of @p dst for this thread.
 template <typename Tag>
     requires ::dispatch::with_type<Tag, torch::DeviceType>
-__hostdev__ int32_t
-atomic_fetch_increment_i32(Tag /*tg*/, int32_t *dst) {
+__hostdev__ std::int32_t
+atomic_fetch_increment_i32(Tag /*tg*/, std::int32_t *dst) {
 #if defined(__CUDA_ARCH__)
-    unsigned const peers = __match_any_sync(__activemask(), reinterpret_cast<uintptr_t>(dst));
-    unsigned lane;
-    asm("mov.u32 %0, %%laneid;" : "=r"(lane));
-    int const leader = __ffs(peers) - 1;
-
-    int32_t base = 0;
-    if (static_cast<int>(lane) == leader) {
-        base = atomicAdd(dst, __popc(peers));
+#if __CUDA_ARCH__ >= 700
+    namespace cg = cooperative_groups;
+    // Group the active lanes by target address; each group issues a single atomicAdd.
+    cg::coalesced_group const peers = cg::labeled_partition(cg::coalesced_threads(), dst);
+    std::int32_t base               = 0;
+    if (peers.thread_rank() == 0) {
+        base = atomicAdd(dst, static_cast<std::int32_t>(peers.size()));
     }
-    base = __shfl_sync(peers, base, leader);
-    return base + __popc(peers & ((1u << lane) - 1u));
+    return peers.shfl(base, 0) + static_cast<std::int32_t>(peers.thread_rank());
+#else
+    // labeled_partition needs __match_any_sync (sm_70+).
+    return atomicAdd(dst, 1);
+#endif
 #else
     if constexpr (::dispatch::cpu_tag<Tag>) {
-        return std::atomic_ref<int32_t>(*dst).fetch_add(1, std::memory_order_relaxed);
+        return std::atomic_ref<std::int32_t>(*dst).fetch_add(1, std::memory_order_relaxed);
     }
     return 0;
 #endif

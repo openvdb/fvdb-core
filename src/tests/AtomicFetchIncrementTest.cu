@@ -20,8 +20,9 @@ namespace {
 
 using fvdb::detail::dispatch::atomic_fetch_increment_i32;
 
-// Thread i increments counter (i * stride) % numCounters when i % skip != 0, and records the
-// returned value in slots[i] (-1 for threads that skip).
+// Thread i increments counter (i * stride) % numCounters and records the returned value in
+// slots[i]. When skip > 0, threads with i % skip == 0 do not participate (slots[i] stays -1);
+// skip == 0 means every thread participates.
 template <torch::DeviceType Device>
 void
 runIncrements(int64_t n, int64_t numCounters, int64_t stride, int64_t skip, torch::Device device) {
@@ -33,14 +34,14 @@ runIncrements(int64_t n, int64_t numCounters, int64_t stride, int64_t skip, torc
     auto *sPtr    = slots.data_ptr<int32_t>();
 
     ::dispatch::for_each(Tag{}, n, [=] __hostdev__(Tag tg, int64_t i) {
-        if (i % skip != 0) {
+        if (skip == 0 || i % skip != 0) {
             sPtr[i] = atomic_fetch_increment_i32(tg, &cPtr[(i * stride) % numCounters]);
         }
     });
 
     auto const idx       = torch::arange(n, torch::dtype(torch::kInt64).device(device));
     auto const counter   = (idx * stride) % numCounters;
-    auto const active    = (idx % skip) != 0;
+    auto const active    = skip == 0 ? torch::ones_like(idx, torch::kBool) : (idx % skip) != 0;
     auto const countsCpu = counters.cpu();
     for (int64_t k = 0; k < numCounters; ++k) {
         auto const mine = slots.masked_select(active & (counter == k)).cpu().to(torch::kInt64);
@@ -54,16 +55,25 @@ runIncrements(int64_t n, int64_t numCounters, int64_t stride, int64_t skip, torc
 } // namespace
 
 TEST(AtomicFetchIncrementTest, CudaOneCounterPerWarp) {
-    // stride 0: every lane of every warp hits counter 0, so each group is a full warp.
-    runIncrements<torch::kCUDA>(1 << 20, 1, 0, 1 << 30, torch::kCUDA);
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    // stride 0, no skipping: every lane of every warp hits counter 0, so each group is a full warp.
+    runIncrements<torch::kCUDA>(1 << 20, 1, 0, 0, torch::kCUDA);
 }
 
 TEST(AtomicFetchIncrementTest, CudaMixedCountersWithinWarp) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
     // 27 counters interleaved across lanes, so each warp splits into several address groups.
-    runIncrements<torch::kCUDA>(1 << 20, 27, 1, 1 << 30, torch::kCUDA);
+    runIncrements<torch::kCUDA>(1 << 20, 27, 1, 0, torch::kCUDA);
 }
 
 TEST(AtomicFetchIncrementTest, CudaPartialWarps) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
     // Every third lane skips the atomic, so groups are formed from a divergent active mask.
     runIncrements<torch::kCUDA>(1 << 20, 27, 7, 3, torch::kCUDA);
 }
