@@ -546,27 +546,39 @@ class TestMaskedIGemm(unittest.TestCase):
 
     @parameterized.expand([("narrow", 3), ("wide", 5)])
     def test_strict_fp32_non_finite(self, _, kernel_size):
-        # 3xTF32 splits each operand into a TF32 big part and a residual. That split must not
-        # overflow FLT_MAX to inf, and inf * 0 in a cross term must not turn an infinite product
-        # into NaN: both should match IEEE float32 gather-scatter.
+        # 3xTF32 splits each operand into a TF32 big part and a residual. Rounding FLT_MAX to TF32
+        # must not overflow to inf (values that close to it keep TF32 precision), and inf * 0 in a
+        # cross term must not turn an infinite product into NaN.
         torch.manual_seed(0)
         grid = _random_grid(500, 6)
         plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid, expert_config=CONFIG)
         ref_plan = ConvolutionPlan.from_grid_batch(kernel_size, 1, grid, grid)
         cin = cout = 32
-        x = torch.randn(grid.total_voxels, cin, device="cuda")
-        x[0, 0] = torch.finfo(torch.float32).max  # rounding up to TF32 would overflow
-        x[1, 3] = float("inf")
-        x[2, 5] = -float("inf")
         # Positive weights small enough that FLT_MAX * w stays finite.
         w = torch.rand(cout, cin, *(kernel_size,) * 3, device="cuda") * 2.0**-100 + 2.0**-110
-        with _tf32(False):
-            y = plan.execute(grid.jagged_like(x), w).jdata
-            ref = ref_plan.execute(grid.jagged_like(x), w).jdata
+
+        def run(x):
+            with _tf32(False):
+                return plan.execute(grid.jagged_like(x), w).jdata, ref_plan.execute(grid.jagged_like(x), w).jdata
+
+        x = torch.randn(grid.total_voxels, cin, device="cuda")
+        x[0, 0] = torch.finfo(torch.float32).max  # rounding up to TF32 would overflow
+        y, ref = run(x)
+        self.assertTrue(torch.isfinite(ref).all())
+        self.assertTrue(torch.isfinite(y).all())
+        near_max = ref.abs() > 1.0  # outputs of the FLT_MAX feature; the rest are ~2**-95
+        self.assertTrue(near_max.any())
+        self.assertTrue(((y[near_max] - ref[near_max]).abs() <= 1e-3 * ref[near_max].abs()).all())
+        self.assertLess(_rel_err(y[~near_max], ref[~near_max]), 1e-5)
+
+        x = torch.randn(grid.total_voxels, cin, device="cuda")
+        x[1, 3] = float("inf")
+        x[2, 5] = -float("inf")
+        y, ref = run(x)
         self.assertNotIn("gather_scatter", plan._backend.fallback)
+        self.assertTrue(torch.isinf(ref).any())
         self.assertTrue(torch.equal(torch.isnan(y), torch.isnan(ref)), "NaN positions")
         self.assertTrue(torch.equal(torch.isinf(y), torch.isinf(ref)), "inf positions")
-        self.assertTrue(torch.isinf(ref).any() and torch.isfinite(ref).any())
         infinite, finite = torch.isinf(ref), torch.isfinite(ref)
         self.assertTrue(torch.equal(y[infinite], ref[infinite]), "signs of infinities")
         self.assertLess(_rel_err(y[finite], ref[finite]), 1e-5)

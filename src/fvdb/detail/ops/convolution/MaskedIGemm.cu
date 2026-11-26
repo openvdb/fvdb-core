@@ -218,19 +218,23 @@ roundUnless3xTf32(uint32_t x) {
         return roundToTf32<T>(x);
 }
 
+// Magnitudes from here up round to inf in TF32.
+constexpr uint32_t kTf32RoundingOverflow = 0x7f7ff000u;
+
 // Split a float32 into TF32 parts: big is the value rounded to TF32 and small the rounded
-// remainder, so big + small keeps about 22 of float32's 24 mantissa bits.
+// remainder, so big + small keeps about 22 of float32's 24 mantissa bits. Inf, NaN and the
+// finite values that would round to inf pass through whole with no remainder: the tensor core
+// truncates them, so those few values near FLT_MAX get TF32 precision. Folding them into one
+// compare keeps the split's cost; testing for them separately slowed 3xTF32 layers by ~25%.
 __device__ __forceinline__ void
 splitTf32(uint32_t x, uint32_t &big, uint32_t &small) {
     float const f = __uint_as_float(x);
-    if (!isfinite(f)) {
+    if (!(fabsf(f) < __uint_as_float(kTf32RoundingOverflow))) {
         big   = x;
         small = 0u;
         return;
     }
-    big = (x + 0x1000u) & 0xffffe000u;
-    if ((big & 0x7f800000u) == 0x7f800000u)
-        big = x & 0xffffe000u; // rounding up would overflow to inf near FLT_MAX: truncate instead
+    big   = (x + 0x1000u) & 0xffffe000u;
     small = roundToTf32<float>(__float_as_uint(f - __uint_as_float(big)));
 }
 
