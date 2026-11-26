@@ -47,6 +47,16 @@ def _shell_grid(res: int) -> GridBatch:
 
 
 @contextlib.contextmanager
+def _overrides(**kwargs):
+    """Force masked_igemm choices that otherwise depend on grid size and the GPU."""
+    _fvdb_cpp._masked_igemm_set_test_overrides(**kwargs)
+    try:
+        yield
+    finally:
+        _fvdb_cpp._masked_igemm_set_test_overrides()
+
+
+@contextlib.contextmanager
 def _tf32(enabled: bool):
     # Prefer fp32_precision (PyTorch 2.9+); reading allow_tf32 raises once it was used.
     matmul = torch.backends.cuda.matmul
@@ -163,11 +173,8 @@ class TestMaskedIGemm(unittest.TestCase):
         x = torch.randn(grid.total_voxels, cin, device="cuda", dtype=torch.float16)
         w = (torch.randn(cout, cin, 3, 3, 3, device="cuda") / (27 * cin) ** 0.5).half()
         b = torch.randn(cout, device="cuda", dtype=torch.float16)
-        os.environ["FVDB_MIGEMM_SPLIT"] = "1"
-        try:
+        with _overrides(splits=1):
             y = plan.execute(x, w, b)
-        finally:
-            del os.environ["FVDB_MIGEMM_SPLIT"]
         with _tf32(False):
             yr = ref_plan.execute(x.float(), w.float(), b.float())
         self.assertNotIn("gather_scatter", plan._backend.fallback)
@@ -187,26 +194,20 @@ class TestMaskedIGemm(unittest.TestCase):
         grid = GridBatch.from_ijk(JaggedTensor([torch.zeros(1, 3, dtype=torch.int32, device="cuda")]))
         self._check(grid, 64, 64, 3, torch.float16)
 
-    @parameterized.expand([("global",), ("local",)])
-    def test_row_order(self, order):
+    @parameterized.expand([("global", False), ("local", True)])
+    def test_row_order(self, _, local):
         # The local order regroups rows in windows of 65536, so the grid spans several windows.
         grid = _random_grid(200000, 40)
         self.assertGreater(grid.total_voxels, 2 * 65536)
-        os.environ["FVDB_MIGEMM_ORDER"] = order
-        try:
+        with _overrides(local_row_order=local):
             self._check(grid, 64, 64, 3, torch.float16)
-        finally:
-            del os.environ["FVDB_MIGEMM_ORDER"]
 
-    @parameterized.expand([("1",), ("5",), ("1000",)])
+    @parameterized.expand([(1,), (5,), (1000,)])
     def test_weight_gradient_row_split(self, splits):
         # Row splitting is chosen only when features are several times L2; force it on small grids.
-        os.environ["FVDB_MIGEMM_WROWS"] = splits
-        try:
+        with _overrides(weight_row_splits=splits):
             self._check(_shell_grid(48), 64, 128, 3, torch.float16)
             self._check(_random_grid(3000, 12, batch=2), 128, 64, 3, torch.float16)
-        finally:
-            del os.environ["FVDB_MIGEMM_WROWS"]
 
     def test_neighbor_map(self):
         grid = _random_grid(800, 6)
@@ -247,16 +248,10 @@ class TestMaskedIGemm(unittest.TestCase):
             grid = _random_grid(3000, 16, batch=3)
         else:
             grid = _random_grid(2000, 12, batch=4)[1:3]
-        os.environ["FVDB_MIGEMM_BUILDER"] = "scan"
-        try:
+        with _overrides(staged_builder=False):
             ref = _build_topology(grid, grid, kernel_size)
-        finally:
-            del os.environ["FVDB_MIGEMM_BUILDER"]
-        os.environ["FVDB_MIGEMM_BUILDER"] = "staged"
-        try:
+        with _overrides(staged_builder=True):
             topo = _build_topology(grid, grid, kernel_size)
-        finally:
-            del os.environ["FVDB_MIGEMM_BUILDER"]
         for name in ("neighbor_map", "row_masks", "pair_in", "pair_out", "pair_offsets"):
             self.assertTrue(torch.equal(getattr(topo, name), getattr(ref, name)), name)
 
@@ -298,15 +293,12 @@ class TestMaskedIGemm(unittest.TestCase):
 
     @parameterized.expand([("split2", 2), ("split5", 5)])
     def test_large_kernel_split_k(self, _, splits):
-        # Split-K starts a CTA's tap walk mid-chunk.
-        os.environ["FVDB_MIGEMM_SPLIT"] = str(splits)
-        try:
-            grid = _random_grid(1500, 8)
+        # Split-K starts a CTA's tap walk partway through a tap group.
+        grid = _random_grid(1500, 8)
+        with _overrides(splits=splits):
             plan = ConvolutionPlan.from_grid_batch(5, 1, grid, expert_config=CONFIG)
             ref_plan = ConvolutionPlan.from_grid_batch(5, 1, grid)
             self._compare_plans(plan, ref_plan, 96, 64, torch.float16, 4e-3)
-        finally:
-            del os.environ["FVDB_MIGEMM_SPLIT"]
 
     @staticmethod
     def _dense_from_compact(nbr, offsets, masks, k):

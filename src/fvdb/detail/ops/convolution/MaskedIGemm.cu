@@ -54,6 +54,9 @@ namespace ops {
 
 namespace {
 
+// Set only by tests (setMaskedIGemmTestOverrides); unset fields leave the heuristics in charge.
+MaskedIGemmTestOverrides gTestOverrides;
+
 // =============================================================================
 // Weight rows
 // =============================================================================
@@ -1282,7 +1285,7 @@ smCount() {
 // The global Gray order groups rows with similar tap masks but scatters spatial neighbors
 // across the grid. When the gathered tensor is several times L2, windows of nearby rows each
 // sorted by Gray rank keep the neighbor gathers in L2 at the cost of slightly larger tile
-// unions. FVDB_MIGEMM_ORDER=global|local overrides the choice.
+// unions.
 constexpr int64_t kLocalWindow = int64_t(1) << 16;
 
 torch::Tensor const &
@@ -1291,8 +1294,8 @@ rowOrder(MaskedIGemmTopology const &topo, int64_t gatheredBytes) {
     C10_CUDA_CHECK(cudaGetDevice(&device));
     C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, device));
     bool local = topo.outputTotalVoxels > kLocalWindow && gatheredBytes >= 3 * int64_t(l2);
-    if (char const *env = std::getenv("FVDB_MIGEMM_ORDER"))
-        local = std::string(env) == "local";
+    if (gTestOverrides.localRowOrder)
+        local = *gTestOverrides.localRowOrder;
     if (!local)
         return topo.sortedRows;
     if (!topo.localRows.defined()) {
@@ -1324,7 +1327,6 @@ launchConv(torch::Tensor const &A,
     // Split each tile's (tap, k-tile) iterations to fill the last wave. Cost is in k-tile units:
     // each wave runs blocks of iters / s k-tiles plus a fixed prologue and epilogue (a float32
     // atomic tile when split), and splitting adds a zero-fill and copy pass over the output.
-    // FVDB_MIGEMM_SPLIT forces the split count for tuning.
     constexpr double kBlockOverhead = 24.0;
     constexpr double kSplitPass     = 1.1;
     int perSm                       = 0;
@@ -1346,8 +1348,8 @@ launchConv(torch::Tensor const &A,
             splits = s;
         }
     }
-    if (char const *env = std::getenv("FVDB_MIGEMM_SPLIT"))
-        splits = std::clamp(std::atoi(env), 1, maxSplits);
+    if (gTestOverrides.splits)
+        splits = std::clamp(*gTestOverrides.splits, 1, maxSplits);
     torch::Tensor acc;
     if (splits > 1)
         acc = torch::zeros({N, Nc}, out.options().dtype(torch::kFloat32));
@@ -1406,7 +1408,7 @@ dispatchConvTiles(torch::Tensor const &A,
     }
 }
 
-// Tile shape by output width. FVDB_MIGEMM_CFG=<BM>x<BN>x<STAGES> overrides it for tuning.
+// Tile shape by output width.
 template <typename T, bool KMajorWeights, bool Use3xTf32>
 void
 dispatchConv(torch::Tensor const &A,
@@ -1419,42 +1421,9 @@ dispatchConv(torch::Tensor const &A,
              int Nc,
              cudaStream_t stream) {
     if (topo.kernelVolume > kMaxTaps) {
-        // Kernels of more than kMaxTaps taps run the default tiles only, which bounds the extra
-        // instantiations; FVDB_MIGEMM_CFG does not apply.
         dispatchConvTiles<T, KMajorWeights, Use3xTf32, true>(
             A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
         return;
-    }
-    if constexpr (!Use3xTf32) {
-        char const *env       = std::getenv("FVDB_MIGEMM_CFG");
-        std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRY(BM, BN, WM, WN, ST)                                      \
-    if (cfg == #BM "x" #BN "x" #ST) {                                            \
-        launchConv<TileConfig<BM, BN, WM, WN, ST>, T, KMajorWeights, Use3xTf32>( \
-            A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);                \
-        return;                                                                  \
-    }
-        FVDB_MIGEMM_TRY(128, 256, 2, 4, 3)
-        FVDB_MIGEMM_TRY(128, 256, 2, 4, 2)
-        FVDB_MIGEMM_TRY(64, 256, 1, 4, 3)
-        FVDB_MIGEMM_TRY(64, 256, 1, 4, 2)
-        FVDB_MIGEMM_TRY(128, 128, 2, 2, 4)
-        FVDB_MIGEMM_TRY(128, 128, 2, 2, 3)
-        FVDB_MIGEMM_TRY(128, 128, 2, 2, 2)
-        FVDB_MIGEMM_TRY(64, 128, 2, 2, 4)
-        FVDB_MIGEMM_TRY(64, 128, 2, 2, 3)
-        FVDB_MIGEMM_TRY(128, 64, 4, 1, 4)
-        FVDB_MIGEMM_TRY(128, 64, 4, 1, 3)
-        FVDB_MIGEMM_TRY(128, 64, 4, 1, 2)
-        FVDB_MIGEMM_TRY(64, 64, 2, 2, 4)
-        FVDB_MIGEMM_TRY(64, 64, 2, 2, 3)
-        FVDB_MIGEMM_TRY(128, 96, 4, 1, 2)
-        FVDB_MIGEMM_TRY(128, 96, 4, 1, 3)
-        FVDB_MIGEMM_TRY(128, 32, 4, 1, 3)
-        FVDB_MIGEMM_TRY(128, 32, 4, 1, 2)
-        FVDB_MIGEMM_TRY(64, 32, 2, 1, 3)
-        FVDB_MIGEMM_TRY(64, 32, 2, 1, 2)
-#undef FVDB_MIGEMM_TRY
     }
     dispatchConvTiles<T, KMajorWeights, Use3xTf32, false>(
         A, Wrows, bias, out, topo, flipTaps, Kc, Nc, stream);
@@ -1477,9 +1446,8 @@ launchWgrad(torch::Tensor const &X,
     int const tiles     = ((Ci + Cfg::BM - 1) / Cfg::BM) * ((Co + Cfg::BN - 1) / Cfg::BN);
     int64_t const steps = std::max<int64_t>(1, topo.pairIn.numel() / std::max(1, K) / Cfg::BK);
     // Many short CTAs keep the last wave small, but each split adds a tile of float32 atomics,
-    // so every CTA keeps at least 128 steps. FVDB_MIGEMM_WSPLIT overrides CTAs per SM for tuning.
-    char const *env      = std::getenv("FVDB_MIGEMM_WSPLIT");
-    int64_t const target = int64_t(env ? std::max(1, std::atoi(env)) : 64) * sms;
+    // so every CTA keeps at least 128 steps.
+    int64_t const target = int64_t(64) * sms;
     int64_t splits       = std::clamp<int64_t>(
         (target + tiles * K - 1) / (tiles * K), 1, std::max<int64_t>(1, steps / 128));
 
@@ -1496,13 +1464,12 @@ launchWgrad(torch::Tensor const &X,
     double const bytes  = double(topo.outputTotalVoxels) * (Ci + Co) * X.element_size();
     auto const local    = int64_t(std::ceil(groups * bytes / (l2 / 4.0)));
     int const rowBlocks = int(topo.pairBlockOffsets.size(1));
-    bool rowSplit       = !env && local > splits && rowBlocks > 1;
+    bool rowSplit       = local > splits && rowBlocks > 1;
     if (rowSplit)
         splits = std::min<int64_t>({local, std::max<int64_t>(1, steps / 32), rowBlocks});
-    // FVDB_MIGEMM_WROWS=<splits> forces row splitting, for tests and tuning.
-    if (char const *rows = std::getenv("FVDB_MIGEMM_WROWS"); rows && rowBlocks > 0) {
+    if (gTestOverrides.weightRowSplits && rowBlocks > 0) {
         rowSplit = true;
-        splits   = std::clamp<int64_t>(std::atoi(rows), 1, rowBlocks);
+        splits   = std::clamp<int64_t>(*gTestOverrides.weightRowSplits, 1, rowBlocks);
     }
 
     torch::Tensor rows, acc;
@@ -1587,24 +1554,6 @@ dispatchWgrad(torch::Tensor const &X,
                 X, dY, topo, Ci, Co, stream);
         return launchWgradNarrow<T, Use3xTf32>(X, dY, topo, Ci, Co, stream);
     } else {
-        char const *env       = std::getenv("FVDB_MIGEMM_WCFG");
-        std::string const cfg = env ? env : "";
-#define FVDB_MIGEMM_TRYW(BM, BN, WM, WN, ST)                               \
-    if (cfg == #BM "x" #BN "x" #ST) {                                      \
-        return launchWgrad<WgradConfig<BM, BN, WM, WN, ST>, T, Use3xTf32>( \
-            X, dY, topo, Ci, Co, stream);                                  \
-    }
-        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 4)
-        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 3)
-        FVDB_MIGEMM_TRYW(128, 128, 2, 2, 2)
-        FVDB_MIGEMM_TRYW(128, 64, 2, 2, 4)
-        FVDB_MIGEMM_TRYW(128, 64, 2, 2, 3)
-        FVDB_MIGEMM_TRYW(64, 128, 2, 2, 4)
-        FVDB_MIGEMM_TRYW(64, 128, 2, 2, 3)
-        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 4)
-        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 3)
-        FVDB_MIGEMM_TRYW(64, 64, 2, 2, 2)
-#undef FVDB_MIGEMM_TRYW
         if (round32(Ci) % 128 == 0 && round32(Co) % 128 == 0)
             return launchWgrad<WgradConfig<128, 128, 2, 2, 3>, T, Use3xTf32>(
                 X, dY, topo, Ci, Co, stream);
@@ -2168,6 +2117,11 @@ largeKernelTopology(GridBatchData const &featureGrid,
 // Public entry points
 // =============================================================================
 
+void
+setMaskedIGemmTestOverrides(MaskedIGemmTestOverrides const &overrides) {
+    gTestOverrides = overrides;
+}
+
 torch::Tensor
 maskedIGemmColumnSum(torch::Tensor x) {
     TORCH_CHECK(x.is_cuda() && x.dim() == 2, "maskedIGemmColumnSum: x must be a 2-D CUDA tensor");
@@ -2261,17 +2215,13 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
     if (N > 0) {
         // The staged builder needs a submanifold map with every tap within one leaf of its
         // voxel. Below ~128K voxels the VoxelBlockManager's cold build (a host sync) costs more
-        // than the probes it saves. FVDB_MIGEMM_BUILDER=scan|staged overrides the choice.
+        // than the probes it saves.
         bool withinLeaf = submanifold;
         for (int d = 0; d < 3; ++d)
             withinLeaf &= (kernelSize[d] - 1) / 2 <= 8;
-        char const *env          = std::getenv("FVDB_MIGEMM_BUILDER");
-        std::string const choice = env ? env : "";
-        bool scan                = !withinLeaf || N < (int64_t(1) << 17);
-        if (withinLeaf && choice == "staged")
-            scan = false;
-        else if (choice == "scan")
-            scan = true;
+        bool scan = !withinLeaf || N < (int64_t(1) << 17);
+        if (gTestOverrides.stagedBuilder)
+            scan = !(*gTestOverrides.stagedBuilder && withinLeaf);
         if (scan) {
             buildNeighborMapScan(featureGrid,
                                  outputGrid,

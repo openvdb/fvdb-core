@@ -787,6 +787,22 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("out_channels"),
           py::arg("dtype"),
           py::arg("device"));
+
+    m.def(
+        "_masked_igemm_set_test_overrides",
+        [](std::optional<int> splits,
+           std::optional<int> weightRowSplits,
+           std::optional<bool> stagedBuilder,
+           std::optional<bool> localRowOrder) {
+            fvdb::detail::ops::setMaskedIGemmTestOverrides(
+                {splits, weightRowSplits, stagedBuilder, localRowOrder});
+        },
+        "For tests: force masked_igemm choices that otherwise depend on grid size and the device. "
+        "Call with no arguments to restore the heuristics.",
+        py::arg("splits")            = py::none(),
+        py::arg("weight_row_splits") = py::none(),
+        py::arg("staged_builder")    = py::none(),
+        py::arg("local_row_order")   = py::none());
 }
 
 TORCH_LIBRARY(fvdb, m) {

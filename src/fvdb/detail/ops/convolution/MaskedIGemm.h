@@ -101,6 +101,17 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
 /// Sum over the rows of a 2-D CUDA tensor (the bias gradient), accumulated in float32.
 torch::Tensor maskedIGemmColumnSum(torch::Tensor x);
 
+/// Choices that are otherwise made from the grid size and the device, forced so tests can reach
+/// every code path on any GPU. Unset fields leave the heuristics in charge. For tests only.
+struct MaskedIGemmTestOverrides {
+    std::optional<int> splits;         ///< split-K count of the forward and input-gradient kernel
+    std::optional<int>
+        weightRowSplits;               ///< split the weight gradient by output rows, this many ways
+    std::optional<bool> stagedBuilder; ///< leaf-staged neighbor-map builder where it applies
+    std::optional<bool> localRowOrder; ///< Gray order windowed to nearby rows instead of global
+};
+void setMaskedIGemmTestOverrides(MaskedIGemmTestOverrides const &overrides);
+
 /// True when maskedIGemmSparseConv can run these channel counts and dtype on @p device.
 bool maskedIGemmSupports(int64_t inChannels,
                          int64_t outChannels,
