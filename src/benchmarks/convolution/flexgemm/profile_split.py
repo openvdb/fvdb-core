@@ -42,12 +42,14 @@ def fvdb_parts(backend, feats, coords, C, W):
     plan = plan_build()
     x = grid.jagged_like(feats.clone().requires_grad_(True))
     Wp = W.clone().requires_grad_(True)
+    # A trainable zero bias, as FlexGEMM gets, so both sides time the bias add and its gradient.
+    bp = torch.zeros(C, device="cuda", dtype=feats.dtype, requires_grad=True)
 
     def fwd():
-        return plan.execute(x, Wp)
+        return plan.execute(x, Wp, bp)
 
     def fwd_bwd():
-        y = plan.execute(x, Wp).jdata
+        y = plan.execute(x, Wp, bp).jdata
         y.backward(torch.ones_like(y))
 
     topo = getattr(plan._backend, "topology", None)
