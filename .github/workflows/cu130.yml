@@ -293,21 +293,10 @@ jobs:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        id: setup-python
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
           AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
-
-      # The gtests need ctest
-      - name: Install CMake
-        run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
-          mkdir /opt/cmake &&
-          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
-          cmake --version
-        env:
-          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
 
       - name: Install apt dependencies
         # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
@@ -315,6 +304,7 @@ jobs:
 
       # test_requirements.txt is a superset of the build_requirements.txt the gtests used to run with
       - name: Install pip dependencies
+        id: venv-ready
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
@@ -323,7 +313,11 @@ jobs:
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
+      # The wheel (doc and unit tests) and CMake plus the gtest build tree are
+      # set up independently, so a failure in one setup chain does not skip the other.
       - name: Download package
+        id: package-downloaded
+        if: ${{ !cancelled() && steps.venv-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-test-package-cu130
@@ -331,11 +325,25 @@ jobs:
 
       - name: Install package
         id: package-ready
+        if: ${{ !cancelled() && steps.package-downloaded.outcome == 'success' }}
         run: |
           source .venv/bin/activate
           pip install ./dist/*.whl
 
+      # The gtests need ctest
+      - name: Install CMake
+        id: cmake-ready
+        if: ${{ !cancelled() && steps.venv-ready.outcome == 'success' }}
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
+
       - name: Download gtests
+        id: gtests-downloaded
+        if: ${{ !cancelled() && steps.cmake-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-gtest-cu130
@@ -343,6 +351,7 @@ jobs:
 
       - name: Extract gtests
         id: gtests-ready
+        if: ${{ !cancelled() && steps.gtests-downloaded.outcome == 'success' }}
         run: |
             tar -xvf fvdb-gtest.tar
 
@@ -388,7 +397,7 @@ jobs:
   # STOP FVDB TESTS GPU RUNNER
   ##############################################################################
   fvdb-tests-stop-gpu-runner:
-    name: Stop GPU EC2 runner for gtests
+    name: Stop GPU EC2 runner for tests
     needs:
       - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
       - fvdb-gpu-tests # required to wait when the main job is done

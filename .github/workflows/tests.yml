@@ -248,6 +248,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
+        id: env-ready
         uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
@@ -255,7 +256,11 @@ jobs:
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
+      # The wheel (doc and unit tests) and the gtest build tree are set up
+      # independently, so a failure in one setup chain does not skip the other.
       - name: Download package
+        id: package-downloaded
+        if: ${{ !cancelled() && steps.env-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-test-package-conda
@@ -263,11 +268,14 @@ jobs:
 
       - name: Install package
         id: package-ready
+        if: ${{ !cancelled() && steps.package-downloaded.outcome == 'success' }}
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
 
       - name: Download gtests
+        id: gtests-downloaded
+        if: ${{ !cancelled() && steps.env-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-gtest-conda
@@ -275,6 +283,7 @@ jobs:
 
       - name: Extract gtests
         id: gtests-ready
+        if: ${{ !cancelled() && steps.gtests-downloaded.outcome == 'success' }}
         run: |
             tar -xvf fvdb-gtest.tar
 

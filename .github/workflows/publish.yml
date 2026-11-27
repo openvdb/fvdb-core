@@ -548,7 +548,7 @@ jobs:
     if: ${{ !cancelled() && needs.validate-smoke-test.result == 'success' && (needs.pr-flags.outputs.release_push == 'true' || needs.pr-flags.outputs.release == 'true' || inputs.run_validation == true) }}
     # One run per CUDA build, using the wheel for the Python that env/test_environment.yml pins
     runs-on: val-pt${{ matrix.torch-version }}-cu${{ matrix.cuda-version }}-${{ github.run_id }}
-    # Tests the wheel against the pip torch it was built for, as fvdb-unit-test in cu130.yml does.
+    # Tests the wheel against the pip torch it was built for, as the unit-test step of fvdb-gpu-tests in cu130.yml does.
     # conda-forge torch uses a different pybind11 internals ABI, so the wheel cannot import there.
     container:
       image: nvidia/cuda:${{ matrix.cuda-image-tag }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}

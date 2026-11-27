@@ -42,8 +42,8 @@ jobs:
           # skippable path — i.e. is at least one changed file real source? A
           # skippable-only PR matches nothing, needs_tests is false, tests skip.
           #
-          # NOTE: docs/ and notebooks/ are intentionally NOT excluded — the Doc Tests
-          # job runs `pytest --markdown-docs docs` and `pytest --nbmake notebooks/`,
+          # NOTE: docs/ and notebooks/ are intentionally NOT excluded — the doc test
+          # steps of fvdb-gpu-tests run `pytest --markdown-docs docs` and `pytest --nbmake notebooks/`,
           # so changes there must run the suite. Only root-level `*.md` (README,
           # CHANGES, governance docs) is skippable; `docs/**/*.md` is not matched
           # by the `!*.md` exclusion and therefore still triggers tests.
