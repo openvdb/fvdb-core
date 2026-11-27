@@ -669,10 +669,8 @@ bind_grid_batch_ops(py::module &m) {
     m.def(
         "dual_grid",
         [](const GBI &grid, bool excludeBorder) {
-            if (grid.batchSize() == 0) {
-                return fvdb::detail::makeEmptyGridBatchData(grid.device());
-            }
-            // The dual grid lives on the corner lattice: swap primal/dual transforms.
+            // The dual grid lives on the corner lattice: swap primal/dual transforms. (An empty
+            // batch returns an empty batch from buildPaddedGrid.)
             return ops::buildPaddedGrid(grid, 0, 1, excludeBorder, /*dualTransform=*/true);
         },
         py::arg("grid"),
@@ -681,9 +679,6 @@ bind_grid_batch_ops(py::module &m) {
     m.def(
         "build_padded_grid",
         [](const GBI &grid, int bmin, int bmax, bool excludeBorder) {
-            if (grid.batchSize() == 0) {
-                return fvdb::detail::makeEmptyGridBatchData(grid.device());
-            }
             // A plain padded grid stays on the source lattice: keep the source transforms.
             return ops::buildPaddedGrid(grid, bmin, bmax, excludeBorder, /*dualTransform=*/false);
         },
