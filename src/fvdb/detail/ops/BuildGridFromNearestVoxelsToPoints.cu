@@ -1,7 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
@@ -16,12 +15,12 @@
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
+
+#include <utility>
+#include <vector>
 
 namespace fvdb {
 namespace detail {

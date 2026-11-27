@@ -197,6 +197,18 @@ def _tricky_batches():
 # (non-empty, one point, empty), and a 16-member batch.
 _NEAREST_VOXEL_SIZE = 0.5  # power of two: p * (1 / voxel_size) is exact in float32
 _NEAREST_ORIGIN = 0.25  # origin / voxel_size = 0.5 is exact in float32
+# Keys of _nearest_voxel_point_batches(), listed so test parametrization does not build the batches
+# (and reseed torch's global RNG) at import time; a test pins the two against each other.
+_NEAREST_BATCH_NAMES = (
+    "mixed_sizes",
+    "empty_members",
+    "all_empty",
+    "tile_boundaries",
+    "single_grid",
+    "single_point",
+    "single_empty",
+    "larger_batch",
+)
 
 
 def _nearest_voxel_point_batches():
@@ -531,10 +543,13 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         self.assertEqual(cat.grid_count, num_grids + other.grid_count)
         self.assertTrue(torch.equal(cat.ijk.jdata, torch.cat([grid.ijk.jdata, other.ijk.jdata])))
 
-    @parameterized.expand([(name,) for name in _nearest_voxel_point_batches()])
+    def test_nearest_batch_names_match_batches(self):
+        self.assertEqual(_NEAREST_BATCH_NAMES, tuple(_nearest_voxel_point_batches()))
+
+    @parameterized.expand([(name,) for name in _NEAREST_BATCH_NAMES])
     def test_from_nearest_voxels_to_points_matches_expected_and_cpu(self, name):
         # CUDA: the floored-ijk base batch is padded by {0,1}^3 in one batched BoxDilate(0, +1)
-        # pass, with no per-member PadGrid and no host copy of the point offsets.
+        # pass instead of one PadGrid per member.
         pts = _nearest_voxel_point_batches()[name]
         vs, og = _NEAREST_VOXEL_SIZE, _NEAREST_ORIGIN
         result = GridBatch.from_nearest_voxels_to_points(
