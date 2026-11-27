@@ -27,8 +27,13 @@ def reference_redistance(grid: "fvdb.Grid", field: torch.Tensor, band: int, iter
     Mirrors ReinitializeSdf.cu step for step: inactive faces read as +/-band*vx with the sign of the
     voxel doing the reading; interface cells (a strict sign change across an active face in the input)
     relax to the Russo-Smereka distance D with denominator max(central gradient norm, largest
-    one-sided slope, eps), shared with the steepest crossing neighbour; all other cells take the Godunov update with the frozen Peng sign; RK1,
-    SSP Heun, and Shu-Osher RK3 with dt = 0.4 vx and a band clamp after every stage."""
+    one-sided slope, eps), shared with the steepest crossing neighbour; all other cells take the
+    Godunov update with the frozen Peng sign; RK1, SSP Heun, and Shu-Osher RK3 with dt = 0.4 vx and
+    a band clamp after every stage. Unlike the op, `iters` must be explicit (no <= 0 default)."""
+    if order not in (1, 2, 3):
+        raise ValueError(f"order must be 1, 2 or 3, got {order}")
+    if band < 1 or iters < 1:
+        raise ValueError(f"band and iters must be >= 1, got band={band}, iters={iters}")
     vx = float(grid.voxel_size[0])
     band_width = band * vx
     dt = 0.4 * vx
@@ -327,7 +332,7 @@ class ReinitializeSdfTests(unittest.TestCase):
         ijk = grid.ijk
         neg = field < 0
         out = torch.zeros_like(neg)
-        for o in ([-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]):
+        for o in _FACE_OFFSETS:
             idx = grid.ijk_to_index(ijk + torch.tensor(o, device=ijk.device, dtype=ijk.dtype))
             act = idx >= 0
             out[act] |= neg[idx[act]] != neg[act]
