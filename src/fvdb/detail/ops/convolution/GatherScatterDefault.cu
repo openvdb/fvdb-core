@@ -629,6 +629,42 @@ maxPairsPerOffset(torch::Tensor const &offsets, int64_t K) {
 }
 
 // =============================================================================
+// Weight rows
+// =============================================================================
+//
+// Weights arrive as a (C_out, C_in, k0, k1, k2) view. nn.SparseConv3d stores
+// them as (k2, k1, k0, C_in, C_out), so the (K, C_in, C_out) row view below is
+// free for module weights. Other layouts are copied once here.
+
+static torch::Tensor
+weightRows(torch::Tensor const &weights) {
+    int64_t const K = weights.size(2) * weights.size(3) * weights.size(4);
+    return weights.permute({4, 3, 2, 1, 0})
+        .reshape({K, weights.size(1), weights.size(0)})
+        .contiguous();
+}
+
+// Weight row of topology tap k: tap coordinates come from ConvolutionGeometry::tapCoord (k0
+// slowest), and weight rows run k2 slowest.
+static int64_t
+weightRow(int64_t k, ConvolutionGeometry const &geometry) {
+    nanovdb::Coord const t  = geometry.tapCoord(k);
+    nanovdb::Coord const ks = geometry.kernelSize();
+    return (int64_t(t[2]) * ks[1] + t[1]) * ks[0] + t[0];
+}
+
+// The weight gradient in the weights' own layout: a free (C_out, C_in, k0, k1, k2) view of the
+// rows for module weights, which are stored as (k2, k1, k0, C_in, C_out), and one copy into a
+// contiguous tensor for any other layout, so callers can flatten it.
+static torch::Tensor
+weightGradFromRows(torch::Tensor const &rows, torch::Tensor const &weights) {
+    auto const grad =
+        rows.view({weights.size(4), weights.size(3), weights.size(2), rows.size(1), rows.size(2)})
+            .permute({4, 3, 2, 1, 0});
+    return weights.permute({4, 3, 2, 1, 0}).is_contiguous() ? grad : grad.contiguous();
+}
+
+// =============================================================================
 // Precondition checks
 // =============================================================================
 
@@ -688,7 +724,8 @@ struct gs_default_conv_op {
         int64_t const C_out = weights.size(0);
         int64_t const TP    = topo.totalPairs;
 
-        auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
+        auto W = weightRows(weights);
+        ConvolutionGeometry const geometry(topo.kernelSize, topo.stride);
         if (W.scalar_type() != features.scalar_type()) {
             W = W.to(features.scalar_type());
         }
@@ -715,7 +752,7 @@ struct gs_default_conv_op {
             auto D_k = buf_D.slice(0, 0, n_k);
 
             gsDefaultGather(tg, features, A_k, topo.gatherIndices.slice(0, start, end), n_k, C_in);
-            mmOutSafe(D_k, A_k, W[k]);
+            mmOutSafe(D_k, A_k, W[weightRow(k, geometry)]);
             gsDefaultScatterAdd(
                 tg, D_k, output, topo.scatterIndices.slice(0, start, end), n_k, C_out);
         }
@@ -759,7 +796,8 @@ struct gs_default_backward_op {
         int64_t const C_out = weights.size(0);
         int64_t const TP    = topo.totalPairs;
 
-        auto W = weights.permute({2, 3, 4, 1, 0}).reshape({K, C_in, C_out}).contiguous();
+        auto W = weightRows(weights);
+        ConvolutionGeometry const geometry(topo.kernelSize, topo.stride);
         if (W.scalar_type() != features.scalar_type()) {
             W = W.to(features.scalar_type());
         }
@@ -769,11 +807,7 @@ struct gs_default_backward_op {
         auto grad_W_flat = torch::zeros({K, C_in, C_out}, features.options());
 
         if (O == 0 || K == 0 || TP == 0) {
-            auto ks           = topo.kernelSize;
-            auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                    .permute({4, 3, 0, 1, 2})
-                                    .contiguous();
-            return {grad_features, grad_weights};
+            return {grad_features, weightGradFromRows(grad_W_flat, weights)};
         }
 
         auto off_acc = topo.offsets.accessor<int64_t, 1>();
@@ -800,19 +834,15 @@ struct gs_default_backward_op {
             gsDefaultGather(tg, features, fb_k, gi_k, n_k, C_in);
             gsDefaultGather(tg, grad_output, gb_k, si_k, n_k, C_out);
 
-            mmOutSafe(gf_k, gb_k, W[k].t());
+            auto const row = weightRow(k, geometry);
+            mmOutSafe(gf_k, gb_k, W[row].t());
             gsDefaultScatterAdd(tg, gf_k, grad_features, gi_k, n_k, C_in);
 
-            auto gw_k = grad_W_flat[k];
+            auto gw_k = grad_W_flat[row];
             mmOutSafe(gw_k, fb_k.t(), gb_k);
         }
 
-        auto ks           = topo.kernelSize;
-        auto grad_weights = grad_W_flat.reshape({ks[0], ks[1], ks[2], C_in, C_out})
-                                .permute({4, 3, 0, 1, 2})
-                                .contiguous();
-
-        return {grad_features, grad_weights};
+        return {grad_features, weightGradFromRows(grad_W_flat, weights)};
     }
 
     using space      = axes<torch_full_device_axis, torch_full_float_stype_axis>;
