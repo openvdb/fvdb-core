@@ -62,7 +62,46 @@ def _ijk_sets(grid: GridBatch):
     return [set(map(tuple, t.cpu().to(torch.int64).tolist())) for t in grid.ijk.unbind()]
 
 
-# Run by test_failed_run_releases_builder_scratch in a fresh process; see the comment there.
+def _run_with_caching_allocator(script: str) -> subprocess.CompletedProcess:
+    """Runs `script` in a fresh Python process with PyTorch's caching allocator on.
+
+    The tests that measure device memory need it: CI sets PYTORCH_NO_CUDA_MEMORY_CACHING=1, under
+    which torch.cuda.memory_allocated() and max_memory_allocated() report 0 and
+    set_per_process_memory_fraction() is not enforced. A fresh process also starts with an empty
+    cache, so free blocks cached by earlier tests cannot serve allocations a cap should refuse.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "PYTORCH_NO_CUDA_MEMORY_CACHING"}
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+# Run by test_far_flung_voxels_do_not_size_upper_readback_by_bbox; see _run_with_caching_allocator.
+_FAR_FLUNG_PEAK_SCRIPT = """
+import torch
+from fvdb import GridBatch, JaggedTensor
+
+ijk = torch.tensor([[-1_000_000] * 3, [1_000_000] * 3], dtype=torch.int32, device="cuda")
+grid = GridBatch.from_ijk(JaggedTensor([ijk]), voxel_sizes=1.0, origins=0.0)
+torch.cuda.synchronize()
+torch.cuda.reset_peak_memory_stats()
+baseline = torch.cuda.memory_allocated()
+assert baseline > 0, "memory stats are not being recorded"
+grid.refined_grid(2)
+grid.coarsened_grid(2)
+torch.cuda.synchronize()
+peak = torch.cuda.max_memory_allocated() - baseline
+assert peak < 256 * 1024 * 1024, f"peak device allocation {peak} bytes"
+print("ok")
+"""
+
+
+# Run by test_failed_run_releases_builder_scratch; see _run_with_caching_allocator.
 _FAILED_RUN_SCRIPT = """
 import torch
 from fvdb import GridBatch, JaggedTensor
@@ -73,6 +112,7 @@ device = torch.device("cuda", torch.cuda.current_device())
 torch.cuda.synchronize()
 reserved = torch.cuda.memory_reserved(device)
 baseline = torch.cuda.memory_allocated(device)
+assert baseline > 0, "memory stats are not being recorded"
 total = torch.cuda.get_device_properties(device).total_memory
 torch.cuda.set_per_process_memory_fraction((reserved + 512 * 1024 * 1024) / total, device)
 try:
@@ -285,16 +325,15 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
     def test_far_flung_voxels_do_not_size_upper_readback_by_bbox(self):
         # Two voxels at +-1e6 span about 489^3 root tiles of bbox but hold only two upper nodes.
         # Bounding the upper-node readback by bbox volume alone asked for about 2.8 GB here.
+        # The peak is measured in a fresh process (see _run_with_caching_allocator); the outputs
+        # are checked here.
+        result = _run_with_caching_allocator(_FAR_FLUNG_PEAK_SCRIPT)
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        self.assertIn("ok", result.stdout)
         coords = [torch.tensor([[-1_000_000] * 3, [1_000_000] * 3], dtype=torch.int32)]
         grid = _build(coords, "cuda")
-        torch.cuda.synchronize()
-        torch.cuda.reset_peak_memory_stats()
-        baseline = torch.cuda.memory_allocated()
         refined = grid.refined_grid(2)
         coarsened = grid.coarsened_grid(2)
-        torch.cuda.synchronize()
-        peak = torch.cuda.max_memory_allocated() - baseline
-        self.assertLess(peak, 256 * 1024 * 1024, f"peak device allocation {peak} bytes")
         self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "far-flung refine x2")
         self._check_against_expected(coarsened, [_expected_coarsen_ijk(c, 2) for c in coords], "far-flung coarsen x2")
 
@@ -302,19 +341,9 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         # One voxel pair per source upper node, 4096 apart in x, so refining needs 128 speculative
         # root tiles and about 2 GiB of densified lower masks. Cap the allocator well below that:
         # the run fails after allocating its roots and upper masks, and must not leave them held
-        # by the cached builder. The next run must still work.
-        #
-        # The memory fraction caps reserved memory and is only checked when the caching allocator
-        # calls cudaMalloc, so free space cached by earlier tests would serve the masks without
-        # hitting it, and empty_cache() cannot release a segment that still holds a live tensor.
-        # A fresh process starts with an empty cache, so the cap binds.
-        result = subprocess.run(
-            [sys.executable, "-c", _FAILED_RUN_SCRIPT],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        # by the cached builder. The next run must still work. The cap needs the caching allocator
+        # and an empty cache, so this runs in a fresh process (see _run_with_caching_allocator).
+        result = _run_with_caching_allocator(_FAILED_RUN_SCRIPT)
         self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
         self.assertIn("ok", result.stdout)
 
