@@ -178,6 +178,9 @@ ConfigureTest(VbmCacheTest "VbmCacheTest.cu")
 target_compile_options(VbmCacheTest_obj PRIVATE
   $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-unknown-pragmas>
   $<$<COMPILE_LANGUAGE:CXX>:-Wno-unknown-pragmas>)
+ConfigureTest(AtomicFetchIncrementTest "AtomicFetchIncrementTest.cu")
+# Uses the dispatch headers directly; fvdb does not re-export their include paths.
+target_link_libraries(AtomicFetchIncrementTest_obj PRIVATE dispatch)
 if(NANOVDB_EDITOR_INSTALLED)
   #ConfigureTest(ViewerTest "ViewerTest.cpp")
 endif()

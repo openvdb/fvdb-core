@@ -10,7 +10,10 @@
     Minkowski sum S (+) {0,1}^3 (positive octant) or S (+) {-1,0}^3 (negative octant).
     A general padded grid S (+) [bmin,bmax]^3 is obtained by composing `bmax` positive
     passes and `-bmin` negative passes (Minkowski sums by boxes compose). `dual_grid` is
-    exactly one positive pass.
+    exactly one positive pass. fVDB's `dual_grid` / `build_padded_grid` no longer use this
+    per-grid pass on CUDA: without exclude_border they are built batch-wide by
+    BatchedTopologyBuilder's BoxDilate passes (same octant decomposition); with exclude_border
+    they use this file's `ErodeKeepMaskFunctor` per member.
 
     It is closely modeled on `nanovdb::tools::cuda::DilateGrid` (symmetric 26-connected
     dilation): the driver, root speculation, and TopologyBuilder pipeline are reused
@@ -38,7 +41,10 @@
 
 #include <cub/cub.cuh>
 
+#include <cstddef>
 #include <map>
+#include <stdexcept>
+#include <utility>
 
 namespace fvdb {
 namespace detail {

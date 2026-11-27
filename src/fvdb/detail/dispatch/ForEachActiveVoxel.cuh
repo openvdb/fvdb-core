@@ -4,8 +4,21 @@
 // ForEachActiveVoxel.cuh — Device-unified active-voxel iteration.
 //
 // Iterates over every active voxel in a GridBatchData, calling a callback
-// for each one.  Device dispatch (CPU thread pool / CUDA grid-stride kernel /
-// PrivateUse1 multi-GPU) is handled internally via dispatch::for_each.
+// for each one.  The leaf scan dispatches by device (CPU thread pool / CUDA
+// grid-stride kernel / PrivateUse1 multi-GPU) via dispatch::for_each; the VBM
+// path launches its own CUDA kernel (launchBatchVbmKernel).
+//
+// Two iteration strategies (ActiveVoxelIteration):
+//   LeafScan  One thread per leaf slot (totalLeaves * 512), skipping inactive
+//             slots. Every device.
+//   Vbm       On CUDA, one thread per active voxel through the batch's cached
+//             VoxelBlockManagers (see detail/VbmCache.h), independent of leaf
+//             occupancy. Other devices fall back to LeafScan.
+// LeafScan is the default; callers opt into Vbm per call site after measuring
+// it. Before opting in, check the callback for contended global atomics: the
+// VBM packs every lane of a warp with an active voxel, so an atomic on a few
+// shared addresses that the leaf scan's inactive lanes thinned out collides
+// 32 ways (aggregate it, e.g. dispatch::atomic_fetch_increment_i32).
 //
 // Callback signature:
 //
@@ -16,7 +29,7 @@
 // overloads for device-specific specialization when needed.
 //
 // The isActive check is performed inside the tool — the callback is only
-// invoked for truly active voxels, matching the contract of the former
+// invoked for truly active voxels, matching the contract of
 // BasePerActiveVoxelProcessor.
 //
 #ifndef FVDB_DETAIL_DISPATCH_FOREACHACTIVEVOXEL_CUH
@@ -27,14 +40,34 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/detail/dispatch/GridAccessor.h>
+#include <fvdb/detail/utils/cuda/ForEachVbmCUDA.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
+#include <concepts>
 #include <cstdint>
 
 namespace fvdb {
 namespace detail {
 namespace dispatch {
+
+/// @brief How forEachActiveVoxel walks the active voxels. See the file comment.
+enum class ActiveVoxelIteration { LeafScan, Vbm };
+
+namespace _private {
+
+template <typename Tag, typename Func>
+    requires ::dispatch::with_type<Tag, torch::DeviceType> &&
+             std::invocable<Func &, Tag, JIdxType, nanovdb::Coord, int64_t, GridBatchData::Accessor>
+__global__ void __launch_bounds__(::fvdb::_private::kVbmForEachBlockDim)
+forEachActiveVoxelVbmKernel(BatchVbm vbm, BatchVbmLayout layout, Tag tg, Func func) {
+    ::fvdb::_private::forEachBatchVbmVoxel(
+        vbm, layout, [&](uint32_t gridIdx, nanovdb::Coord const &ijk, int64_t voxelIndex) {
+            func(tg, JIdxType(gridIdx), ijk, voxelIndex, layout.acc);
+        });
+}
+
+} // namespace _private
 
 /// @brief Iterate over every active voxel in a grid batch.
 ///
@@ -42,13 +75,28 @@ namespace dispatch {
 /// @tparam Func  Callable with signature
 ///               void(Tag, JIdxType batchIdx, nanovdb::Coord, int64_t, GridBatchData::Accessor).
 ///
-/// @param tg    Tag instance (forwarded to both dispatch::for_each and the callback).
-/// @param grid  The grid batch to iterate over.
-/// @param func  Callback invoked once per active voxel.
+/// @param tg         Tag instance, forwarded to the callback (and to dispatch::for_each on the
+///                   leaf-scan path).
+/// @param grid       The grid batch to iterate over.
+/// @param func       Callback invoked once per active voxel.
+/// @param iteration  LeafScan (default) or Vbm. Vbm applies on CUDA only and builds the batch's
+///                   VoxelBlockManagers on first use. Both call func once per active voxel with
+///                   the same arguments; neither promises an order across threads.
 template <typename Tag, typename Func>
     requires ::dispatch::with_type<Tag, torch::DeviceType>
 void
-forEachActiveVoxel(Tag tg, GridBatchData const &grid, Func func) {
+forEachActiveVoxel(Tag tg,
+                   GridBatchData const &grid,
+                   Func func,
+                   ActiveVoxelIteration iteration = ActiveVoxelIteration::LeafScan) {
+    if constexpr (::dispatch::tag_get<torch::DeviceType>(Tag{}) == torch::kCUDA) {
+        if (iteration == ActiveVoxelIteration::Vbm) {
+            ::fvdb::launchBatchVbmKernel(
+                grid, &_private::forEachActiveVoxelVbmKernel<Tag, Func>, tg, func);
+            return;
+        }
+    }
+
     constexpr int64_t VOXELS_PER_LEAF =
         static_cast<int64_t>(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES);
 

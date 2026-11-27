@@ -10,6 +10,7 @@
 #include <fvdb/detail/GridBatchDataFactory.h>
 #include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
+#include <fvdb/detail/ops/convolution/MaskedIGemm.h>
 #include <fvdb/detail/ops/convolution/PredGatherIGemm.h>
 #include <fvdb/detail/utils/nanovdb/TorchNanoConversions.h>
 
@@ -672,6 +673,132 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         py::arg("output_grid"),
         py::arg("kernel_size"),
         py::arg("stride"));
+
+    // --- Masked implicit GEMM ---
+
+    using MIGTopo = fvdb::detail::ops::MaskedIGemmTopology;
+    py::class_<MIGTopo>(m, "MaskedIGemmTopology")
+        .def_readonly("neighbor_map", &MIGTopo::neighborMap)
+        .def_readonly("sorted_rows", &MIGTopo::sortedRows)
+        .def_readonly("row_masks", &MIGTopo::rowMasks)
+        .def_readonly("pair_in", &MIGTopo::pairIn)
+        .def_readonly("pair_out", &MIGTopo::pairOut)
+        .def_readonly("pair_offsets", &MIGTopo::pairOffsets)
+        .def_readonly("output_total_voxels", &MIGTopo::outputTotalVoxels)
+        .def_readonly("feature_total_voxels", &MIGTopo::featureTotalVoxels)
+        .def_property_readonly("reverse_map",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.reverse)
+                                       return std::nullopt;
+                                   return t.reverse->neighborMap;
+                               })
+        .def_property_readonly("neighbor_offsets",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.neighborOffsets.defined())
+                                       return std::nullopt;
+                                   return t.neighborOffsets;
+                               })
+        .def_property_readonly("reverse_offsets",
+                               [](const MIGTopo &t) -> std::optional<torch::Tensor> {
+                                   if (!t.reverse || !t.reverse->neighborOffsets.defined())
+                                       return std::nullopt;
+                                   return t.reverse->neighborOffsets;
+                               })
+        .def_readonly("kernel_volume", &MIGTopo::kernelVolume)
+        .def_property_readonly("kernel_size", [](const MIGTopo &t) {
+            return std::vector<int>{t.kernelSize[0], t.kernelSize[1], t.kernelSize[2]};
+        });
+
+    m.def(
+        "masked_igemm_build_topology",
+        [](const fvdb::GridBatchData &featureGrid,
+           const fvdb::GridBatchData &outputGrid,
+           const torch::Tensor &kernelSize,
+           const torch::Tensor &stride) -> MIGTopo {
+            return fvdb::detail::ops::maskedIGemmSparseConvTopology(
+                featureGrid, outputGrid, pyToCoord(kernelSize), pyToCoord(stride));
+        },
+        "Build the masked implicit GEMM topology from output_grid's voxels to feature_grid's.",
+        py::arg("feature_grid"),
+        py::arg("output_grid"),
+        py::arg("kernel_size"),
+        py::arg("stride"));
+
+    m.def(
+        "masked_igemm_conv",
+        [](torch::Tensor features,
+           torch::Tensor weights,
+           std::optional<torch::Tensor> bias,
+           const MIGTopo &topo,
+           bool transposed,
+           bool precise) -> torch::Tensor {
+            return fvdb::detail::ops::maskedIGemmSparseConv(
+                features, weights, bias, topo, transposed, precise);
+        },
+        "Masked implicit GEMM sparse convolution with an optional fused bias. transposed runs "
+        "from the topology's output rows to its input rows. precise computes float32 as 3xTF32.",
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("bias"),
+        py::arg("topology"),
+        py::arg("transposed") = false,
+        py::arg("precise")    = false);
+
+    m.def(
+        "masked_igemm_conv_backward",
+        [](torch::Tensor grad_output,
+           torch::Tensor features,
+           torch::Tensor weights,
+           const MIGTopo &topo,
+           bool need_features,
+           bool need_weights,
+           bool transposed,
+           bool precise) -> std::tuple<std::optional<torch::Tensor>, std::optional<torch::Tensor>> {
+            auto [gf, gw] = fvdb::detail::ops::maskedIGemmSparseConvBackward(grad_output,
+                                                                             features,
+                                                                             weights,
+                                                                             topo,
+                                                                             need_features,
+                                                                             need_weights,
+                                                                             transposed,
+                                                                             precise);
+            return {gf.defined() ? std::optional<torch::Tensor>(gf) : std::nullopt,
+                    gw.defined() ? std::optional<torch::Tensor>(gw) : std::nullopt};
+        },
+        "Backward of masked_igemm_conv: (grad_features, grad_weights), None where not needed.",
+        py::arg("grad_output"),
+        py::arg("features"),
+        py::arg("weights"),
+        py::arg("topology"),
+        py::arg("need_features") = true,
+        py::arg("need_weights")  = true,
+        py::arg("transposed")    = false,
+        py::arg("precise")       = false);
+
+    m.def("masked_igemm_supports",
+          &fvdb::detail::ops::maskedIGemmSupports,
+          "True when masked_igemm_conv supports these channel counts and dtype on the device.",
+          py::arg("in_channels"),
+          py::arg("out_channels"),
+          py::arg("dtype"),
+          py::arg("device"));
+
+    m.def(
+        "_masked_igemm_set_test_overrides",
+        [](std::optional<int> splits,
+           std::optional<int> weightRowSplits,
+           std::optional<bool> localRowOrder,
+           std::optional<bool> vbmIteration) {
+            fvdb::detail::ops::setMaskedIGemmTestOverrides(
+                {splits, weightRowSplits, localRowOrder, vbmIteration});
+        },
+        "For tests: force masked_igemm choices that otherwise depend on grid size, kernel size and the "
+        "device. "
+        "Call with no arguments to restore the heuristics.",
+        py::arg("splits")            = py::none(),
+        py::arg("weight_row_splits") = py::none(),
+        py::arg("local_row_order")   = py::none(),
+        py::arg("vbm_iteration")     = py::none());
 }
 
 TORCH_LIBRARY(fvdb, m) {

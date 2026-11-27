@@ -15,8 +15,9 @@
 #include <fvdb/detail/utils/cuda/ForEachPrivateUse1.cuh>
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 #include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
-#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
+#include <fvdb/detail/utils/nanovdb/PadGrid.cuh> // ErodeKeepMaskFunctor (exclude_border)
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
@@ -29,7 +30,9 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 
+#include <limits>
 #include <optional>
+#include <vector>
 
 namespace fvdb {
 namespace detail {
@@ -234,22 +237,6 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
                                                 : nanovdb::mergeGrids(batchHandles));
 }
 
-// One unit padding pass (Minkowski sum by {0,1}^3 if positive, else {-1,0}^3), building the
-// padded topology directly from the source leaf masks via TopologyBuilder (no coordinate list).
-// The result is allocated from `proto`'s resource on `stream`, which must be `proto`'s retained
-// stream.
-static GridStorage::DeviceHandle
-padOncePass(nanovdb::OnIndexGrid *grid,
-            bool positive,
-            const DeviceGridBuffer &proto,
-            cudaStream_t stream) {
-    fvdb::detail::morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-        grid, positive, stream);
-    auto handle = op.getHandle(proto);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-    return handle;
-}
-
 // One unit erosion pass (exclude-border padding). Computes a per-leaf "keep" mask sidecar
 // (voxel survives iff its whole octant neighborhood is active) then prunes the source grid to
 // it via PruneGrid. The keep mask is a subset of the source, so the result is exact. Returns
@@ -314,10 +301,8 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
                                       bool excludeBorder) {
     const torch::Device device = baseBatchHdl.device();
     c10::cuda::CUDAGuard deviceGuard(device);
-    // The grids are built and their storage retained on the device's current torch stream; the
-    // prototype carries that stream and the device into every allocation the builders make.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+    // The grids are built and their storage retained on the device's current torch stream.
+    const cudaStream_t stream = storageStream(device);
 
     // Pad by [bmin, bmax]^3 = (bmax positive unit passes) followed by (-bmin negative unit
     // passes). Minkowski sums / erosions by boxes compose, so the order is immaterial.
@@ -330,13 +315,36 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     // selected grids: a byte copy with header fix-up, no radix sort and no joffsets().cpu() sync.
     // (contiguousGridStorage copies by logical grid, so a sliced / non-contiguous batch, whose
     // storage holds MORE grids than batchSize(), comes out right too.) This is rare and degenerate
-    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does. The tail
-    // then applies the transform fix-up (dual swap or verbatim copy, per `dualTransform`).
+    // -- only build_padded_grid(0, 0) reaches it; dual_grid, being (0, 1), never does.
+    // Whichever path below builds the storage, the caller (buildPaddedGrid) then applies the
+    // transform fix-up (dual swap or verbatim copy, per `dualTransform`) to it.
     if (totalPasses == 0) {
         return ops::contiguousGridStorage(baseBatchHdl);
     }
 
-    // Build one grid per batch item, then lay them end to end in one storage.
+    // Padding without erosion (dual_grid, build_padded_grid(bmin, bmax)) is a Minkowski sum with
+    // the box [bmin, bmax]^3, so the whole batch is built in chained batched BoxDilate passes
+    // (issue #775): `bmax` passes with the positive octant {0,1}^3, then `-bmin` passes with the
+    // negative octant {-1,0}^3. A pass runs in as few TopologyBuilder runs as
+    // FVDB_TOPOLOGY_MAX_TILES allows, and the last pass's runs end up in one storage; empty members
+    // become valid empty grids inline. Sliced / non-contiguous batches are handled by the
+    // view-aware source pointers.
+    if (!excludeBorder) {
+        std::vector<batched::TopologyPassSpec> passes;
+        passes.reserve(totalPasses);
+        passes.insert(passes.end(),
+                      numPositive,
+                      batched::TopologyPassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1)));
+        passes.insert(passes.end(),
+                      numNegative,
+                      batched::TopologyPassSpec::boxDilate(nanovdb::Coord(-1), nanovdb::Coord(0)));
+        return batched::batchedTopologyStorage(baseBatchHdl, passes, stream);
+    }
+
+    // Erosion (exclude_border) stays on the per-member path: build one grid per batch item, then
+    // lay them end to end in one storage. The prototype carries the stream and the device into
+    // every allocation the per-member builders make.
+    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
     GridStorageParts parts(device, stream, baseBatchHdl.batchSize());
     for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
         if (baseBatchHdl.numVoxelsAt(i) == 0) {
@@ -348,38 +356,34 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         // non-contiguous batches; the storage's own deviceGridAt indexes physically).
         nanovdb::OnIndexGrid *grid = baseBatchHdl.deviceGridPtrAt(i);
 
-        // The passes chain on the device handle; only the final one is wrapped as storage.
-        // `handle` is empty (default-constructed) until the first pass produces a grid.
+        // The erosion passes chain on the device handle; only the final one is wrapped as
+        // storage. `handle` is empty (default-constructed) until the first pass produces a grid.
         GridStorage::DeviceHandle handle;
         bool haveHandle    = false;
         bool erodedToEmpty = false;
         for (int p = 0; p < totalPasses; ++p) {
             const bool positive = (p < numPositive);
-            if (!excludeBorder) {
-                handle = padOncePass(grid, positive, proto, stream);
-            } else {
-                const uint32_t leafCount =
-                    haveHandle
-                        ? nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
-                              grid)
-                              .mNodeCount[0]
-                        : baseBatchHdl.numLeavesAt(i);
-                if (leafCount == 0) {
-                    // No leaves to erode -- (defensively) a leaf-free tile grid, or a prior pass
-                    // left a grid without leaves. Without a handle yet, the item is empty.
-                    if (!haveHandle) {
-                        erodedToEmpty = true;
-                    }
-                    break;
-                }
-                auto eroded = erodeOncePass(grid, leafCount, positive, device, proto, stream);
-                if (!eroded) {
-                    // Erosion removed every voxel; further passes cannot bring anything back.
+            const uint32_t leafCount =
+                haveHandle
+                    ? nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
+                          grid)
+                          .mNodeCount[0]
+                    : baseBatchHdl.numLeavesAt(i);
+            if (leafCount == 0) {
+                // No leaves to erode -- (defensively) a leaf-free tile grid, or a prior pass
+                // left a grid without leaves. Without a handle yet, the item is empty.
+                if (!haveHandle) {
                     erodedToEmpty = true;
-                    break;
                 }
-                handle = std::move(*eroded);
+                break;
             }
+            auto eroded = erodeOncePass(grid, leafCount, positive, device, proto, stream);
+            if (!eroded) {
+                // Erosion removed every voxel; further passes cannot bring anything back.
+                erodedToEmpty = true;
+                break;
+            }
+            handle     = std::move(*eroded);
             haveHandle = true;
             grid       = handle.deviceGrid<nanovdb::ValueOnIndex>();
         }
@@ -401,12 +405,9 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
                                              int bmax,
                                              bool excludeBorder) {
     // Multi-GPU / PrivateUse1 keeps the coordinate-list path (TopologyBuilder-based morphology
-    // is single-device). The exclude-border variant was never supported here (its old code path
-    // called a CUDA-only helper that asserts is_cuda), so reject it explicitly rather than
-    // crash obscurely.
-    TORCH_CHECK(!excludeBorder,
-                "dual_grid/build_padded_grid with exclude_border=True is not supported on "
-                "PrivateUse1 (multi-GPU) devices");
+    // is single-device). buildPaddedGrid rejects exclude_border, and boxes whose volume overflows
+    // paddedIJKForGrid's int32 count, on PrivateUse1 before dispatch.
+    TORCH_INTERNAL_ASSERT(!excludeBorder);
     nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
     JaggedTensor coords     = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
     return ops::_createNanoGridFromIJK(coords);
@@ -437,6 +438,41 @@ buildPaddedGrid(
                       bmin,
                       ", bmax=",
                       bmax);
+    // Keeps -bmin and bmax - bmin (the pass count) within int, and keeps the CPU paths'
+    // `for (int d = bmin; d <= bmax; ++d)` loops from overflowing. It does not bound the work: a
+    // pad by k runs k unit passes and grows each voxel's neighborhood as k^3.
+    TORCH_CHECK_VALUE(
+        bmax < std::numeric_limits<int>::max() &&
+            int64_t(bmax) - int64_t(bmin) <= int64_t(std::numeric_limits<int>::max()),
+        "buildPaddedGrid requires bmax < INT_MAX and bmax - bmin <= INT_MAX, got bmin=",
+        bmin,
+        ", bmax=",
+        bmax);
+    // The exclude-border variant was never supported on PrivateUse1 (its old code path called a
+    // CUDA-only helper that asserts is_cuda), so reject it explicitly, for any batch size, rather
+    // than crash obscurely.
+    TORCH_CHECK_NOT_IMPLEMENTED(
+        !(excludeBorder && baseBatchHdl.device().is_privateuseone()),
+        "dual_grid/build_padded_grid with exclude_border=True is not supported on "
+        "PrivateUse1 (multi-GPU) devices");
+    // PrivateUse1's coordinate-list path (paddedIJKForGrid) sizes its per-voxel output with an
+    // int32 box volume.
+    if (baseBatchHdl.device().is_privateuseone()) {
+        const int64_t side = int64_t(bmax) - int64_t(bmin) + 1;
+        // side <= 2048 first, so side^3 cannot overflow int64 (side can reach 2^31 here).
+        TORCH_CHECK_VALUE(side <= 2048 &&
+                              side * side * side <= int64_t(std::numeric_limits<int32_t>::max()),
+                          "build_padded_grid on PrivateUse1 requires (bmax - bmin + 1)^3 <= "
+                          "INT32_MAX, got bmin=",
+                          bmin,
+                          ", bmax=",
+                          bmax);
+    }
+    // An empty batch pads to an empty batch on every device (matching clip / clone); the CUDA
+    // batched path would otherwise reject a zero-grid source.
+    if (baseBatchHdl.batchSize() == 0) {
+        return makeEmptyGridBatchData(baseBatchHdl.device());
+    }
     std::vector<nanovdb::Vec3d> voxS, voxO;
     baseBatchHdl.gridVoxelSizesAndOrigins(voxS, voxO);
     GridStorage built = FVDB_DISPATCH_KERNEL(baseBatchHdl.device(), [&]() {

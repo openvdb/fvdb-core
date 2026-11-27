@@ -9,7 +9,7 @@ convolution, or transposed convolution, but can represent either.
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, overload
 
@@ -31,6 +31,7 @@ _ANY_CHANNEL_PAIRS: tuple[tuple[int, int], ...] = ()
 _TRANSFORM_COMPATIBILITY_ATOL = 1.0e-6
 _TRANSFORM_COMPATIBILITY_RTOL = 1.0e-6
 _WARNED_INCOMPLETE_COVERAGE_GEOMETRIES: set[tuple[tuple[int, int, int], tuple[int, int, int]]] = set()
+_WARNED_MASKED_IGEMM_FALLBACKS: set[str] = set()
 _DENSE_BACKEND_DISABLED_MESSAGE = (
     "The dense convolution backend is disabled because it does not yet implement the canonical sparse geometry "
     "and public transposed-weight layout; use backend='default' or backend='gather_scatter'."
@@ -84,6 +85,15 @@ class ConvolutionTransformCompatibility:
     registration_offset: torch.Tensor | None
 
 
+def _finite_grid_transform(grid_data) -> bool:
+    """True when a grid's origins are finite and its voxel sizes finite and nonzero."""
+    return bool(
+        torch.isfinite(grid_data.origins).all()
+        and torch.isfinite(grid_data.voxel_sizes).all()
+        and (grid_data.voxel_sizes != 0).all()
+    )
+
+
 def _transform_compatibility(
     fine_grid: GridBatch, coarse_grid: GridBatch, geometry: _fvdb_cpp.ConvolutionGeometry
 ) -> ConvolutionTransformCompatibility:
@@ -108,6 +118,25 @@ def _transform_compatibility(
     # avoid losing registration precision through GridBatch's float32 view.
     fine_data = _get_grid_data(fine_grid)
     coarse_data = _get_grid_data(coarse_grid)
+
+    # A stride-1 transform between a grid and itself is compatible by construction, provided the
+    # transform is finite; other grids take the general path, which rejects non-finite ones.
+    if (
+        all(step == 1 for step in geometry.stride)
+        and fine_data.is_same(coarse_data)
+        and _finite_grid_transform(fine_data)
+    ):
+        return ConvolutionTransformCompatibility(
+            fine_grid_count=fine_grid.grid_count,
+            coarse_grid_count=coarse_grid.grid_count,
+            same_batch_size=True,
+            same_device=True,
+            scale_compatible=True,
+            registration_integer=True,
+            registration_zero=True,
+            compatible=True,
+            registration_offset=torch.zeros_like(fine_data.origins),
+        )
     fine_voxel_sizes = fine_data.voxel_sizes
     coarse_voxel_sizes = coarse_data.voxel_sizes
     fine_origins = fine_data.origins
@@ -288,6 +317,8 @@ def _coverage_report(
             backend.gs_topology.scatter_indices,
             minlength=backend.gs_topology.output_total_voxels,
         )
+    elif isinstance(backend, _MaskedIGemmBackend):
+        input_degrees, output_degrees = _masked_igemm_degrees(backend.topology)
     else:
         return None
 
@@ -327,10 +358,61 @@ def _swap_coverage_report(report: ConvolutionCoverageReport) -> ConvolutionCover
     )
 
 
-def _output_zero_count(backend: "_Backend") -> int | None:
-    """Return the output zero-degree count without constructing full diagnostics."""
+# Rows per chunk when counting neighbor-map degrees. Reductions over a bool tensor accumulate in
+# int64, so counting a whole [N, K] map at once would allocate 8 bytes per entry.
+_DEGREE_CHUNK_ROWS = 1 << 20
+
+
+def _row_degrees(rows: torch.Tensor) -> torch.Tensor:
+    """Count each row's non-negative entries, a chunk of rows at a time."""
+    if rows.shape[0] == 0:
+        return torch.zeros(0, dtype=torch.int64, device=rows.device)
+    return torch.cat([(chunk >= 0).sum(dim=1) for chunk in rows.split(_DEGREE_CHUNK_ROWS)])
+
+
+def _zero_degree_rows(rows: torch.Tensor) -> int:
+    """Count rows with no non-negative entry, a chunk of rows at a time."""
+    return sum(int((~(chunk >= 0).any(dim=1)).sum().item()) for chunk in rows.split(_DEGREE_CHUNK_ROWS))
+
+
+def _masked_igemm_degrees(topology: _fvdb_cpp.MaskedIGemmTopology) -> tuple[torch.Tensor, torch.Tensor]:
+    """Input and output degrees from the neighbor map and its reverse.
+
+    A submanifold map stores no reverse because it is symmetric (row o has input i at tap k exactly
+    when row i has input o at tap K-1-k), so each voxel's input degree equals its output degree.
+    """
+    offsets = topology.neighbor_offsets
+    if offsets is not None:
+        # Kernels of more than 32 taps keep compact maps: degrees are offset differences.
+        output_degrees = (offsets[1:] - offsets[:-1]).long()
+        reverse_offsets = topology.reverse_offsets
+        input_degrees = (
+            output_degrees if reverse_offsets is None else (reverse_offsets[1:] - reverse_offsets[:-1]).long()
+        )
+        return input_degrees, output_degrees
+    output_degrees = _row_degrees(topology.neighbor_map)
+    reverse = topology.reverse_map
+    input_degrees = output_degrees if reverse is None else _row_degrees(reverse)
+    return input_degrees, output_degrees
+
+
+def _output_zero_count(backend: "_Backend", transposed: bool = False) -> int | None:
+    """Return the output zero-degree count without constructing full diagnostics.
+
+    ``transposed`` marks a masked_igemm backend whose plan runs from the topology's output rows to
+    its input rows; other backends store their topology in the plan's own direction.
+    """
     if isinstance(backend, _MatmulBackend):
         return 0
+    if isinstance(backend, _MaskedIGemmBackend):
+        topology = backend.topology
+        if topology.reverse_map is None:
+            # Every row of a submanifold map has its center tap.
+            return 0
+        offsets = topology.reverse_offsets if transposed else topology.neighbor_offsets
+        if offsets is not None:
+            return int((offsets[1:] == offsets[:-1]).sum().item())
+        return _zero_degree_rows(topology.reverse_map if transposed else topology.neighbor_map)
     if isinstance(backend, _GatherScatterBackend):
         topology = backend.topology
     elif isinstance(backend, _PredGatherIGemmBackend):
@@ -346,11 +428,14 @@ def _output_zero_count(backend: "_Backend") -> int | None:
 
 
 def _validate_coverage_policy(
-    backend: "_Backend", topology_policy: ConvolutionTopologyPolicy, strict_output_coverage: bool
+    backend: "_Backend",
+    topology_policy: ConvolutionTopologyPolicy,
+    strict_output_coverage: bool,
+    transposed: bool = False,
 ) -> None:
     if topology_policy is not ConvolutionTopologyPolicy.COMPLETE and not strict_output_coverage:
         return
-    output_zero_count = _output_zero_count(backend)
+    output_zero_count = _output_zero_count(backend, transposed)
     if output_zero_count is None:
         return
     if topology_policy is ConvolutionTopologyPolicy.COMPLETE and output_zero_count:
@@ -493,6 +578,55 @@ class _PredGatherIGemmConvFn(torch.autograd.Function):
         return grad_feat, grad_w, None, None, None, None, None
 
 
+def _bias_gradient(grad_output: torch.Tensor) -> torch.Tensor:
+    """Sum of grad_output over its rows, the bias gradient.
+
+    16-bit gradients sum as a cuBLAS matrix-vector product with a ones vector, up to 3x faster than
+    ``sum(0)`` on tall gradients. cuBLAS accumulates in float32; when it splits the rows, PyTorch's
+    ``allow_fp16_reduced_precision_reduction`` / ``allow_bf16_reduced_precision_reduction`` settings
+    decide whether the partial sums combine in float32, as for any 16-bit matmul. ``sum(0)`` serves
+    float32, where a product would follow the TF32 setting, and deterministic mode, where older
+    PyTorch versions reject cuBLAS calls unless ``CUBLAS_WORKSPACE_CONFIG`` is set.
+    """
+    if grad_output.dtype in (torch.float16, torch.bfloat16) and not torch.are_deterministic_algorithms_enabled():
+        return (grad_output.new_ones(1, grad_output.shape[0]) @ grad_output).view(-1)
+    return grad_output.sum(0)
+
+
+class _MaskedIGemmConvFn(torch.autograd.Function):
+    """Autograd wrapper for the masked implicit GEMM convolution with optional fused bias."""
+
+    @staticmethod
+    def forward(  # type: ignore[override]
+        ctx,
+        features: torch.Tensor,
+        weights: torch.Tensor,
+        bias: torch.Tensor | None,
+        topo: _fvdb_cpp.MaskedIGemmTopology,
+        transposed: bool,
+        precise: bool,
+    ) -> torch.Tensor:
+        ctx.save_for_backward(features, weights)
+        ctx.topo = topo
+        ctx.transposed = transposed
+        ctx.precise = precise
+        ctx.has_bias = bias is not None
+        return _fvdb_cpp.masked_igemm_conv(features, weights, bias, topo, transposed, precise)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
+        features, weights = ctx.saved_tensors
+        need_feat, need_w, need_b = ctx.needs_input_grad[:3]
+        grad_output = grad_output.contiguous()
+        grad_feat, grad_w = None, None
+        if need_feat or need_w:
+            grad_feat, grad_w = _fvdb_cpp.masked_igemm_conv_backward(
+                grad_output, features, weights, ctx.topo, bool(need_feat), bool(need_w), ctx.transposed, ctx.precise
+            )
+        grad_b = _bias_gradient(grad_output) if ctx.has_bias and need_b else None
+        return grad_feat, grad_w, grad_b, None, None, None
+
+
 # ============================================================
 #  Backend data classes — cached precomputed data per method
 # ============================================================
@@ -524,7 +658,80 @@ class _PredGatherIGemmBackend:
     stride: int
 
 
-_Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend
+@dataclass(frozen=True)
+class _MaskedIGemmBackend:
+    """Masked implicit GEMM convolution over a leaf-ordered neighbor map (SM80+).
+
+    ``topology`` maps the forward direction (coarse output rows to fine input rows) for both
+    regular and transposed plans. Inputs the kernels do not cover run on gather-scatter, whose
+    rulebooks are built on first use and kept in ``fallback``.
+    """
+
+    topology: _fvdb_cpp.MaskedIGemmTopology
+    fallback: dict = field(default_factory=dict, compare=False)
+    fallback_lock: Lock = field(default_factory=Lock, compare=False, repr=False)
+
+
+def _tf32_matmul_enabled() -> bool:
+    """True when float32 matmuls may run as TF32, under either the legacy or the fp32_precision API."""
+    # Reading allow_tf32 raises once TF32 was set through fp32_precision (PyTorch 2.9+).
+    precision = getattr(torch.backends.cuda.matmul, "fp32_precision", None)
+    if precision is not None:
+        return precision == "tf32"
+    return torch.backends.cuda.matmul.allow_tf32
+
+
+def _masked_igemm_dtype(features: torch.Tensor, weights: torch.Tensor) -> torch.dtype:
+    """Compute dtype for a masked_igemm call, promoted like gather-scatter's."""
+    return torch.promote_types(features.dtype, weights.dtype)
+
+
+def _round_up(value: int, multiple: int) -> int:
+    return (value + multiple - 1) // multiple * multiple
+
+
+def _pad_last(tensor: torch.Tensor, size: int) -> torch.Tensor:
+    """Zero-pad the last dimension of ``tensor`` to ``size``."""
+    if tensor.shape[-1] == size:
+        return tensor
+    return torch.nn.functional.pad(tensor, (0, size - tensor.shape[-1]))
+
+
+def _masked_igemm_runs(in_channels: int, out_channels: int, dtype: torch.dtype, device: torch.device) -> bool:
+    """True when the masked_igemm kernels cover this call."""
+    return _fvdb_cpp.masked_igemm_supports(in_channels, out_channels, dtype, device)
+
+
+def _warn_masked_igemm_fallback(reason: str, hint: str, stacklevel: int) -> None:
+    """Warn, once per process for each reason, that a masked_igemm plan runs gather-scatter."""
+    if reason in _WARNED_MASKED_IGEMM_FALLBACKS:
+        return
+    _WARNED_MASKED_IGEMM_FALLBACKS.add(reason)
+    warnings.warn(
+        f"backend='masked_igemm' does not cover {reason}; running gather-scatter instead. {hint}",
+        UserWarning,
+        stacklevel=stacklevel,
+    )
+
+
+def _warn_masked_igemm_input_fallback(dtype: torch.dtype, device: torch.device, in_c: int, out_c: int) -> None:
+    """Warn that inputs the kernels do not cover (dtype, channels or GPU) ran on gather-scatter.
+
+    Checks the reasons in the order masked_igemm_supports does; ``device`` is a CUDA device.
+    """
+    if dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        reason = f"{dtype} inputs"
+    elif in_c <= 0 or out_c <= 0:
+        reason = "zero-channel inputs or outputs"
+    else:
+        major, minor = torch.cuda.get_device_capability(device)
+        reason = f"compute capability {major}.{minor} (the kernels need 8.0 or newer)"
+    _warn_masked_igemm_fallback(
+        reason, "Use float16, bfloat16 or float32 on an SM80+ GPU to run the masked_igemm kernels.", stacklevel=4
+    )
+
+
+_Backend = _MatmulBackend | _GatherScatterBackend | _PredGatherIGemmBackend | _MaskedIGemmBackend
 
 
 class _CoverageReportCache:
@@ -722,7 +929,7 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=False)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
-        elif backend_name in ("default", "gather_scatter"):
+        elif backend_name in ("default", "gather_scatter", "masked_igemm"):
             identity_plan = cls._identity_matmul_plan(
                 kernel_size,
                 stride,
@@ -827,7 +1034,7 @@ class ConvolutionPlan:
         if backend_name == "pred_gather_igemm":
             _validate_pred_gather_igemm_admission(kernel_size, stride, channel_pairs, transposed=True)
             _validate_pred_gather_igemm_grid_admission(source_grid, target_grid)
-        elif backend_name in ("default", "gather_scatter"):
+        elif backend_name in ("default", "gather_scatter", "masked_igemm"):
             identity_plan = cls._identity_matmul_plan(
                 kernel_size,
                 stride,
@@ -850,7 +1057,13 @@ class ConvolutionPlan:
         backend = cls._build_backend(
             source_grid, target_grid, kernel_size, stride, channel_pairs, expert_config, transposed=True
         )
-        _validate_coverage_policy(backend, resolved_policy, strict_output_coverage)
+        # masked_igemm stores the forward topology, so its diagnostics run target to source.
+        forward_oriented = isinstance(backend, _MaskedIGemmBackend)
+        _validate_coverage_policy(backend, resolved_policy, strict_output_coverage, transposed=forward_oriented)
+        if forward_oriented:
+            coverage = _CoverageReportCache(backend, target_grid, source_grid)
+        else:
+            coverage = _CoverageReportCache(backend, source_grid, target_grid)
         return cls(
             source_grid,
             target_grid,
@@ -861,8 +1074,8 @@ class ConvolutionPlan:
             compatibility,
             resolved_policy,
             topology_provenance,
-            _CoverageReportCache(backend, source_grid, target_grid),
-            False,
+            coverage,
+            forward_oriented,
         )
 
     @classmethod
@@ -920,6 +1133,9 @@ class ConvolutionPlan:
             # PredGatherIGemm is forward-only. Its exact transpose uses the
             # already-stored default gather/scatter fallback rulebook.
             backend = _GatherScatterBackend(topology=_fvdb_cpp.gs_reverse_topology(plan._backend.gs_topology))
+        elif isinstance(plan._backend, _MaskedIGemmBackend):
+            # The topology maps the forward direction; execute picks the direction.
+            backend = plan._backend
         elif isinstance(plan._backend, _MatmulBackend):
             backend = plan._backend
         else:
@@ -985,12 +1201,14 @@ class ConvolutionPlan:
     # ============================================================
 
     @overload
-    def execute(self, data: torch.Tensor, weights: torch.Tensor) -> torch.Tensor: ...
+    def execute(self, data: torch.Tensor, weights: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor: ...
 
     @overload
-    def execute(self, data: JaggedTensor, weights: torch.Tensor) -> JaggedTensor: ...
+    def execute(self, data: JaggedTensor, weights: torch.Tensor, bias: torch.Tensor | None = None) -> JaggedTensor: ...
 
-    def execute(self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor) -> JaggedTensor | torch.Tensor:
+    def execute(
+        self, data: JaggedTensor | torch.Tensor, weights: torch.Tensor, bias: torch.Tensor | None = None
+    ) -> JaggedTensor | torch.Tensor:
         """
         Execute this :class:`ConvolutionPlan` with the input data and weights.
 
@@ -1019,6 +1237,8 @@ class ConvolutionPlan:
                     ``(out_channels, in_channels, kernel_size[0], kernel_size[1], kernel_size[2])``.
                     Identity ``K=1, S=1`` plans also accept the compact shape
                     ``(out_channels, in_channels)``.
+            bias (torch.Tensor | None): Optional ``(out_channels,)`` tensor added to every output
+                    voxel. Backends that support it fuse the add into the convolution kernel.
 
         Returns:
             output_features (torch.Tensor | JaggedTensor): Convolved features with the same type as input:
@@ -1044,6 +1264,7 @@ class ConvolutionPlan:
         """
         assert isinstance(data, (torch.Tensor, JaggedTensor)), "data must be a torch.Tensor or JaggedTensor"
         assert isinstance(weights, torch.Tensor), "weights must be a torch.Tensor"
+        assert bias is None or isinstance(bias, torch.Tensor), "bias must be a torch.Tensor or None"
 
         backend = self._backend
         if isinstance(backend, _MatmulBackend):
@@ -1057,6 +1278,13 @@ class ConvolutionPlan:
 
         if not _channel_pair_supported(in_c, out_c, self._channel_pairs):
             raise ValueError(f"Channel pair {in_c, out_c} is not supported")
+        if bias is not None and tuple(bias.shape) != (out_c,):
+            raise ValueError(f"bias must have shape ({out_c},); got {tuple(bias.shape)}")
+        features = data.jdata if isinstance(data, JaggedTensor) else data
+        if features.shape[-1] != in_c:
+            raise ValueError(f"data has {features.shape[-1]} channels; the weights expect {in_c}")
+        if features.device != self._source_grid.device:
+            raise ValueError(f"data is on {features.device}; the plan's grids are on {self._source_grid.device}")
         if isinstance(backend, _PredGatherIGemmBackend) and not _pred_gather_igemm_channel_pair_supported(in_c, out_c):
             raise ValueError(
                 f"PredGatherIGemm requires input and output channel counts divisible by 32; got ({in_c}, {out_c})."
@@ -1069,11 +1297,11 @@ class ConvolutionPlan:
 
         # Matmul: 1x1x1 kernel, stride 1 — no kernel map needed
         if isinstance(backend, _MatmulBackend):
-            if is_flat:
-                return data.matmul(weight_matrix.transpose(0, 1))
-            else:
-                out_data = data.jdata.matmul(weight_matrix.transpose(0, 1))
-                return data.jagged_like(out_data)
+            features = data if is_flat else data.jdata
+            out_data = features.matmul(weight_matrix.transpose(0, 1))
+            if bias is not None:
+                out_data = out_data + bias
+            return out_data if is_flat else data.jagged_like(out_data)
 
         if is_flat:
             data = JaggedTensor(data)
@@ -1085,7 +1313,39 @@ class ConvolutionPlan:
                 raise ValueError("Gather-scatter convolution returned None")
             if not isinstance(out_tensor, torch.Tensor):
                 raise ValueError("Gather-scatter convolution returned non-tensor")
-            result = self._target_grid.jagged_like(out_tensor)
+
+        elif isinstance(backend, _MaskedIGemmBackend):
+            if weights.ndim != 5:
+                raise ValueError("masked_igemm weights must be (out_channels, in_channels, k0, k1, k2)")
+            dtype = _masked_igemm_dtype(data.jdata, weights)
+            # The kernels take channel counts in multiples of 8; others run zero-padded.
+            in_p, out_p = _round_up(in_c, 8), _round_up(out_c, 8)
+            if _masked_igemm_runs(in_p, out_p, dtype, data.jdata.device):
+                # Fuse the bias only when adding it afterwards would not promote the output.
+                fuse = bias is not None and torch.promote_types(dtype, bias.dtype) == dtype
+                features = _pad_last(data.jdata.to(dtype), in_p)
+                kernel_weights = weights.to(dtype)
+                if (in_p, out_p) != (in_c, out_c):
+                    padded = kernel_weights.new_zeros(out_p, in_p, *kernel_weights.shape[2:])
+                    padded[:out_c, :in_c] = kernel_weights
+                    kernel_weights = padded
+                out_tensor = _MaskedIGemmConvFn.apply(
+                    features,
+                    kernel_weights,
+                    _pad_last(bias.to(dtype), out_p) if fuse else None,
+                    backend.topology,
+                    self._transposed,
+                    # float32 with TF32 off runs as 3xTF32, near float32 accuracy.
+                    dtype == torch.float32 and not _tf32_matmul_enabled(),
+                )
+                if out_p != out_c:
+                    out_tensor = out_tensor[:, :out_c].contiguous()
+                if fuse:
+                    bias = None
+            else:
+                _warn_masked_igemm_input_fallback(dtype, data.jdata.device, in_c, out_c)
+                topology = self._masked_igemm_fallback(backend)
+                out_tensor = _GatherScatterConvFn.apply(data.jdata, weights, topology, self._transposed)
 
         elif isinstance(backend, _PredGatherIGemmBackend):
             out_tensor = _PredGatherIGemmConvFn.apply(
@@ -1101,15 +1361,57 @@ class ConvolutionPlan:
                 raise ValueError("PredGatherIGemm convolution returned None")
             if not isinstance(out_tensor, torch.Tensor):
                 raise ValueError("PredGatherIGemm convolution returned non-tensor")
-            result = self._target_grid.jagged_like(out_tensor)
 
         else:
             raise TypeError(f"Unknown backend type: {type(backend)}")
+
+        if bias is not None:
+            out_tensor = out_tensor + bias
+        result = self._target_grid.jagged_like(out_tensor)
 
         if is_flat:
             return result.jdata
         else:
             return result
+
+    def _masked_igemm_fallback(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
+        """Gather-scatter rulebook for inputs the masked_igemm kernels do not cover."""
+        with backend.fallback_lock:
+            return self._masked_igemm_fallback_locked(backend)
+
+    def _finish_lazy_build(self) -> None:
+        """Wait for a rulebook built inside execute before caching it.
+
+        Plans built once may be executed on several CUDA streams, and a caller who synchronizes
+        after building the plan cannot know about rulebooks built later. Synchronizing once here
+        means a cached rulebook is always complete, whichever stream reads it next.
+        """
+        device = self._source_grid.device
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+
+    def _masked_igemm_fallback_locked(self, backend: "_MaskedIGemmBackend") -> _fvdb_cpp.GatherScatterDefaultTopology:
+        forward = backend.fallback.get("gather_scatter")
+        if forward is None:
+            fine, coarse = (
+                (self._target_grid, self._source_grid) if self._transposed else (self._source_grid, self._target_grid)
+            )
+            forward = _fvdb_cpp.gs_build_topology(
+                _get_grid_data(fine),
+                _get_grid_data(coarse),
+                torch.tensor(self._geometry.kernel_size, dtype=torch.int32),
+                torch.tensor(self._geometry.stride, dtype=torch.int32),
+            )
+            self._finish_lazy_build()
+            backend.fallback["gather_scatter"] = forward
+        if not self._transposed:
+            return forward
+        reverse = backend.fallback.get("gather_scatter_transposed")
+        if reverse is None:
+            reverse = _fvdb_cpp.gs_reverse_topology(forward)
+            self._finish_lazy_build()
+            backend.fallback["gather_scatter_transposed"] = reverse
+        return reverse
 
     # ============================================================
     #                 Properties
@@ -1232,12 +1534,7 @@ class ConvolutionPlan:
         # Shared grid data makes the registration diagnostic exact only for a finite transform.
         # The general path rejects non-finite origins and zero voxel sizes through a non-finite
         # registration offset, so the fast path must reject them too.
-        grid_data = _get_grid_data(source_grid)
-        if not bool(
-            torch.isfinite(grid_data.origins).all()
-            and torch.isfinite(grid_data.voxel_sizes).all()
-            and (grid_data.voxel_sizes != 0).all()
-        ):
+        if not _finite_grid_transform(_get_grid_data(source_grid)):
             raise ValueError("Convolution grid transform must have finite origins and finite, nonzero voxel sizes.")
         # Preserve the general path's construction-time channel-pair validation.
         for channel_pair in channel_pairs:
@@ -1301,6 +1598,22 @@ class ConvolutionPlan:
                 _get_grid_data(source_grid), _get_grid_data(target_grid), kernel_size, stride
             )
             return _PredGatherIGemmBackend(gs_topology=gs_topo, kernel_size=kernel, stride=step)
+
+        if backend_name == "masked_igemm":
+            if source_grid.device.type == "cuda":
+                # The topology always maps the forward direction, coarse output rows to fine input rows.
+                fine, coarse = (target_grid, source_grid) if transposed else (source_grid, target_grid)
+                topology = _fvdb_cpp.masked_igemm_build_topology(
+                    _get_grid_data(fine), _get_grid_data(coarse), kernel_size, stride
+                )
+                return _MaskedIGemmBackend(topology=topology)
+            # The kernels run on CUDA only; other grids get a gather-scatter plan.
+            _warn_masked_igemm_fallback(
+                f"{source_grid.device.type} grids",
+                "Build the plan on CUDA grids to run the masked_igemm kernels.",
+                stacklevel=4,
+            )
+            backend_name = "gather_scatter"
 
         if backend_name not in ("gather_scatter", "default"):
             raise ValueError(f"Unknown backend: {backend_name!r}")

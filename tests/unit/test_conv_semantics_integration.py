@@ -976,18 +976,29 @@ class TestConvSemanticsIntegration(unittest.TestCase):
         assert isinstance(plan._backend, _MatmulBackend)
         assert plan.topology_policy is ConvolutionTopologyPolicy.COMPLETE
 
-    @parameterized.expand([("forward",), ("transposed",)])
-    def test_identity_fast_path_rejects_non_finite_transform(self, direction) -> None:
-        # The identity short circuit skips the registration diagnostic; it must still reject the
-        # non-finite transforms the general path rejects.
-        source = _grid([(0, 0, 0), (1, 0, 0)], origins=(float("inf"), 0.0, 0.0))
+    @parameterized.expand(
+        [
+            (f"{direction}_k{kernel_size}_{name}", direction, kernel_size, transform)
+            for direction in ("forward", "transposed")
+            for kernel_size in (1, 3)
+            for name, transform in (
+                ("inf_origin", {"origins": (float("inf"), 0.0, 0.0)}),
+                ("nan_origin", {"origins": (float("nan"), 0.0, 0.0)}),
+                ("inf_voxel_size", {"voxel_sizes": (1.0, float("inf"), 1.0)}),
+            )
+        ]
+    )
+    def test_same_grid_fast_paths_reject_non_finite_transform(self, _, direction, kernel_size, transform) -> None:
+        # The identity short circuit (k=1) and the same-grid stride-1 shortcut (k=3) skip the
+        # registration diagnostic; they must still reject the non-finite transforms the general path rejects.
+        source = _grid([(0, 0, 0), (1, 0, 0)], **transform)
         factory = (
             ConvolutionPlan.from_grid_batch if direction == "forward" else ConvolutionPlan.from_grid_batch_transposed
         )
         with pytest.raises(ValueError, match="finite"):
-            factory(kernel_size=1, stride=1, source_grid=source, target_grid=source)
+            factory(kernel_size=kernel_size, stride=1, source_grid=source, target_grid=source)
         with pytest.raises(ValueError, match="finite"):
-            factory(kernel_size=1, stride=1, source_grid=source)
+            factory(kernel_size=kernel_size, stride=1, source_grid=source)
 
     @parameterized.expand([("compact",), ("public",)])
     def test_matmul_accepts_2d_and_public_5d_weights_for_flat_and_jagged_data(self, weight_layout) -> None:

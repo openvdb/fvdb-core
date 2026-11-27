@@ -1,9 +1,11 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/detail/VbmCache.h>
+#include "dispatch/detail/core_types.h"
+#include "dispatch/torch/types.h"
+
+#include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/ops/LaplacianSmooth.h>
-#include <fvdb/detail/utils/cuda/ForEachVbmCUDA.cuh>
 
 #include <nanovdb/NanoVDB.h>
 
@@ -21,45 +23,54 @@ namespace {
 
 // Batch-wide row of a face neighbour, or -1 if it is inactive. `valueIndex` is the neighbour's
 // 1-based value index in its grid (0 = inactive); `rowBase` is the grid's voxel offset minus one.
-__device__ inline int64_t
+__hostdev__ inline int64_t
 faceRow(uint64_t valueIndex, int64_t rowBase) {
     return valueIndex ? rowBase + int64_t(valueIndex) : int64_t(-1);
 }
 
-// One umbrella-Laplacian pass, out = in + weight * (faceMean - in), per channel. Double-buffered
-// (in != out) so neighbour reads see the pre-pass field.
-template <typename ScalarT> struct LaplacianPass {
-    BatchVbmLayout layout;
-    const ScalarT *in;
-    ScalarT *out;
-    int64_t channels;
-    ScalarT weight;
-    const ScalarT *boundary; // one value per grid (sign continuation), or nullptr (zero flux)
-
-    __device__ void
-    perActiveVoxel(uint32_t gridIdx, const nanovdb::Coord &ijk, int64_t featureIdx) const {
-        auto accessor               = layout.acc.grid(gridIdx)->getAccessor();
-        const int64_t base          = layout.voxelOffsets[gridIdx] - 1;
-        const int64_t row[6]        = {faceRow(accessor.getValue(ijk.offsetBy(-1, 0, 0)), base),
-                                       faceRow(accessor.getValue(ijk.offsetBy(1, 0, 0)), base),
-                                       faceRow(accessor.getValue(ijk.offsetBy(0, -1, 0)), base),
-                                       faceRow(accessor.getValue(ijk.offsetBy(0, 1, 0)), base),
-                                       faceRow(accessor.getValue(ijk.offsetBy(0, 0, -1)), base),
-                                       faceRow(accessor.getValue(ijk.offsetBy(0, 0, 1)), base)};
-        const ScalarT boundaryValue = boundary ? boundary[gridIdx] : ScalarT(0);
-        for (int64_t c = 0; c < channels; ++c) {
-            const ScalarT center = in[featureIdx * channels + c];
-            const ScalarT inactive =
-                boundary ? (center < ScalarT(0) ? -boundaryValue : boundaryValue) : center;
-            // Summed in face order (-x,+x,-y,+y,-z,+z), then scaled by 1/6.
-            ScalarT sum = ScalarT(0);
-            for (int k = 0; k < 6; ++k)
-                sum += row[k] >= 0 ? in[row[k] * channels + c] : inactive;
-            const ScalarT faceMean         = sum * (ScalarT(1) / ScalarT(6));
-            out[featureIdx * channels + c] = center + weight * (faceMean - center);
-        }
-    }
-};
+// One umbrella-Laplacian pass over every active voxel of the batch, out = in + weight * (faceMean -
+// in), per channel. Double-buffered (in != out) so neighbour reads see the pre-pass field. One
+// thread per active voxel through the batch's VoxelBlockManagers.
+template <typename ScalarT>
+void
+laplacianPass(const GridBatchData &batchHdl,
+              const ScalarT *in,
+              ScalarT *out,
+              int64_t channels,
+              ScalarT weight,
+              const ScalarT *boundary) { // one value per grid (sign continuation), or nullptr
+    using CudaTag = ::dispatch::tag<torch::kCUDA>;
+    dispatch::forEachActiveVoxel(
+        CudaTag{},
+        batchHdl,
+        [=] __hostdev__(CudaTag,
+                        JIdxType gridIdx,
+                        nanovdb::Coord ijk,
+                        int64_t featureIdx,
+                        GridBatchData::Accessor acc) {
+            auto accessor               = acc.grid(gridIdx)->getAccessor();
+            const int64_t base          = acc.voxelOffset(gridIdx) - 1;
+            const int64_t row[6]        = {faceRow(accessor.getValue(ijk.offsetBy(-1, 0, 0)), base),
+                                           faceRow(accessor.getValue(ijk.offsetBy(1, 0, 0)), base),
+                                           faceRow(accessor.getValue(ijk.offsetBy(0, -1, 0)), base),
+                                           faceRow(accessor.getValue(ijk.offsetBy(0, 1, 0)), base),
+                                           faceRow(accessor.getValue(ijk.offsetBy(0, 0, -1)), base),
+                                           faceRow(accessor.getValue(ijk.offsetBy(0, 0, 1)), base)};
+            const ScalarT boundaryValue = boundary ? boundary[gridIdx] : ScalarT(0);
+            for (int64_t c = 0; c < channels; ++c) {
+                const ScalarT center = in[featureIdx * channels + c];
+                const ScalarT inactive =
+                    boundary ? (center < ScalarT(0) ? -boundaryValue : boundaryValue) : center;
+                // Summed in face order (-x,+x,-y,+y,-z,+z), then scaled by 1/6.
+                ScalarT sum = ScalarT(0);
+                for (int k = 0; k < 6; ++k)
+                    sum += row[k] >= 0 ? in[row[k] * channels + c] : inactive;
+                const ScalarT faceMean         = sum * (ScalarT(1) / ScalarT(6));
+                out[featureIdx * channels + c] = center + weight * (faceMean - center);
+            }
+        },
+        dispatch::ActiveVoxelIteration::Vbm);
+}
 
 } // namespace
 
@@ -143,9 +154,8 @@ laplacianSmooth(const GridBatchData &batchHdl,
     // Ping-pong between `out` and one scratch buffer, choosing the first destination so the last
     // pass lands in `out`. The first pass reads the input directly, so a single pass needs no
     // scratch.
-    const int64_t numPasses     = int64_t(weights.size());
-    torch::Tensor scratch       = numPasses > 1 ? torch::empty_like(input) : torch::Tensor();
-    const BatchVbmLayout layout = BatchVbmLayout::of(batchHdl);
+    const int64_t numPasses = int64_t(weights.size());
+    torch::Tensor scratch   = numPasses > 1 ? torch::empty_like(input) : torch::Tensor();
     AT_DISPATCH_FLOATING_TYPES(input.scalar_type(), "laplacianSmooth", [&] {
         const scalar_t *boundaryPtr = boundary.defined() ? boundary.data_ptr<scalar_t>() : nullptr;
         const scalar_t *source      = input.data_ptr<scalar_t>();
@@ -153,10 +163,8 @@ laplacianSmooth(const GridBatchData &batchHdl,
             scalar_t *destination = ((numPasses - 1 - pass) % 2 == 0)
                                         ? out.data_ptr<scalar_t>()
                                         : scratch.data_ptr<scalar_t>();
-            forEachActiveVoxelInGridVbmCUDA(
-                batchHdl,
-                LaplacianPass<scalar_t>{
-                    layout, source, destination, channels, scalar_t(weights[pass]), boundaryPtr});
+            laplacianPass<scalar_t>(
+                batchHdl, source, destination, channels, scalar_t(weights[pass]), boundaryPtr);
             source = destination;
         }
     });
