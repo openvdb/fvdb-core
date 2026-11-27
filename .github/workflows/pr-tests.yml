@@ -13,7 +13,7 @@
 #           -> cu132  (cu132.yml)
 #
 # Check names reported on the PR are "<job name here> / <job name there>",
-# e.g. "Conda / fVDB Unit Tests (Conda)". Branch rulesets that require these
+# e.g. "Conda / fVDB GPU Tests (Conda)". Branch rulesets that require these
 # checks must use those names.
 #
 # To add another build-and-test workflow: give it a workflow_call trigger (no
