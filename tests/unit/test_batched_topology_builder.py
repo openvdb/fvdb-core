@@ -21,6 +21,8 @@ tile cap.
 """
 
 import os
+import subprocess
+import sys
 import unittest
 from unittest import mock
 
@@ -58,6 +60,35 @@ def _expected_coarsen_ijk(ijk: torch.Tensor, factor: int) -> torch.Tensor:
 
 def _ijk_sets(grid: GridBatch):
     return [set(map(tuple, t.cpu().to(torch.int64).tolist())) for t in grid.ijk.unbind()]
+
+
+# Run by test_failed_run_releases_builder_scratch in a fresh process; see the comment there.
+_FAILED_RUN_SCRIPT = """
+import torch
+from fvdb import GridBatch, JaggedTensor
+
+ijk = torch.tensor([[k * 2048 + 10, 10, 10] for k in range(128)], dtype=torch.int32, device="cuda")
+grid = GridBatch.from_ijk(JaggedTensor([ijk]), voxel_sizes=1.0, origins=0.0)
+device = torch.device("cuda", torch.cuda.current_device())
+torch.cuda.synchronize()
+reserved = torch.cuda.memory_reserved(device)
+baseline = torch.cuda.memory_allocated(device)
+total = torch.cuda.get_device_properties(device).total_memory
+torch.cuda.set_per_process_memory_fraction((reserved + 512 * 1024 * 1024) / total, device)
+try:
+    grid.refined_grid(2)
+    raise AssertionError("refined_grid did not run out of memory under the cap")
+except torch.OutOfMemoryError:
+    pass
+finally:
+    torch.cuda.set_per_process_memory_fraction(1.0, device)
+torch.cuda.synchronize()
+held = torch.cuda.memory_allocated(device) - baseline
+assert held <= 0, f"{held} bytes still allocated after the failed run"
+refined = grid.refined_grid(2)
+assert refined.total_voxels == 8 * 128, refined.total_voxels
+print("ok")
+"""
 
 
 # Coordinate batches exercising the tricky regimes of the batched builder.
@@ -272,24 +303,20 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         # root tiles and about 2 GiB of densified lower masks. Cap the allocator well below that:
         # the run fails after allocating its roots and upper masks, and must not leave them held
         # by the cached builder. The next run must still work.
-        coords = [
-            torch.tensor([[k * 2048 + 10, 10, 10] for k in range(128)], dtype=torch.int32),
-        ]
-        grid = _build(coords, "cuda")
-        device = torch.device("cuda", torch.cuda.current_device())
-        torch.cuda.synchronize()
-        baseline = torch.cuda.memory_allocated(device)
-        total = torch.cuda.get_device_properties(device).total_memory
-        torch.cuda.set_per_process_memory_fraction((baseline + 512 * 1024 * 1024) / total, device)
-        try:
-            with self.assertRaises(RuntimeError):
-                grid.refined_grid(2)
-        finally:
-            torch.cuda.set_per_process_memory_fraction(1.0, device)
-        torch.cuda.synchronize()
-        self.assertLessEqual(torch.cuda.memory_allocated(device), baseline)
-        refined = grid.refined_grid(2)
-        self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "refine after OOM")
+        #
+        # The memory fraction caps reserved memory and is only checked when the caching allocator
+        # calls cudaMalloc, so free space cached by earlier tests would serve the masks without
+        # hitting it, and empty_cache() cannot release a segment that still holds a live tensor.
+        # A fresh process starts with an empty cache, so the cap binds.
+        result = subprocess.run(
+            [sys.executable, "-c", _FAILED_RUN_SCRIPT],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        self.assertIn("ok", result.stdout)
 
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
