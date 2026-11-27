@@ -3,6 +3,7 @@
 //
 #include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
+#include <fvdb/detail/utils/cuda/ForEachVbmCUDA.cuh>
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/math/Math.h>
@@ -28,14 +29,12 @@ namespace {
 using OnIndexGridT = nanovdb::NanoGrid<nanovdb::ValueOnIndex>;
 
 // The stencil kernels iterate the grid's cached VoxelBlockManager (GridBatchData::vbmAt) in the
-// same shape as forEachActiveVoxelVbmCUDA: 256-thread CUDA blocks, each group of
-// VbmCache::kBlockWidth threads takes one VBM block per grid-stride step, and every thread
-// decodes its voxel in registers. The block size is independent of the VBM block width, and the
-// 256-thread launch bound leaves each thread up to 255 registers (a 512-wide bound caps it at 128).
-constexpr int kStencilBlockDim       = 256;
-constexpr int kVbmBlocksPerCudaBlock = kStencilBlockDim / VbmCache::kBlockWidth;
-static_assert(kStencilBlockDim % VbmCache::kBlockWidth == 0,
-              "each CUDA block must cover whole VBM blocks");
+// same shape as forEachActiveVoxelVbmCUDA, and share its launch constants: 256-thread CUDA blocks,
+// each group of VbmCache::kBlockWidth threads takes one VBM block per grid-stride step, and every
+// thread decodes its voxel in registers. The 256-thread launch bound leaves each thread up to 255
+// registers (a 512-wide bound caps it at 128).
+constexpr int kStencilBlockDim       = ::fvdb::_private::kVbmForEachBlockDim;
+constexpr int kVbmBlocksPerCudaBlock = ::fvdb::_private::kVbmBlocksPerCudaBlock;
 
 // Sign-aware read of a face neighbour. Value buffers are indexed by `valueIndex - 1`: an IndexGrid
 // numbers active voxels from 1 and reserves 0 for its single background slot, so a face index of 0
@@ -420,7 +419,8 @@ runReinit(OnIndexGridT *grid,
     // interface, so a full band needs about 5*band sweeps; 6*band leaves a convergence margin. The
     // subcell anchor makes extra sweeps harmless, so this errs long (a step input on a band-3
     // sphere converges by ~20 sweeps).
-    const int defaultIters = std::max(20, 6 * band);
+    const int defaultIters = int(std::min<int64_t>(std::max<int64_t>(20, 6 * int64_t(band)),
+                                                   std::numeric_limits<int>::max()));
     const int iters        = redistanceIters > 0 ? redistanceIters : defaultIters;
     redistance(field, scratchA, iters);
 }

@@ -1103,8 +1103,9 @@ class GridBatch:
               *inactive* rather than assigning them NaN/Inf values.
             * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
               redistance (a no-data pass-through; :meth:`ray_implicit_intersection` treats exact
-              ``0`` as a gap). Their signed neighbours, however, see them as an interface and are
-              redistanced toward them -- prune such voxels first when you can.
+              ``0`` as a gap). They do not make their neighbours interface cells, but the neighbours'
+              Godunov update reads them as a zero level and redistances toward them -- prune such
+              voxels first when you can.
             * Each grid must have isotropic voxels (``ValueError`` otherwise); grids in the batch
               may differ from one another. CUDA only; ``float32`` or ``float64``.
 

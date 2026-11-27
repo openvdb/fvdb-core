@@ -29,7 +29,8 @@ namespace ops {
 ///                    convergence, accuracy, and sub-voxel surface location. Invalid shapes and
 ///                    NaN/Inf values raise ValueError. Leave no-data voxels inactive. A voxel whose
 ///                    value is exactly 0 has a zero frozen sign and is left at 0 by the redistance
-///                    (no-data pass-through), though its signed neighbours see it as an interface.
+///                    (no-data pass-through). It does not make its neighbours interface cells, but
+///                    their Godunov update reads it as a zero level and redistances them toward it.
 ///                    The surface is where the field changes sign between ACTIVE voxels; a grid
 ///                    whose active values are all one sign has no surface and comes back as the
 ///                    constant -/+band*vx. Voxels must be isotropic (a ValueError is raised
