@@ -57,10 +57,10 @@ def main():
     logging.addLevelName(logging.INFO, "\033[1;32m%s\033[1;0m" % logging.getLevelName(logging.INFO))
     device = torch.device("cuda", torch.cuda.current_device())
     dtype = torch.float32
-    vox_size = 0.005
+    vox_size = 0.01
     vox_origin = np.zeros(3)
     vox_pad = 1
-    ng = 256
+    ng = 128  # dense SDF sample lattice; ~4 samples per voxel inside the grid
     npts = 10_000
     num_iters = 750
 
@@ -86,7 +86,7 @@ def main():
 
     optimizer = torch.optim.Adam([features], lr=1e-2)
 
-    # This should converge to around 2e-8 loss
+    # This should converge to around 1e-4 loss
     pbar = tqdm.tqdm(range(num_iters))
     for _ in pbar:
         optimizer.zero_grad()

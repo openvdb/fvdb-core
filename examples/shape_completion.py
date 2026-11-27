@@ -26,8 +26,9 @@ RESOLUTION = 64  # voxels along the longest axis of each shape
 NUM_LEVELS = 5  # stride-2 pyramid depth; coarsest lattice is RESOLUTION / 2**NUM_LEVELS = 2^3
 CHANNELS = [16, 32, 64, 128, 256, 256]  # CHANNELS[0] = full resolution, CHANNELS[NUM_LEVELS] = coarsest
 CROP_FRACTION = 0.55  # keep voxels with x below this fraction of the shape's x-extent
-NUM_ITERATIONS = 500
-LEARNING_RATE = 1e-2
+NUM_ITERATIONS = 300
+LEARNING_RATE = 3e-2
+FINAL_LR_FACTOR = 0.08  # exponential decay to this fraction of LEARNING_RATE by the last iteration
 LOG_EVERY = 50
 
 
@@ -207,7 +208,7 @@ def main() -> None:
 
     model = CompletionNet().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=LEARNING_RATE, momentum=0.9, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.995)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=FINAL_LR_FACTOR ** (1.0 / NUM_ITERATIONS))
 
     model.train()
     for iteration in tqdm.trange(NUM_ITERATIONS, desc="training"):
