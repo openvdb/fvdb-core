@@ -107,15 +107,15 @@ maskedIGemmSparseConvBackward(torch::Tensor gradOutput,
                               bool transposed = false,
                               bool precise    = false);
 
-/// Choices that are otherwise made from the grid size and the device, forced so tests can reach
-/// every code path on any GPU. Unset fields leave the heuristics in charge; set counts must be at
-/// least 1. For tests only.
+/// Choices that are otherwise made from the grid size, the kernel size and the device, forced so
+/// tests and benchmarks can reach every code path on any GPU. Unset fields leave the heuristics in
+/// charge; set counts must be at least 1. For tests and benchmarks only.
 struct MaskedIGemmTestOverrides {
     std::optional<int> splits;         ///< split-K count of the forward and input-gradient kernel
     std::optional<int>
         weightRowSplits;               ///< split the weight gradient by output rows, this many ways
-    std::optional<bool> stagedBuilder; ///< leaf-staged neighbor-map builder where it applies
     std::optional<bool> localRowOrder; ///< Gray order windowed to nearby rows instead of global
+    std::optional<bool> vbmIteration;  ///< neighbor-map builders iterate rows through the VBM
 };
 void setMaskedIGemmTestOverrides(MaskedIGemmTestOverrides const &overrides);
 

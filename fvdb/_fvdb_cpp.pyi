@@ -199,8 +199,8 @@ def masked_igemm_supports(in_channels: int, out_channels: int, dtype: torch.dtyp
 def _masked_igemm_set_test_overrides(
     splits: int | None = None,
     weight_row_splits: int | None = None,
-    staged_builder: bool | None = None,
     local_row_order: bool | None = None,
+    vbm_iteration: bool | None = None,
 ) -> None: ...
 def rasterize_num_contributing_gaussians(
     means2d: torch.Tensor,

@@ -340,17 +340,25 @@ class TestMaskedIGemm(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("sparse", (3, 3, 3)),
-            ("dense", (3, 3, 3)),
-            ("shell", (3, 3, 3)),
-            ("batch", (3, 3, 3)),
-            ("view", (3, 3, 3)),
-            ("sparse", (3, 5, 1)),
-            ("dense", (17, 1, 1)),
-            ("sparse", (19, 1, 1)),
+            ("sparse", (3, 3, 3), 1),
+            ("dense", (3, 3, 3), 1),
+            ("shell", (3, 3, 3), 1),
+            ("batch", (3, 3, 3), 1),
+            ("view", (3, 3, 3), 1),
+            ("sparse", (3, 5, 1), 1),
+            ("dense", (17, 1, 1), 1),
+            ("sparse", (19, 1, 1), 1),
+            ("sparse", (3, 3, 3), 2),
+            ("batch", (2, 2, 2), 2),
+            ("shell", (3, 3, 3), 2),
+            ("sparse", (5, 5, 5), 1),
+            ("batch", (7, 7, 7), 1),
+            ("sparse", (5, 5, 5), 2),
         ]
     )
-    def test_staged_builder_matches_scan(self, kind, kernel_size):
+    def test_vbm_iteration_matches_leaf_scan(self, kind, kernel_size, stride):
+        # The neighbor-map builders walk the row grid through the VoxelBlockManager or the leaf
+        # scan; each row is written by one thread either way, so the topologies match exactly.
         if kind == "sparse":
             grid = _random_grid(4000, 40)
         elif kind == "dense":
@@ -361,12 +369,19 @@ class TestMaskedIGemm(unittest.TestCase):
             grid = _random_grid(3000, 16, batch=3)
         else:
             grid = _random_grid(2000, 12, batch=4)[1:3]
-        with _overrides(staged_builder=False):
-            ref = _build_topology(grid, grid, kernel_size)
-        with _overrides(staged_builder=True):
-            topo = _build_topology(grid, grid, kernel_size)
-        for name in ("neighbor_map", "row_masks", "pair_in", "pair_out", "pair_offsets"):
+        output = grid if stride == 1 else grid.conv_grid(kernel_size, stride)
+        with _overrides(vbm_iteration=False):
+            ref = _build_topology(grid, output, kernel_size, stride)
+        with _overrides(vbm_iteration=True):
+            topo = _build_topology(grid, output, kernel_size, stride)
+        names = ["neighbor_map", "row_masks", "sorted_rows", "pair_in", "pair_out", "pair_offsets"]
+        if math.prod(kernel_size) > 32:
+            names.append("neighbor_offsets")
+        for name in names:
             self.assertTrue(torch.equal(getattr(topo, name), getattr(ref, name)), name)
+        self.assertEqual(topo.reverse_map is None, ref.reverse_map is None)
+        if ref.reverse_map is not None:
+            self.assertTrue(torch.equal(topo.reverse_map, ref.reverse_map), "reverse_map")
 
     # ---- Kernels of more than 32 taps (multi-word tap masks, chunked neighbor staging) ----
 

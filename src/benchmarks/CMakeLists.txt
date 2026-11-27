@@ -152,3 +152,8 @@ ConfigureDispatchBench(gather_scatter_conv_benchmark
     convolution/gather_scatter_conv_benchmark.cu
 )
 
+# Masked IGEMM sparse convolution topology build, per neighbor-map builder
+ConfigureDispatchBench(masked_igemm_topology_benchmark
+    convolution/masked_igemm_topology_benchmark.cu
+)
+
