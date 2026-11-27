@@ -228,122 +228,23 @@ jobs:
       aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
-  # RUN FVDB GTESTS
+  # RUN FVDB GPU TESTS
+  #
+  # The gtests, doc tests and unit tests share one GPU runner, so they run as steps
+  # of one job: the container, checkout and Python env are set up once instead
+  # of once per suite. Each suite step runs as long as the setup it needs
+  # succeeded and the run was not cancelled, so one failing suite does not hide
+  # the results of the others; the job fails if any of them failed.
   ##############################################################################
-  fvdb-gtests:
+  fvdb-gpu-tests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB GTests (pip CUDA 13.0)
-    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
-    container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
-      env:
-        PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
-      options: --rm
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
-
-      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
-        run: |
-          apt-get install -y software-properties-common
-          add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          apt-get update
-          apt-get install -y libstdc++6
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # Fetch all history for all branches
-          # For pull requests, this automatically checks out the merge commit
-          # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
-          persist-credentials: false
-      - name: Fetch PR branch
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-          git fetch origin ${{ github.event.pull_request.head.sha }}
-          git branch pr_branch FETCH_HEAD
-
-      - name: Merge PR branch into base
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git merge pr_branch
-
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "${{ needs.versions.outputs.uv-version }}"
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '${{ needs.versions.outputs.python-default }}'
-        env:
-          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
-
-      - name: Install CMake
-        run: >
-          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
-          mkdir /opt/cmake &&
-          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
-          cmake --version
-        env:
-          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
-
-      - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev mesa-vulkan-drivers vulkan-tools make
-
-      - name: Install pip dependencies
-        run: |
-          uv venv
-          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/build_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130
-        env:
-          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
-
-      - name: Download gtests
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-            name: fvdb-gtest-cu130
-            path: .
-
-      - name: Extract tar
-        run: |
-            tar -xvf fvdb-gtest.tar
-
-      - name: Run tests
-        run: |
-          source .venv/bin/activate
-          ./build.sh ctest
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
-
-  ##############################################################################
-  # RUN FVDB UNIT TESTS
-  ##############################################################################
-  fvdb-unit-test:
-    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Unit Tests (pip CUDA 13.0)
+    name: fVDB GPU Tests (pip CUDA 13.0)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-devel-${{ needs.versions.outputs.docker-os-ubuntu }}
       env:
         PYTHONPATH: ""
+        CPM_SOURCE_CACHE: "/__w/cpm_cache"
         # The viewer tests need the NVIDIA Vulkan driver, which the toolkit only mounts with graphics
         NVIDIA_DRIVER_CAPABILITIES: all
       options: --rm
@@ -392,7 +293,6 @@ jobs:
           version: "${{ needs.versions.outputs.uv-version }}"
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        id: setup-python
         with:
           python-version: '${{ needs.versions.outputs.python-default }}'
         env:
@@ -400,9 +300,11 @@ jobs:
 
       - name: Install apt dependencies
         # The NVIDIA Vulkan driver needs the loader, libXext, and libEGL from the image
-        run: apt install -y zlib1g-dev libpng-dev libvulkan1 libxext6 libegl1
+        run: apt install -y zlib1g-dev libpng-dev make libvulkan1 libxext6 libegl1
 
+      # test_requirements.txt is a superset of the build_requirements.txt the gtests used to run with
       - name: Install pip dependencies
+        id: venv-ready
         run: |
           uv venv
           echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
@@ -411,18 +313,64 @@ jobs:
         env:
           NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
 
+      # The wheel (doc and unit tests) and CMake plus the gtest build tree are
+      # set up independently, so a failure in one setup chain does not skip the other.
       - name: Download package
+        id: package-downloaded
+        if: ${{ !cancelled() && steps.venv-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-test-package-cu130
             path: ./dist
 
       - name: Install package
+        id: package-ready
+        if: ${{ !cancelled() && steps.package-downloaded.outcome == 'success' }}
         run: |
           source .venv/bin/activate
           pip install ./dist/*.whl
 
-      - name: Run tests
+      # The gtests need ctest
+      - name: Install CMake
+        id: cmake-ready
+        if: ${{ !cancelled() && steps.venv-ready.outcome == 'success' }}
+        run: >
+          wget -nv https://github.com/Kitware/CMake/releases/download/v${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}/cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh &&
+          sh cmake-${NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION}-linux-x86_64.sh --prefix=/usr/local --skip-license &&
+          cmake --version
+        env:
+          NEEDS_VERSIONS_OUTPUTS_CMAKE_VERSION: ${{ needs.versions.outputs.cmake-version }}
+
+      - name: Download gtests
+        id: gtests-downloaded
+        if: ${{ !cancelled() && steps.cmake-ready.outcome == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+            name: fvdb-gtest-cu130
+            path: .
+
+      - name: Extract gtests
+        id: gtests-ready
+        if: ${{ !cancelled() && steps.gtests-downloaded.outcome == 'success' }}
+        run: |
+            tar -xvf fvdb-gtest.tar
+
+      - name: Run gtests
+        if: ${{ !cancelled() && steps.gtests-ready.outcome == 'success' }}
+        run: |
+          source .venv/bin/activate
+          ./build.sh ctest
+
+      - name: Run markdown docs tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
+        run: |
+          source .venv/bin/activate
+          pytest --markdown-docs docs --ignore-glob="**/wip/**"
+
+      # Unit tests run last because they install the viewer into the env, and
+      # the doc tests have always run without it.
+      - name: Run unit tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
         env:
           # The whole parametrized matrix shares one process, so the caching allocator's
           # reserved pool only ever grows and its high-water mark ends up far above any
@@ -446,110 +394,13 @@ jobs:
           echo "Cleanup completed"
 
   ##############################################################################
-  # RUN FVDB DOCUMENTATION TESTS
-  ##############################################################################
-  fvdb-docs-test:
-    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Doc Tests (pip CUDA 13.0)
-    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
-    container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-cudnn-runtime-${{ needs.versions.outputs.docker-os-ubuntu }}
-      env:
-        PYTHONPATH: ""
-      options: --rm
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - name: Apt update and install git and wget
-        run: apt update && apt install -y git wget
-
-      - name: Install GCC ${{ needs.versions.outputs.gcc-toolset }} runtime
-        run: |
-          apt-get install -y software-properties-common
-          add-apt-repository -y ppa:ubuntu-toolchain-r/test
-          apt-get update
-          apt-get install -y libstdc++6
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # Fetch all history for all branches
-          # For pull requests, this automatically checks out the merge commit
-          # For pushes, this checks out the pushed commit
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Fetch PR branch
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-          git fetch origin ${{ github.event.pull_request.head.sha }}
-          git branch pr_branch FETCH_HEAD
-
-      - name: Merge PR branch into base
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git merge pr_branch
-      - name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "${{ needs.versions.outputs.uv-version }}"
-      - name: Set up Python
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '${{ needs.versions.outputs.python-default }}'
-        env:
-          AGENT_TOOLSDIRECTORY: "/opt/hostedtoolcache"
-
-      - name: Install apt dependencies
-        run: apt install -y zlib1g-dev libpng-dev
-
-      - name: Install pip dependencies
-        run: |
-          uv venv
-          echo "torch==${NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION}" > "${RUNNER_TEMP}/torch-constraints.txt"
-          uv pip install --no-cache-dir -c "${RUNNER_TEMP}/torch-constraints.txt" -r env/test_requirements.txt --extra-index-url https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
-        env:
-          NEEDS_VERSIONS_OUTPUTS_TORCH_FULL_VERSION: ${{ needs.versions.outputs.torch-full-version }}
-
-      - name: Download package
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-            name: fvdb-test-package-cu130
-            path: ./dist
-
-      - name: Install package
-        run: |
-          source .venv/bin/activate
-          pip install ./dist/*.whl
-
-      - name: Run tests
-        run: |
-          source .venv/bin/activate
-          pytest --markdown-docs docs --ignore-glob="**/wip/**"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Cleaning up /__w/_temp directory"
-          rm -rf /__w/_temp/*
-          echo "Cleanup completed"
-
-  ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
   ##############################################################################
   fvdb-tests-stop-gpu-runner:
-    name: Stop GPU EC2 runner for gtests
+    name: Stop GPU EC2 runner for tests
     needs:
       - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
-      - fvdb-gtests # required to wait when the main job is done
-      - fvdb-unit-test # required to wait when the main job is done
-      - fvdb-docs-test # required to wait when the main job is done
+      - fvdb-gpu-tests # required to wait when the main job is done
       - versions
     permissions:
       id-token: write  # Required for AWS OIDC

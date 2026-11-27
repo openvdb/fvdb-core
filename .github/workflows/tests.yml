@@ -193,78 +193,17 @@ jobs:
       aws-region: ${{ needs.versions.outputs.aws-region }}
 
   ##############################################################################
-  # RUN FVDB GTESTS
+  # RUN FVDB GPU TESTS
+  #
+  # The gtests, doc tests and unit tests share one GPU runner, so they run as steps
+  # of one job: the container, checkout and Conda env are set up once instead
+  # of once per suite. Each suite step runs as long as the setup it needs
+  # succeeded and the run was not cancelled, so one failing suite does not hide
+  # the results of the others; the job fails if any of them failed.
   ##############################################################################
-  fvdb-gtests:
+  fvdb-gpu-tests:
     needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB GTests (Conda)
-    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
-    container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
-      env:
-        PYTHONPATH: ""
-        CPM_SOURCE_CACHE: "/__w/cpm_cache"
-        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
-      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Fetch PR branch
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-          git fetch origin ${{ github.event.pull_request.head.sha }}
-          git branch pr_branch FETCH_HEAD
-      - name: Merge PR branch into base
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git merge pr_branch
-
-      - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
-        with:
-          cache-environment: false
-          post-cleanup: 'all'
-          environment-name: fvdb_test
-          environment-file: env/test_environment.yml
-
-      - name: Download gtests
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-            name: fvdb-gtest-conda
-            path: .
-
-      - name: Extract tar
-        run: |
-            tar -xvf fvdb-gtest.tar
-
-      - name: Run tests
-        run: |
-            micromamba activate fvdb_test
-            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
-            ./build.sh ctest
-
-  ##############################################################################
-  # RUN FVDB UNIT TESTS
-  ##############################################################################
-  fvdb-unit-tests:
-    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Unit Tests (Conda)
+    name: fVDB GPU Tests (Conda)
     runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
     container:
       image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
@@ -309,6 +248,7 @@ jobs:
           git merge pr_branch
 
       - name: Set up fvdb_test Conda env
+        id: env-ready
         uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
         with:
           cache-environment: false
@@ -316,18 +256,72 @@ jobs:
           environment-name: fvdb_test
           environment-file: env/test_environment.yml
 
+      # The wheel (doc and unit tests) and the gtest build tree are set up
+      # independently, so a failure in one setup chain does not skip the other.
       - name: Download package
+        id: package-downloaded
+        if: ${{ !cancelled() && steps.env-ready.outcome == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
             name: fvdb-test-package-conda
             path: ./dist
 
       - name: Install package
+        id: package-ready
+        if: ${{ !cancelled() && steps.package-downloaded.outcome == 'success' }}
         run: |
             micromamba activate fvdb_test
             pip install ./dist/*.whl
 
-      - name: Run tests
+      - name: Download gtests
+        id: gtests-downloaded
+        if: ${{ !cancelled() && steps.env-ready.outcome == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+            name: fvdb-gtest-conda
+            path: .
+
+      - name: Extract gtests
+        id: gtests-ready
+        if: ${{ !cancelled() && steps.gtests-downloaded.outcome == 'success' }}
+        run: |
+            tar -xvf fvdb-gtest.tar
+
+      - name: Run gtests
+        if: ${{ !cancelled() && steps.gtests-ready.outcome == 'success' }}
+        run: |
+            micromamba activate fvdb_test
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib
+            ./build.sh ctest
+
+      - name: Run markdown docs tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
+        run: |
+            micromamba activate fvdb_test
+            pytest --markdown-docs docs
+
+      - name: Run API reference validation
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_teachme_api_refs.py -v
+
+      - name: Run notebook tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
+        run: |
+            micromamba activate fvdb_test
+            pytest --nbmake notebooks/
+
+      - name: Run example tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
+        run: |
+            micromamba activate fvdb_test
+            pytest tests/test_examples.py -v
+
+      # Unit tests run last because they install the viewer into the env, and
+      # the doc tests have always run without it.
+      - name: Run unit tests
+        if: ${{ !cancelled() && steps.package-ready.outcome == 'success' }}
         env:
           # The whole parametrized matrix shares one process, so the caching allocator's
           # reserved pool only ever grows and its high-water mark ends up far above any
@@ -344,97 +338,13 @@ jobs:
             pytest -v unit
 
   ##############################################################################
-  # RUN FVDB DOCUMENTATION TESTS
-  ##############################################################################
-  fvdb-docs-test:
-    needs: [start-tests-gpu-runner, versions] # required to start the main job when the runner is ready
-    name: fVDB Doc Tests (Conda)
-    runs-on: ${{ needs.start-tests-gpu-runner.outputs.label }} # run the job on the newly created runner
-    container:
-      image: nvidia/cuda:${{ needs.versions.outputs.cuda-130-patch }}-base-${{ needs.versions.outputs.docker-os-rocky }}
-      env:
-        PYTHONPATH: ""
-        CONDA_PKGS_DIRS: "/opt/conda-pkgs-cache"
-      options: --rm -v /tmp/conda-pkgs-cache:/opt/conda-pkgs-cache
-    defaults:
-      run:
-        shell: bash -el {0}
-    steps:
-      - name: Install system dependencies
-        run: dnf install -y git procps-ng findutils
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # Fetch all history for all branches
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Fetch PR branch
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory "$(pwd)"
-          git fetch origin ${{ github.event.pull_request.head.sha }}
-          git branch pr_branch FETCH_HEAD
-
-      - name: Merge PR branch into base
-        if: github.event_name == 'pull_request_target'
-        run: |
-          cd $GITHUB_WORKSPACE
-          git merge pr_branch
-
-      - name: Set up fvdb_test Conda env
-        uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
-        with:
-          cache-environment: false
-          post-cleanup: 'all'
-          environment-name: fvdb_test
-          environment-file: env/test_environment.yml
-
-      - name: Download package
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-            name: fvdb-test-package-conda
-            path: ./dist
-
-      - name: Install package
-        run: |
-            micromamba activate fvdb_test
-            pip install ./dist/*.whl
-
-      - name: Run markdown docs tests
-        run: |
-            micromamba activate fvdb_test
-            pytest --markdown-docs docs
-
-      - name: Run API reference validation
-        run: |
-            micromamba activate fvdb_test
-            pytest tests/test_teachme_api_refs.py -v
-
-      - name: Run notebook tests
-        run: |
-            micromamba activate fvdb_test
-            pytest --nbmake notebooks/
-
-      - name: Run example tests
-        run: |
-            micromamba activate fvdb_test
-            pytest tests/test_examples.py -v
-
-  ##############################################################################
   # STOP FVDB TESTS GPU RUNNER
   ##############################################################################
   fvdb-tests-stop-gpu-runner:
     name: Stop GPU EC2 runner for tests
     needs:
       - start-tests-gpu-runner # required to get output from the start-tests-gpu-runner job
-      - fvdb-gtests # required to wait when the main job is done
-      - fvdb-unit-tests # required to wait when the main job is done
-      - fvdb-docs-test # required to wait when the main job is done
+      - fvdb-gpu-tests # required to wait when the main job is done
       - versions
     permissions:
       id-token: write  # Required for AWS OIDC
