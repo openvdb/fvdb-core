@@ -794,12 +794,12 @@ class TestBasicOps(unittest.TestCase):
         # The old path peaked at > 300 MiB of torch tensors for 2M points (8N int32 coords + two
         # 8N int32 jidx arrays); the mask path allocates ~one N-coord list plus the output grid.
         #
-        # The threshold accounts for nanoVDB builder scratch being torch-visible: PadGrid now
-        # routes its TopologyBuilder scratch through TorchResource (torch's caching allocator)
-        # rather than nanoVDB's separate cudaMallocAsync pool, so ~78 MiB that this measurement
-        # previously could not see is now counted here. Total device consumption is unchanged --
-        # only the accounting moved -- so the bound is raised rather than the routing reverted.
-        # Measured ~159 MiB; 200 MiB keeps the guard against a return to the >300 MiB path.
+        # The threshold accounts for nanoVDB builder scratch being torch-visible: the pad step's
+        # TopologyBuilder scratch goes through TorchResource (torch's caching allocator), not
+        # nanoVDB's separate cudaMallocAsync pool, so ~78 MiB that this measurement could not see
+        # before that routing change is counted here. Measured 158.9 MiB both with the per-grid
+        # PadGrid pad and with the batched BoxDilate pass that replaced it (one grid, so the same
+        # root tiles and scratch); 200 MiB keeps the guard against a return to the >300 MiB path.
         self.assertGreater(grid.total_voxels, 0)
         self.assertLess(
             peak_extra,

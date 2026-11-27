@@ -749,12 +749,7 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "prune_grid",
-        [](const GBI &grid, const JT &mask) {
-            if (grid.batchSize() == 0) {
-                return fvdb::detail::makeEmptyGridBatchData(grid.device());
-            }
-            return ops::pruneGrid(grid, mask);
-        },
+        [](const GBI &grid, const JT &mask) { return ops::pruneGrid(grid, mask); },
         py::arg("grid"),
         py::arg("mask"));
 

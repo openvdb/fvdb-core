@@ -9,26 +9,63 @@
 #include <fvdb/detail/ops/BuildPrunedGrid.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/cuda/Buffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
 #include <nanovdb/tools/GridBuilder.h>
-#include <nanovdb/tools/cuda/PruneGrid.cuh>
-#include <nanovdb/util/MorphologyHelpers.h>
-#include <nanovdb/util/cuda/Injection.cuh>
-#include <nanovdb/util/cuda/Util.h>
 
 #include <ATen/core/TensorBody.h>
 #include <c10/core/ScalarType.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 namespace fvdb::detail::ops {
 
 template <torch::DeviceType>
 GridStorage dispatchPruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask);
+
+namespace {
+
+/// One thread per (batch leaf, mask word): the word's active voxels whose `keep` flag is set. The
+/// keep flags are in batch voxel order: voxel v (1-based value index) of grid g is
+/// keep[voxelStart[g] + v - 1].
+__global__ void
+fillKeepMasks(const nanovdb::OnIndexGrid *const *grids,
+              const int64_t *leafStart, // [numGrids + 1]
+              const int64_t *voxelStart,
+              int32_t numGrids,
+              int64_t numItems,
+              const bool *keep,
+              batched::LeafMaskT *keepMasks) {
+    constexpr uint32_t kBitsPerWord = batched::LeafMaskT::SIZE / batched::kLeafMaskWords;
+    for (int64_t item = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; item < numItems;
+         item += int64_t(gridDim.x) * blockDim.x) {
+        const int64_t leaf = item / batched::kLeafMaskWords;
+        const uint32_t w   = uint32_t(item % batched::kLeafMaskWords);
+        const int32_t g    = batched::gridOfLeaf(leafStart, numGrids, leaf);
+        const batched::LeafT &src =
+            grids[g]->tree().template getFirstNode<0>()[leaf - leafStart[g]];
+        uint64_t active = src.valueMask().words()[w];
+        uint64_t kept   = 0;
+        while (active) {
+            const uint32_t bit = uint32_t(__ffsll(static_cast<long long>(active)) - 1);
+            active &= active - 1;
+            const uint64_t value = src.getValue(w * kBitsPerWord + bit); // 1-based in grid g
+            if (keep[voxelStart[g] + int64_t(value) - 1]) {
+                kept |= uint64_t(1) << bit;
+            }
+        }
+        keepMasks[leaf].words()[w] = kept;
+    }
+}
+
+} // namespace
 
 template <>
 GridStorage
@@ -36,58 +73,42 @@ dispatchPruneGrid<torch::kCUDA>(const GridBatchData &gridBatch, const JaggedTens
     const torch::Device device = gridBatch.device();
     c10::cuda::CUDAGuard deviceGuard(device);
 
-    TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
-    TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
-    TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
+    // The grids are built and their storage retained on the device's current torch stream.
+    const cudaStream_t stream = storageStream(device);
+    const int64_t batchSize   = gridBatch.batchSize();
 
-    // The grids are built and their storage retained on the device's current torch stream; the
-    // prototype carries that stream and the device into every allocation the builder makes.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
-
-    // Build one grid per batch item, then lay them end to end in one storage.
-    GridStorageParts parts(device, stream, gridBatch.batchSize());
-    for (int i = 0; i < gridBatch.batchSize(); i += 1) {
-        // This also keeps the grid aligned with numLeavesAt(i)/mask.index(i), which are
-        // item-indexed.
-        nanovdb::OnIndexGrid *grid = gridBatch.deviceGridPtrAt(i);
-        TORCH_CHECK(grid, "Grid is null");
-
-        const torch::Tensor maskI = mask.index(i).jdata();
-
-        // FIXME: Handle empty case!!
-        if (maskI.sum().item<int64_t>() == 0) {
-            // If the mask is empty, we contribute a voxel-less grid
-            parts.addEmpty();
-            continue;
+    // Per-leaf keep masks for the whole batch, one leaf mask (batched::LeafMaskT) per source leaf
+    // in batch order, from the per-voxel mask in one launch. They are scratch for the prune pass,
+    // so they go through the builders' resource (torch's active CUDA allocator), stream-ordered on
+    // the pass's stream.
+    const batched::BatchedTopologySource source = batched::sourceFromGridBatch(gridBatch);
+    const batched::SourceLeafTables tables      = batched::sourceLeafTables(source, stream);
+    BuilderBuffer<batched::LeafMaskT> keepMasks(
+        stream, std::max<int64_t>(tables.numLeaves(), 1), nanovdb::cuda::noInit);
+    if (tables.numLeaves() > 0) {
+        std::vector<int64_t> voxelStart(batchSize);
+        for (int64_t i = 0; i < batchSize; ++i) {
+            voxelStart[i] = gridBatch.cumVoxelsAt(i);
         }
-
-        const auto leafCount = gridBatch.numLeavesAt(i);
-
-        // Per-leaf keep masks, one Mask<3> per source leaf. Scratch for the prune pass, so it
-        // goes through the builders' resource (torch's active CUDA allocator), stream-ordered on
-        // the stream the fill kernel and PruneGrid run on. Every word is written by the kernel
-        // below, so the allocation is not zero-initialized.
-        BuilderBuffer<nanovdb::Mask<3>> maskBuffer(stream, leafCount, nanovdb::cuda::noInit);
-
-        using Op = nanovdb::util::cuda::InjectPredicateToMaskFunctor<nanovdb::ValueOnIndex, -1>;
-        nanovdb::Mask<3> *leafMask = maskBuffer.data();
-        nanovdb::util::cuda::operatorKernel<Op><<<leafCount, Op::MaxThreadsPerBlock, 0, stream>>>(
-            grid, maskI.data_ptr<bool>(), leafMask);
+        const torch::Tensor maskData      = mask.jdata().contiguous();
+        const torch::Tensor voxelStartDev = batched::uploadTable(voxelStart, device, stream);
+        const int64_t numItems            = tables.numLeaves() * batched::kLeafMaskWords;
+        fillKeepMasks<<<batched::itemBlocks(numItems), batched::kThreads, 0, stream>>>(
+            tables.gridPtrs(),
+            tables.leafStartPtr(),
+            voxelStartDev.data_ptr<int64_t>(),
+            tables.numGrids(),
+            numItems,
+            maskData.data_ptr<bool>(),
+            keepMasks.data());
         C10_CUDA_KERNEL_LAUNCH_CHECK();
-        // PruneGrid defaults to the legacy stream 0; run it on the same stream as the mask fill
-        // above, or its reads of leafMask can race the kernel that writes it.
-        nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
-            grid, leafMask, stream);
-        pruneOp.setVerbose(0);
-
-        GridStorage::DeviceHandle handle = pruneOp.getHandle(proto);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-        parts.add(GridStorage(std::move(handle), device));
     }
 
-    return parts.merge();
+    // One batched prune pass over the whole batch (issue #775, item 10). A member whose mask keeps
+    // nothing becomes a valid empty grid inline.
+    const std::vector<batched::TopologyPassSpec> passes{
+        batched::TopologyPassSpec::prune(keepMasks.data(), tables.numLeaves())};
+    return batched::batchedTopologyStorage(gridBatch, passes, stream);
 }
 
 template <>
@@ -95,10 +116,6 @@ GridStorage
 dispatchPruneGrid<torch::kCPU>(const GridBatchData &gridBatch, const JaggedTensor &mask) {
     using GridT     = nanovdb::ValueOnIndex;
     using IndexTree = nanovdb::NanoTree<GridT>;
-
-    TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
-    TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
-    TORCH_CHECK_VALUE(gridBatch.device() == mask.device(), "Grid and mask must be on same device");
 
     std::vector<nanovdb::GridHandle<nanovdb::HostBuffer>> gridHandles;
     gridHandles.reserve(gridBatch.batchSize());
@@ -141,6 +158,19 @@ pruneGrid(const GridBatchData &gridBatch, const JaggedTensor &mask) {
                       "Cardinality of masks should match gridbatch size");
     TORCH_CHECK_VALUE(gridBatch.device() == mask.device(),
                       "GridBatch and mask should be on same device/host");
+    TORCH_CHECK_VALUE(mask.rdim() == 1, "Mask must be a one-dimensional boolean tensor");
+    TORCH_CHECK_VALUE(mask.scalar_type() == torch::kBool, "Mask must be a boolean tensor");
+    // An empty batch prunes to an empty batch on every device, after the argument checks above
+    // (matching buildPaddedGrid).
+    if (gridBatch.batchSize() == 0) {
+        return makeEmptyGridBatchData(gridBatch.device());
+    }
+    // One mask entry per voxel of each grid: the dispatches read grid b's flags at its voxel
+    // offset, so a mask with the right total but a different per-grid split would prune the wrong
+    // voxels, and a short one would be read past its end. On CUDA this compare waits on the device.
+    TORCH_CHECK_VALUE(mask.joffsets().numel() == gridBatch.voxelOffsets().numel() &&
+                          torch::equal(mask.joffsets(), gridBatch.voxelOffsets()),
+                      "Mask must have one entry per voxel of each grid");
     std::vector<nanovdb::Vec3d> voxS, voxO;
     gridBatch.gridVoxelSizesAndOrigins(voxS, voxO);
     GridStorage storage = FVDB_DISPATCH_KERNEL_DEVICE(

@@ -299,6 +299,53 @@ def _expected_nearest_voxels_ijk(points: torch.Tensor, voxel_size: float, origin
     return torch.unique(ijk, dim=0).to(torch.int32)
 
 
+def _random_prune_masks(grid: GridBatch, seed: int, keep_fraction: float = 0.5) -> JaggedTensor:
+    """One boolean per voxel of `grid`, in its voxel order, set with probability `keep_fraction`."""
+    g = torch.Generator().manual_seed(seed)
+    return JaggedTensor(
+        [(torch.rand(int(n), generator=g) < keep_fraction).to(grid.device) for n in grid.num_voxels.cpu().tolist()]
+    )
+
+
+def _expected_eroded_ijk(ijk: torch.Tensor, num_positive: int, num_negative: int) -> torch.Tensor:
+    """exclude_border padding: `num_positive` unit erosions keeping c iff c + {0,1}^3 is active,
+    then `num_negative` keeping c iff c + {-1,0}^3 is active (as unique coordinates)."""
+    voxels = set(map(tuple, ijk.to(torch.int64).tolist()))
+    for p in range(num_positive + num_negative):
+        lo, hi = (0, 1) if p < num_positive else (-1, 0)
+        box = [(i, j, k) for i in (lo, hi) for j in (lo, hi) for k in (lo, hi)]
+        voxels = {c for c in voxels if all((c[0] + d[0], c[1] + d[1], c[2] + d[2]) in voxels for d in box)}
+    if not voxels:
+        return torch.empty((0, 3), dtype=torch.int32)
+    return torch.tensor(sorted(voxels), dtype=torch.int32)
+
+
+def _erosion_batches():
+    """Dense members, where erosion keeps something: solid blocks across root-tile boundaries, a
+    one-voxel-thick shell (erodes to empty), a solid ball, and an empty member."""
+
+    def block(lo, size):
+        ax = [torch.arange(lo[a], lo[a] + size[a]) for a in range(3)]
+        return torch.stack(torch.meshgrid(*ax, indexing="ij"), -1).reshape(-1, 3).int()
+
+    ball = block((-10, -10, -10), (21, 21, 21))
+    ball = ball[ball.float().norm(dim=1) <= 9.5]
+    shell = block((0, 0, 0), (9, 9, 9))
+    shell = shell[((shell == 0) | (shell == 8)).any(dim=1)]
+    return [
+        block((4090, -4100, -3), (12, 9, 7)),
+        shell,
+        torch.empty((0, 3), dtype=torch.int32),
+        ball,
+        block((-2, -2, -2), (3, 3, 3)),
+    ]
+
+
+def _expected_pruned_ijk(grid: GridBatch, mask: JaggedTensor):
+    """Each member's voxels where `mask` is set, from the grid's own coordinates."""
+    return [grid.ijk[b].jdata[mask[b].jdata].cpu() for b in range(grid.grid_count)]
+
+
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for the batched builder")
 class TestBatchedTopologyBuilder(unittest.TestCase):
     def _check_against_expected(self, result: GridBatch, expected_ijks, msg: str):
@@ -515,6 +562,146 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         cpu_result = cpu_grid.refined_grid(2, mask=cpu_mask)
         self._check_against_cpu(result, cpu_result, "masked refine x2 vs CPU")
 
+    def _check_pruned(self, grid: GridBatch, mask: JaggedTensor, msg: str):
+        """Prunes `grid` by `mask` on CUDA and pins the result against expected coordinates and
+        against the CPU implementation."""
+        result = grid.pruned_grid(mask)
+        self._check_against_expected(result, _expected_pruned_ijk(grid, mask), msg)
+        cpu_result = grid.to("cpu").pruned_grid(JaggedTensor([m.cpu() for m in mask.unbind()]))
+        self._check_against_cpu(result, cpu_result, f"{msg} vs CPU")
+        for b in range(result.grid_count):
+            self.assertTrue(
+                torch.allclose(result.voxel_size_at(b).cpu(), grid.voxel_size_at(b).cpu()), f"{msg}: voxel size"
+            )
+            self.assertTrue(torch.allclose(result.origin_at(b).cpu(), grid.origin_at(b).cpu()), f"{msg}: origin")
+        return result
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_pruned_grid_matches_expected_and_cpu(self, name):
+        # CUDA: one batched Prune pass over the whole batch, from keep masks filled in one launch,
+        # instead of one PruneGrid build (and one host sync for its empty check) per member.
+        grid = _build(_tricky_batches()[name], "cuda")
+        for fraction in (0.5, 0.05):
+            self._check_pruned(
+                grid, _random_prune_masks(grid, seed=7, keep_fraction=fraction), f"{name} keep {fraction}"
+            )
+
+    @parameterized.expand([("mixed_sizes",), ("tile_boundaries",), ("wide_bbox",), ("larger_batch",)])
+    def test_pruned_grid_edge_masks(self, name):
+        grid = _build(_tricky_batches()[name], "cuda")
+        counts = grid.num_voxels.cpu().tolist()
+        dev = grid.device
+        # Keep everything: the result is the source topology.
+        self._check_pruned(
+            grid, JaggedTensor([torch.ones(n, dtype=torch.bool, device=dev) for n in counts]), f"{name} all"
+        )
+        # Keep nothing: every member becomes a valid empty grid.
+        nothing = grid.pruned_grid(JaggedTensor([torch.zeros(n, dtype=torch.bool, device=dev) for n in counts]))
+        self.assertEqual(nothing.grid_count, grid.grid_count)
+        self.assertEqual(nothing.total_voxels, 0)
+        self.assertEqual(nothing.dual_grid().total_voxels, 0)
+        # Keep nothing in one member only, between non-empty ones.
+        masks = [torch.ones(n, dtype=torch.bool, device=dev) for n in counts]
+        masks[len(masks) // 2] = torch.zeros(counts[len(masks) // 2], dtype=torch.bool, device=dev)
+        self._check_pruned(grid, JaggedTensor(masks), f"{name} one member emptied")
+        # Keep one voxel per member: most speculative root tiles and upper nodes end up empty.
+        masks = [torch.zeros(n, dtype=torch.bool, device=dev) for n in counts]
+        for b, n in enumerate(counts):
+            if n > 0:
+                masks[b][n // 2] = True
+        self._check_pruned(grid, JaggedTensor(masks), f"{name} one voxel each")
+
+    def test_pruned_grid_of_sliced_batch_matches_standalone(self):
+        coords = _tricky_batches()["mixed_sizes"] + _tricky_batches()["tile_boundaries"]
+        full = _build(coords, "cuda")
+        view = full[1:4]
+        standalone = _build(coords[1:4], "cuda")
+        mask = _random_prune_masks(standalone, seed=11)
+        pruned_view = view.pruned_grid(mask)
+        pruned_standalone = standalone.pruned_grid(mask)
+        self.assertEqual(pruned_view.grid_count, pruned_standalone.grid_count)
+        self.assertTrue(torch.equal(pruned_view.ijk.joffsets, pruned_standalone.ijk.joffsets))
+        self.assertTrue(torch.equal(pruned_view.ijk.jdata, pruned_standalone.ijk.jdata))
+
+    def test_pruned_grid_rejects_mask_not_matching_each_grid(self):
+        # The mask must match every grid's voxel count, on every device: a short mask, and a mask
+        # with the right total but a different per-grid split, are both rejected.
+        coords = [torch.randint(-8, 8, (n, 3), dtype=torch.int32) for n in (300, 40)]
+        for device in ("cuda", "cpu"):
+            grid = _build(coords, "cuda").to(device)
+            n0, n1 = grid.num_voxels.cpu().tolist()
+            self.assertNotEqual(n0, n1)
+            mask = _random_prune_masks(grid, seed=1)
+            short = JaggedTensor([m[:-1] for m in mask.unbind()])
+            with self.assertRaisesRegex(ValueError, "one entry per voxel"):
+                grid.pruned_grid(short)
+            flat = torch.cat([m for m in mask.unbind()])
+            swapped = JaggedTensor([flat[:n1], flat[n1:]])
+            with self.assertRaisesRegex(ValueError, "one entry per voxel"):
+                grid.pruned_grid(swapped)
+
+    def test_pruned_grid_of_empty_batch(self):
+        for device in ("cuda", "cpu"):
+            empty = GridBatch.from_zero_grids(device=device)
+            result = empty.pruned_grid(empty.jagged_like(torch.empty(0, dtype=torch.bool, device=device)))
+            self.assertEqual(result.grid_count, 0, device)
+            # The mask's dtype and rank are checked before the empty-batch shortcut, as for a
+            # non-empty batch.
+            with self.assertRaisesRegex(ValueError, "boolean"):
+                empty.pruned_grid(empty.jagged_like(torch.empty(0, dtype=torch.float32, device=device)))
+            with self.assertRaisesRegex(ValueError, "one-dimensional"):
+                empty.pruned_grid(empty.jagged_like(torch.empty(0, 2, dtype=torch.bool, device=device)))
+
+    @parameterized.expand([((0, 1),), ((0, 2),), ((-1, 0),), ((-1, 1),)])
+    def test_exclude_border_padding_matches_expected_and_cpu(self, box):
+        # CUDA: each unit erosion computes the whole batch's keep masks in one launch and prunes
+        # every grid to them in one batched Prune pass, instead of one PruneGrid build (and one host
+        # sync for its empty check) per member and pass.
+        bmin, bmax = box
+        for name, coords in [("erosion", _erosion_batches())] + list(_tricky_batches().items()):
+            grid = _build(coords, "cuda")
+            msg = f"{name} padded_grid({bmin}, {bmax}, exclude_border)"
+            result = _build_padded_grid(grid, bmin, bmax, exclude_border=True)
+            expected = [_expected_eroded_ijk(c, bmax, -bmin) for c in coords]
+            self._check_against_expected(result, expected, msg)
+            cpu_result = _build_padded_grid(grid.to("cpu"), bmin, bmax, exclude_border=True)
+            self._check_against_cpu(result, cpu_result, f"{msg} vs CPU")
+        # The dense members keep something, and the shell erodes to an empty grid.
+        kept = _build_padded_grid(_build(_erosion_batches(), "cuda"), bmin, bmax, exclude_border=True)
+        self.assertGreater(int(kept.num_voxels[0]), 0)
+        self.assertEqual(int(kept.num_voxels[1]), 0)
+
+    def test_exclude_border_padding_past_empty_batch(self):
+        # 40 unit erosions empty every member well before the last pass (members empty at different
+        # passes, the widest after about 20). On CUDA the loop stops once the whole batch is empty;
+        # the result must still be the batch's empty grids, matching the expected sets and CPU.
+        coords = _erosion_batches()
+        grid = _build(coords, "cuda")
+        result = _build_padded_grid(grid, -20, 20, exclude_border=True)
+        self.assertEqual(result.grid_count, len(coords))
+        self.assertTrue(torch.equal(result.num_voxels.cpu(), torch.zeros(len(coords), dtype=torch.int64)))
+        expected = [_expected_eroded_ijk(c, 20, 20) for c in coords]
+        self._check_against_expected(result, expected, "padded_grid(-20, 20, exclude_border)")
+        cpu_result = _build_padded_grid(grid.to("cpu"), -20, 20, exclude_border=True)
+        self._check_against_cpu(result, cpu_result, "padded_grid(-20, 20, exclude_border) vs CPU")
+
+    def test_dual_grid_exclude_border_matches_cpu(self):
+        grid = _build(_erosion_batches(), "cuda")
+        result = grid.dual_grid(exclude_border=True)
+        cpu_result = grid.to("cpu").dual_grid(exclude_border=True)
+        self._check_against_cpu(result, cpu_result, "dual_grid(exclude_border=True) vs CPU")
+        for b in range(result.grid_count):
+            self.assertTrue(torch.allclose(result.origin_at(b).cpu(), cpu_result.origin_at(b)), f"origin {b}")
+
+    def test_exclude_border_padding_of_sliced_batch_matches_standalone(self):
+        coords = _erosion_batches()
+        view = _build(coords, "cuda")[1:4]
+        standalone = _build(coords[1:4], "cuda")
+        a = _build_padded_grid(view, -1, 1, exclude_border=True)
+        b = _build_padded_grid(standalone, -1, 1, exclude_border=True)
+        self.assertTrue(torch.equal(a.ijk.joffsets, b.ijk.joffsets))
+        self.assertTrue(torch.equal(a.ijk.jdata, b.ijk.jdata))
+
     @parameterized.expand([("tile_boundaries",), ("wide_bbox",), ("empty_members",)])
     def test_chunked_build_matches_unchunked(self, name):
         # FVDB_TOPOLOGY_MAX_TILES=1 gives every grid its own builder run (a grid needing more tiles
@@ -531,7 +718,11 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             "dual_grid": lambda g: g.dual_grid(),
             "padded_grid(0, 2)": lambda g: _build_padded_grid(g, 0, 2),
             "padded_grid(-1, 1)": lambda g: _build_padded_grid(g, -1, 1),
+            "pruned_grid": lambda g: g.pruned_grid(prune_mask),
+            "padded_grid(-1, 1, exclude_border)": lambda g: _build_padded_grid(g, -1, 1, exclude_border=True),
+            "dual_grid(exclude_border)": lambda g: g.dual_grid(exclude_border=True),
         }
+        prune_mask = _random_prune_masks(grid, seed=3)
         for op_name, op in ops.items():
             msg = f"{name} {op_name}"
             unchunked = op(grid)
@@ -692,7 +883,7 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
     @parameterized.expand([(name,) for name in _NEAREST_BATCH_NAMES])
     def test_from_nearest_voxels_to_points_matches_expected_and_cpu(self, name):
         # CUDA: the floored-ijk base batch is padded by {0,1}^3 in one batched BoxDilate(0, +1)
-        # pass instead of one PadGrid per member.
+        # pass instead of one single-grid pad build per member.
         pts = _nearest_voxel_point_batches()[name]
         vs, og = _NEAREST_VOXEL_SIZE, _NEAREST_ORIGIN
         result = GridBatch.from_nearest_voxels_to_points(

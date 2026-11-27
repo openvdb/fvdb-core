@@ -197,8 +197,8 @@ class TestBasicOps(unittest.TestCase):
 
 
 @unittest.skipUnless(torch.cuda.is_available(), "CUDA is required for the mask-morphology padded-grid path")
-class TestPadGridCuda(unittest.TestCase):
-    """Tests for the leaf-mask-morphology implementation of dual_grid / build_padded_grid.
+class TestPaddedGridCuda(unittest.TestCase):
+    """Tests for the CUDA implementation of dual_grid / build_padded_grid.
 
     The CPU path (unchanged proxy-grid builder) is used as the ground truth; the CUDA path
     must produce the same active-voxel sets.

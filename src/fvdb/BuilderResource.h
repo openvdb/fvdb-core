@@ -11,7 +11,7 @@
 namespace fvdb {
 
 /// @brief The memory resource fvdb's ops bind as the ResourceT template
-///        parameter of nanoVDB's CUDA builders (and of fvdb's own PadGrid),
+///        parameter of nanoVDB's CUDA builders (and of fvdb's batched TopologyBuilder passes),
 ///        routing their internal device scratch.
 ///
 ///        This alias is the single seam choosing that policy: call sites name

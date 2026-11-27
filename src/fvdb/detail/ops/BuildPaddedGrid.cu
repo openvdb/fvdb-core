@@ -16,22 +16,18 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
-#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
-#include <fvdb/detail/utils/nanovdb/PadGrid.cuh> // ErodeKeepMaskFunctor (exclude_border)
+#include <fvdb/detail/utils/nanovdb/ErodeKeepMask.cuh>
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/cuda/PruneGrid.cuh>
-#include <nanovdb/util/cuda/DeviceGridTraits.cuh>
-#include <nanovdb/util/cuda/Util.h>
 
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAMathCompat.h>
 
+#include <algorithm>
 #include <limits>
-#include <optional>
 #include <vector>
 
 namespace fvdb {
@@ -237,60 +233,22 @@ buildPaddedGridFromGridCPU(const GridBatchData &baseBatchHdl, int BMIN, int BMAX
                                                 : nanovdb::mergeGrids(batchHandles));
 }
 
-// One unit erosion pass (exclude-border padding). Computes a per-leaf "keep" mask sidecar
-// (voxel survives iff its whole octant neighborhood is active) then prunes the source grid to
-// it via PruneGrid. The keep mask is a subset of the source, so the result is exact. Returns
-// nullopt when the erosion removes every voxel; the caller substitutes an empty grid.
-static std::optional<GridStorage::DeviceHandle>
-erodeOncePass(nanovdb::OnIndexGrid *grid,
-              uint32_t leafCount,
-              bool positive,
-              const torch::Device &device,
-              const DeviceGridBuffer &proto,
-              cudaStream_t stream) {
-    // Allocate the per-leaf keep-mask sidecar as a torch CUDA tensor so its emptiness can be
-    // tested reliably with a torch reduction below (a raw device buffer viewed via from_blob does
-    // not reduce correctly).
-    // Use a uint64 tensor (not uint8) so its data pointer is guaranteed 8-byte aligned for
-    // Mask<3> -- which is 8 uint64_t words -- since the kernels dereference it as Mask<3>*.
-    // (A uint8 tensor's data_ptr alignment isn't guaranteed by the tensor API, even though
-    // torch's allocators over-align in practice.)
-    const int64_t maskWords =
-        static_cast<int64_t>(sizeof(nanovdb::Mask<3>) / sizeof(uint64_t)) * leafCount;
-    torch::Tensor keepTensor =
-        torch::empty({maskWords}, torch::TensorOptions().dtype(torch::kUInt64).device(device));
-    auto *keepMasks = reinterpret_cast<nanovdb::Mask<3> *>(keepTensor.data_ptr());
-    if (positive) {
-        nanovdb::util::cuda::lambdaKernel<<<(leafCount + 127) / 128, 128, 0, stream>>>(
-            leafCount,
-            fvdb::detail::morphology::ErodeKeepMaskFunctor<nanovdb::ValueOnIndex, true>(),
-            grid,
-            keepMasks);
-    } else {
-        nanovdb::util::cuda::lambdaKernel<<<(leafCount + 127) / 128, 128, 0, stream>>>(
-            leafCount,
-            fvdb::detail::morphology::ErodeKeepMaskFunctor<nanovdb::ValueOnIndex, false>(),
-            grid,
-            keepMasks);
+// One unit erosion pass (exclude-border padding), keep masks for every leaf of `grids`: a voxel
+// survives iff its whole octant neighborhood is active. The keep masks are a subset of the source,
+// so pruning the source to them is exact.
+template <bool Positive>
+__global__ void
+erodeKeepMasks(const nanovdb::OnIndexGrid *const *grids,
+               const int64_t *leafStart, // [numGrids + 1]
+               int32_t numGrids,
+               int64_t numLeaves,
+               batched::LeafMaskT *keepMasks) {
+    for (int64_t leaf = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; leaf < numLeaves;
+         leaf += int64_t(gridDim.x) * blockDim.x) {
+        const int32_t g = batched::gridOfLeaf(leafStart, numGrids, leaf);
+        fvdb::detail::morphology::ErodeKeepMaskFunctor<nanovdb::ValueOnIndex, Positive>()(
+            leaf - leafStart[g], grids[g], keepMasks + leafStart[g]);
     }
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-
-    // PruneGrid (via TopologyBuilder) dereferences a null d_upperOffsets when the result has no
-    // nodes, so it cannot build an empty grid. Detect an all-empty keep mask (erosion removed
-    // everything) and report it so the caller emits an explicit empty grid instead -- same guard
-    // as BuildPrunedGrid.cu.
-    // Reduce via (!= 0).any(): any() alone (an `or` reduction) is not implemented for uint64 on
-    // CUDA, but the `!=` yields a bool tensor whose reduction is.
-    if (!(keepTensor != 0).any().item<bool>()) {
-        return std::nullopt;
-    }
-
-    nanovdb::tools::cuda::PruneGrid<nanovdb::ValueOnIndex, BuilderResource> pruneOp(
-        grid, keepMasks, stream);
-    pruneOp.setVerbose(0);
-    auto handle = pruneOp.getHandle(proto);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
-    return handle;
 }
 
 template <>
@@ -341,61 +299,51 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
         return batched::batchedTopologyStorage(baseBatchHdl, passes, stream);
     }
 
-    // Erosion (exclude_border) stays on the per-member path: build one grid per batch item, then
-    // lay them end to end in one storage. The prototype carries the stream and the device into
-    // every allocation the per-member builders make.
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
-    GridStorageParts parts(device, stream, baseBatchHdl.batchSize());
-    for (int64_t i = 0; i < baseBatchHdl.batchSize(); ++i) {
-        if (baseBatchHdl.numVoxelsAt(i) == 0) {
-            parts.addEmpty();
-            continue;
+    // Erosion (exclude_border): each unit pass computes the keep masks of the whole batch in one
+    // launch, then prunes every grid to them in one batched Prune pass (issue #775, item 7). The
+    // passes chain on the previous pass's output; a grid the erosion empties becomes a valid empty
+    // grid inline and stays empty. Once every grid is empty, the remaining passes cannot change
+    // anything, so the loop stops (the leaf counts are on the host, so the check costs no sync).
+    batched::BatchedTopologyResult result;
+    const auto allEmpty = [&result] {
+        const auto &counts = result.leafCounts;
+        return std::all_of(counts.begin(), counts.end(), [](int64_t n) { return n == 0; });
+    };
+    for (int p = 0; p < totalPasses; ++p) {
+        if (p > 0 && allEmpty()) {
+            break;
         }
-
-        // View-aware byte-offset accessor: the i-th *logical* grid (correct for sliced/
-        // non-contiguous batches; the storage's own deviceGridAt indexes physically).
-        nanovdb::OnIndexGrid *grid = baseBatchHdl.deviceGridPtrAt(i);
-
-        // The erosion passes chain on the device handle; only the final one is wrapped as
-        // storage. `handle` is empty (default-constructed) until the first pass produces a grid.
-        GridStorage::DeviceHandle handle;
-        bool haveHandle    = false;
-        bool erodedToEmpty = false;
-        for (int p = 0; p < totalPasses; ++p) {
-            const bool positive = (p < numPositive);
-            const uint32_t leafCount =
-                haveHandle
-                    ? nanovdb::util::cuda::DeviceGridTraits<nanovdb::ValueOnIndex>::getTreeData(
-                          grid)
-                          .mNodeCount[0]
-                    : baseBatchHdl.numLeavesAt(i);
-            if (leafCount == 0) {
-                // No leaves to erode -- (defensively) a leaf-free tile grid, or a prior pass
-                // left a grid without leaves. Without a handle yet, the item is empty.
-                if (!haveHandle) {
-                    erodedToEmpty = true;
-                }
-                break;
+        const batched::BatchedTopologySource source =
+            p == 0 ? batched::sourceFromGridBatch(baseBatchHdl)
+                   : batched::sourceFromResult(result, device);
+        const batched::SourceLeafTables tables = batched::sourceLeafTables(source, stream);
+        // Scratch for this pass, stream-ordered on the pass's stream. When the source has leaves,
+        // every word is written below; otherwise the one-mask placeholder is never read.
+        BuilderBuffer<batched::LeafMaskT> keepMasks(
+            stream, std::max<int64_t>(tables.numLeaves(), 1), nanovdb::cuda::noInit);
+        if (tables.numLeaves() > 0) {
+            const unsigned blocks = batched::itemBlocks(tables.numLeaves());
+            if (p < numPositive) {
+                erodeKeepMasks<true>
+                    <<<blocks, batched::kThreads, 0, stream>>>(tables.gridPtrs(),
+                                                               tables.leafStartPtr(),
+                                                               tables.numGrids(),
+                                                               tables.numLeaves(),
+                                                               keepMasks.data());
+            } else {
+                erodeKeepMasks<false>
+                    <<<blocks, batched::kThreads, 0, stream>>>(tables.gridPtrs(),
+                                                               tables.leafStartPtr(),
+                                                               tables.numGrids(),
+                                                               tables.numLeaves(),
+                                                               keepMasks.data());
             }
-            auto eroded = erodeOncePass(grid, leafCount, positive, device, proto, stream);
-            if (!eroded) {
-                // Erosion removed every voxel; further passes cannot bring anything back.
-                erodedToEmpty = true;
-                break;
-            }
-            handle     = std::move(*eroded);
-            haveHandle = true;
-            grid       = handle.deviceGrid<nanovdb::ValueOnIndex>();
+            C10_CUDA_KERNEL_LAUNCH_CHECK();
         }
-
-        if (erodedToEmpty) {
-            parts.addEmpty();
-        } else {
-            parts.add(GridStorage(std::move(handle), device));
-        }
+        result = batched::runBatchedTopologyPass(
+            source, batched::TopologyPassSpec::prune(keepMasks.data(), tables.numLeaves()), stream);
     }
-
-    return parts.merge();
+    return batched::storageFromResult(std::move(result), device, stream);
 }
 
 template <>
