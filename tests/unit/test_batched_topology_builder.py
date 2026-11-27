@@ -643,6 +643,20 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         self.assertGreater(int(kept.num_voxels[0]), 0)
         self.assertEqual(int(kept.num_voxels[1]), 0)
 
+    def test_exclude_border_padding_past_empty_batch(self):
+        # 40 unit erosions empty every member well before the last pass (members empty at different
+        # passes, the widest after about 20). On CUDA the loop stops once the whole batch is empty;
+        # the result must still be the batch's empty grids, matching the expected sets and CPU.
+        coords = _erosion_batches()
+        grid = _build(coords, "cuda")
+        result = _build_padded_grid(grid, -20, 20, exclude_border=True)
+        self.assertEqual(result.grid_count, len(coords))
+        self.assertTrue(torch.equal(result.num_voxels.cpu(), torch.zeros(len(coords), dtype=torch.int64)))
+        expected = [_expected_eroded_ijk(c, 20, 20) for c in coords]
+        self._check_against_expected(result, expected, "padded_grid(-20, 20, exclude_border)")
+        cpu_result = _build_padded_grid(grid.to("cpu"), -20, 20, exclude_border=True)
+        self._check_against_cpu(result, cpu_result, "padded_grid(-20, 20, exclude_border) vs CPU")
+
     def test_dual_grid_exclude_border_matches_cpu(self):
         grid = _build(_erosion_batches(), "cuda")
         result = grid.dual_grid(exclude_border=True)

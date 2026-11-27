@@ -302,9 +302,17 @@ dispatchBuildPaddedGrid<torch::kCUDA>(const GridBatchData &baseBatchHdl,
     // Erosion (exclude_border): each unit pass computes the keep masks of the whole batch in one
     // launch, then prunes every grid to them in one batched Prune pass (issue #775, item 7). The
     // passes chain on the previous pass's output; a grid the erosion empties becomes a valid empty
-    // grid inline and stays empty.
+    // grid inline and stays empty. Once every grid is empty, the remaining passes cannot change
+    // anything, so the loop stops (the leaf counts are on the host, so the check costs no sync).
     batched::BatchedTopologyResult result;
+    const auto allEmpty = [&result] {
+        const auto &counts = result.leafCounts;
+        return std::all_of(counts.begin(), counts.end(), [](int64_t n) { return n == 0; });
+    };
     for (int p = 0; p < totalPasses; ++p) {
+        if (p > 0 && allEmpty()) {
+            break;
+        }
         const batched::BatchedTopologySource source =
             p == 0 ? batched::sourceFromGridBatch(baseBatchHdl)
                    : batched::sourceFromResult(result, device);
