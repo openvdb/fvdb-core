@@ -14,7 +14,10 @@
 #include <c10/cuda/CUDAGuard.h>
 
 #include <algorithm>
+#include <concepts>
+#include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace fvdb {
 
@@ -25,17 +28,18 @@ constexpr int kVbmBlocksPerCudaBlock = kVbmForEachBlockDim / detail::VbmCache::k
 static_assert(kVbmForEachBlockDim % detail::VbmCache::kBlockWidth == 0,
               "each CUDA block must cover whole VBM blocks");
 
-/// One launch over every active voxel of a batch. Each group of kBlockWidth threads takes one
-/// VBM block of the batch (grid-stride) and finds its grid through the batch view's
-/// lastGridAtOrBefore, a warp-uniform binary search over the grids' block bases. Each thread
-/// decodes one voxel's (leafIndex, voxelOffset) in registers via the VoxelBlockManager's
-/// rank+select inverse-map decode. Launched at 256 threads, like dispatch::for_each.
-template <typename Func, typename... Args>
-__global__ void __launch_bounds__(kVbmForEachBlockDim)
-forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
-                            const detail::BatchVbmLayout layout,
-                            Func func,
-                            Args... args) {
+/// Grid-stride loop over every active voxel of a batch, shared by the VBM iteration kernels. Each
+/// group of kBlockWidth threads takes one VBM block of the batch and finds its grid through the
+/// batch view's lastGridAtOrBefore, a warp-uniform binary search over the grids' block bases. Each
+/// thread decodes one voxel's (leafIndex, voxelOffset) in registers via the VoxelBlockManager's
+/// rank+select inverse-map decode, then calls visit(gridIdx, ijk, featureIdx), where featureIdx is
+/// the batch-wide linear voxel index. Kernels using it launch at kVbmForEachBlockDim threads.
+template <typename Visit>
+    requires std::invocable<Visit &, uint32_t, nanovdb::Coord const &, int64_t>
+__device__ __forceinline__ void
+forEachBatchVbmVoxel(const detail::BatchVbm &vbm,
+                     const detail::BatchVbmLayout &layout,
+                     Visit &&visit) {
     using VbmCache = detail::VbmCache;
     using VbmT     = nanovdb::tools::cuda::VoxelBlockManager<VbmCache::kLog2BlockWidth>;
     using ViewT    = detail::BatchVbmView;
@@ -74,11 +78,49 @@ forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
         const nanovdb::Coord ijk = leaf.offsetToGlobalCoord(voxelOffset);
         // Sequential OnIndex invariant: the decoded voxel's value index equals its slot (i + 1),
         // so the batch-wide feature index matches the leaf scan's baseOffset + getValue - 1.
-        func.perActiveVoxel(ijk, layout.voxelOffsets[bi] + int64_t(i), args...);
+        visit(bi, ijk, layout.voxelOffsets[bi] + int64_t(i));
     }
 }
 
+template <typename Func, typename... Args>
+__global__ void __launch_bounds__(kVbmForEachBlockDim)
+forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
+                            const detail::BatchVbmLayout layout,
+                            Func func,
+                            Args... args) {
+    forEachBatchVbmVoxel(vbm, layout, [&](uint32_t, const nanovdb::Coord &ijk, int64_t featureIdx) {
+        func.perActiveVoxel(ijk, featureIdx, args...);
+    });
+}
+
 } // namespace _private
+
+/// @brief Launch kernel<<<n, kVbmForEachBlockDim>>>(vbm, layout, kernelArgs...) over the batch's
+/// VoxelBlockManagers on the current stream, building them on first use. A no-op for a batch
+/// without active voxels. The kernel is expected to iterate with _private::forEachBatchVbmVoxel.
+template <typename... KernelParams, typename... KernelArgs>
+    requires(sizeof...(KernelArgs) == sizeof...(KernelParams)) &&
+            (std::convertible_to<KernelArgs, KernelParams> && ...)
+void launchBatchVbmKernel(const fvdb::GridBatchData &batchHdl,
+                          void (*kernel)(detail::BatchVbm, detail::BatchVbmLayout, KernelParams...),
+                          KernelArgs &&...kernelArgs) {
+    TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
+    TORCH_CHECK(batchHdl.device().has_index(), "Grid batch device must have an index");
+    c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
+    const auto stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
+
+    const detail::BatchVbm &vbm = batchHdl.vbm();
+    if (vbm.blockCount == 0) {
+        return;
+    }
+    const uint64_t cudaBlocks =
+        (vbm.blockCount + _private::kVbmBlocksPerCudaBlock - 1) / _private::kVbmBlocksPerCudaBlock;
+    const auto numBlocks =
+        uint32_t(std::min<uint64_t>(cudaBlocks, std::numeric_limits<int32_t>::max()));
+    kernel<<<numBlocks, _private::kVbmForEachBlockDim, 0, stream>>>(
+        vbm, detail::BatchVbmLayout::of(batchHdl), std::forward<KernelArgs>(kernelArgs)...);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+}
 
 /// @brief Run func.perActiveVoxel(ijk, featureIdx, args...) for every active voxel of every
 /// grid in the batch, using the batch's VoxelBlockManagers: exactly one thread per active voxel
@@ -93,22 +135,8 @@ forEachActiveVoxelVbmKernel(const detail::BatchVbm vbm,
 template <typename Func, typename... Args>
 void
 forEachActiveVoxelVbmCUDA(const fvdb::GridBatchData &batchHdl, Func func, Args... args) {
-    TORCH_CHECK(batchHdl.device().is_cuda(), "Grid batch must be on a CUDA device");
-    TORCH_CHECK(batchHdl.device().has_index(), "Grid batch device must have an index");
-    c10::cuda::CUDAGuard deviceGuard(batchHdl.device());
-    const auto stream = at::cuda::getCurrentCUDAStream(batchHdl.device().index());
-
-    const detail::BatchVbm &vbm = batchHdl.vbm();
-    if (vbm.blockCount == 0) {
-        return;
-    }
-    const uint64_t cudaBlocks =
-        (vbm.blockCount + _private::kVbmBlocksPerCudaBlock - 1) / _private::kVbmBlocksPerCudaBlock;
-    const auto numBlocks =
-        uint32_t(std::min<uint64_t>(cudaBlocks, std::numeric_limits<int32_t>::max()));
-    _private::forEachActiveVoxelVbmKernel<<<numBlocks, _private::kVbmForEachBlockDim, 0, stream>>>(
-        vbm, detail::BatchVbmLayout::of(batchHdl), func, args...);
-    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    launchBatchVbmKernel(
+        batchHdl, &_private::forEachActiveVoxelVbmKernel<Func, Args...>, func, args...);
 }
 
 } // namespace fvdb

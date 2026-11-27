@@ -28,6 +28,7 @@
 #include <torch/types.h>
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 namespace fvdb {
@@ -166,6 +167,16 @@ gatherScatterDefaultSparseConvTransposeBackward(torch::Tensor grad_output,
                                                 torch::Tensor features,
                                                 torch::Tensor weights,
                                                 GatherScatterDefaultTopology const &topo);
+
+/// Choices that are otherwise made from the grids and the device, forced so tests and benchmarks
+/// can reach every code path. Unset fields leave the heuristics in charge. For tests and
+/// benchmarks only.
+struct GatherScatterDefaultTestOverrides {
+    /// Iterate the topology build's output voxels through the VoxelBlockManager (CUDA only)
+    /// instead of the leaf scan.
+    std::optional<bool> vbmIteration;
+};
+void setGatherScatterDefaultTestOverrides(GatherScatterDefaultTestOverrides const &overrides);
 
 } // namespace ops
 } // namespace detail

@@ -21,14 +21,12 @@
 #include "dispatch/detail/core_types.h"
 #include "dispatch/torch/types.h"
 
-#include <fvdb/detail/VbmCache.h>
 #include <fvdb/detail/dispatch/ForEachActiveVoxel.cuh>
 #include <fvdb/detail/dispatch/GridAccessor.h>
 #include <fvdb/detail/ops/convolution/ConvolutionGeometry.h>
 #include <fvdb/detail/ops/convolution/MaskedIGemm.h>
 
 #include <nanovdb/NanoVDB.h>
-#include <nanovdb/tools/cuda/VoxelBlockManager.cuh>
 
 #include <ATen/Context.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -60,8 +58,23 @@ namespace ops {
 
 namespace {
 
-// Set only by tests (setMaskedIGemmTestOverrides); unset fields leave the heuristics in charge.
+// Set only by tests and benchmarks (setMaskedIGemmTestOverrides); unset fields leave the
+// heuristics in charge.
 constinit MaskedIGemmTestOverrides gTestOverrides;
+
+// How the probe-loop builders walk their row grid's active voxels (RTX PRO 6000, full topology
+// build, 66k-2.1M voxels). The neighbor map of kernels of up to 32 taps (buildNeighborMap) takes
+// the VoxelBlockManager: 1.0-1.6x faster than the leaf scan submanifold, even to 1.15x strided.
+// It also matches the leaf-staged builder that used to serve large submanifold grids, which this
+// replaced. Large kernels' batched probes (probeBatchScan) keep the leaf scan: the VBM wins
+// 1.2-1.7x at 10% leaf occupancy but loses 4-16% at 16-50% (k5, k7), not yet profiled.
+dispatch::ActiveVoxelIteration
+probeIteration(bool largeKernel) {
+    using It = dispatch::ActiveVoxelIteration;
+    if (gTestOverrides.vbmIteration)
+        return *gTestOverrides.vbmIteration ? It::Vbm : It::LeafScan;
+    return largeKernel ? It::LeafScan : It::Vbm;
+}
 
 // torch.use_deterministic_algorithms(True). Split kernels normally add float partials into one
 // buffer with atomics, in run-dependent order. In deterministic mode each split gets its own slice
@@ -1091,10 +1104,10 @@ maskedIGemmWgradKernel(T const *__restrict__ X,
 }
 
 // =============================================================================
-// Neighbor-map builders
+// Neighbor-map builder
 // =============================================================================
 //
-// Both write, per output row o: nbr[o, k] (input row or -1), the tap mask, and
+// Writes, per output row o: nbr[o, k] (input row or -1), the tap mask, and
 // the mask's Gray-code rank (prefix XOR), which orders rows as FlexGEMM does.
 
 __host__ __device__ inline uint32_t
@@ -1107,152 +1120,42 @@ grayRank(uint32_t mask) {
     return mask;
 }
 
-// Leaf-staged builder. One CTA per VoxelBlockManager block of 128 active voxels
-// in leaf order, which span a run of consecutive leaves. The CTA probes each of
-// those leaves' 27 neighbor leaves once into shared memory, then every voxel
-// resolves its taps with a mask test and the leaf's prefix-sum popcount instead
-// of walking the tree. Every tap offset must stay within one leaf (|d| <= 8).
-constexpr int kStagedWidth = VbmCache::kBlockWidth;
-
-__global__ void __launch_bounds__(kStagedWidth)
-stagedNeighborMapKernel(nanovdb::OnIndexGrid const *__restrict__ grid,
-                        uint32_t const *__restrict__ firstLeafID,
-                        uint64_t const *__restrict__ jumpMap,
-                        uint64_t firstOffset,
-                        uint64_t lastOffset,
-                        int64_t base,
-                        ConvolutionGeometry geometry,
-                        int K,
-                        int32_t *__restrict__ nbr,
-                        int32_t *__restrict__ code,
-                        int32_t *__restrict__ masks) {
-    using VbmT          = nanovdb::tools::cuda::VoxelBlockManager<VbmCache::kLog2BlockWidth>;
-    constexpr int WORDS = VbmCache::kJumpMapWordCount;
-
-    __shared__ int32_t sLeaves[kStagedWidth][27]; // neighbor leaf index, -1 if absent
-    __shared__ int sNumLeaves;
-
-    uint64_t const *jump = jumpMap + uint64_t(blockIdx.x) * WORDS;
-    uint32_t const leaf0 = firstLeafID[blockIdx.x];
-    auto const *leaves   = grid->tree().template getFirstNode<0>();
-    auto const &root     = grid->tree().root();
-    uint64_t const first = firstOffset + uint64_t(blockIdx.x) * kStagedWidth;
-
-    if (threadIdx.x == 0) {
-        int n = 1; // a jump bit marks each later leaf starting inside the block
-        for (int w = 0; w < WORDS; ++w)
-            n += __popcll(jump[w]);
-        sNumLeaves = n;
-    }
-    __syncthreads();
-    int const numLeaves = sNumLeaves;
-    for (int i = threadIdx.x; i < numLeaves * 27; i += kStagedWidth) {
-        int const j  = i / 27;
-        int const n  = i - j * 27;
-        auto const o = leaves[leaf0 + j].origin();
-        auto const *l =
-            root.probeLeaf(o.offsetBy((n / 9 - 1) * 8, ((n / 3) % 3 - 1) * 8, (n % 3 - 1) * 8));
-        sLeaves[j][n] = l ? int32_t(l - leaves) : -1;
-    }
-    __syncthreads();
-
-    if (first + threadIdx.x > lastOffset)
-        return;
-    uint32_t leafIndex;
-    uint16_t voxelOffset;
-    VbmT::decodeInverseMap(grid, leaf0, jump, first, int(threadIdx.x), leafIndex, voxelOffset);
-    if (leafIndex == VbmT::UnusedLeafIndex)
-        __trap(); // the lastOffset guard makes this unreachable; never leave a row unwritten
-
-    int const j = int(leafIndex - leaf0);
-    int const x = voxelOffset >> 6, y = (voxelOffset >> 3) & 7, z = voxelOffset & 7;
-    // Sequential OnIndex invariant: this voxel's value index is its slot.
-    int64_t const row = base + int64_t(first + threadIdx.x) - 1;
-    int32_t *out      = nbr + row * K;
-    uint32_t mask     = 0;
-    for (int k = 0; k < K; ++k) {
-        nanovdb::Coord const d = geometry.tapOffset(geometry.tapCoord(k));
-        int const nx = x + d[0], ny = y + d[1], nz = z + d[2];
-        int const n  = ((nx + 8) / 8) * 9 + ((ny + 8) / 8) * 3 + (nz + 8) / 8;
-        int const li = sLeaves[j][n];
-        int32_t idx  = -1;
-        if (li >= 0) {
-            uint32_t const off = uint32_t(((nx & 7) << 6) | ((ny & 7) << 3) | (nz & 7));
-            auto const &leaf   = leaves[li];
-            if (leaf.isActive(off)) {
-                idx = int32_t(base + int64_t(leaf.getValue(off)) - 1);
-                mask |= 1u << k;
-            }
-        }
-        out[k] = idx;
-    }
-    code[row]  = int32_t(grayRank(mask));
-    masks[row] = int32_t(mask);
-}
-
+// One thread per output voxel, K probes of the feature grid's tree.
 void
-buildNeighborMapStaged(GridBatchData const &grid,
-                       ConvolutionGeometry const &geometry,
-                       int K,
-                       int32_t *nbr,
-                       int32_t *code,
-                       int32_t *masks,
-                       cudaStream_t stream) {
-    for (int64_t bi = 0; bi < grid.batchSize(); ++bi) {
-        auto const vbm = grid.vbmAt(bi);
-        if (vbm.blockCount == 0)
-            continue;
-        stagedNeighborMapKernel<<<vbm.blockCount, kStagedWidth, 0, stream>>>(
-            grid.deviceGridPtrAt(bi),
-            vbm.firstLeafID,
-            vbm.jumpMap,
-            vbm.firstOffset,
-            vbm.lastOffset,
-            grid.cumVoxelsAt(bi),
-            geometry,
-            K,
-            nbr,
-            code,
-            masks);
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
-    }
-}
-
-// Leaf-scan builder: one thread per output voxel, K probes of the feature grid's tree.
-void
-buildNeighborMapScan(GridBatchData const &featureGrid,
-                     GridBatchData const &outputGrid,
-                     ConvolutionGeometry const &geometry,
-                     int K,
-                     int32_t *nbr,
-                     int32_t *code,
-                     int32_t *masks) {
+buildNeighborMap(GridBatchData const &featureGrid,
+                 GridBatchData const &outputGrid,
+                 ConvolutionGeometry const &geometry,
+                 int K,
+                 int32_t *nbr,
+                 int32_t *code,
+                 int32_t *masks) {
     using CudaTag  = ::dispatch::tag<torch::kCUDA>;
     auto const acc = dispatch::make_grid_accessor(CudaTag{}, featureGrid);
-    dispatch::forEachActiveVoxel(CudaTag{},
-                                 outputGrid,
-                                 [=] __hostdev__(CudaTag,
-                                                 JIdxType batchIdx,
-                                                 nanovdb::Coord ijk,
-                                                 int64_t voxelIdx,
-                                                 GridBatchData::Accessor) {
-                                     auto treeAcc       = acc.grid(batchIdx)->getAccessor();
-                                     int64_t const base = acc.voxelOffset(batchIdx);
-                                     int32_t *row       = nbr + voxelIdx * K;
-                                     uint32_t mask      = 0;
-                                     for (int k = 0; k < K; ++k) {
-                                         nanovdb::Coord const probe =
-                                             geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
-                                         int32_t idx = -1;
-                                         if (treeAcc.isActive(probe)) {
-                                             idx = int32_t(base + treeAcc.getValue(probe) - 1);
-                                             mask |= 1u << k;
-                                         }
-                                         row[k] = idx;
-                                     }
-                                     code[voxelIdx]  = int32_t(grayRank(mask));
-                                     masks[voxelIdx] = int32_t(mask);
-                                 });
+    dispatch::forEachActiveVoxel(
+        CudaTag{},
+        outputGrid,
+        [=] __hostdev__(CudaTag,
+                        JIdxType batchIdx,
+                        nanovdb::Coord ijk,
+                        int64_t voxelIdx,
+                        GridBatchData::Accessor) {
+            auto treeAcc       = acc.grid(batchIdx)->getAccessor();
+            int64_t const base = acc.voxelOffset(batchIdx);
+            int32_t *row       = nbr + voxelIdx * K;
+            uint32_t mask      = 0;
+            for (int k = 0; k < K; ++k) {
+                nanovdb::Coord const probe = geometry.fineFromCoarse(ijk, geometry.tapCoord(k));
+                int32_t idx                = -1;
+                if (treeAcc.isActive(probe)) {
+                    idx = int32_t(base + treeAcc.getValue(probe) - 1);
+                    mask |= 1u << k;
+                }
+                row[k] = idx;
+            }
+            code[voxelIdx]  = int32_t(grayRank(mask));
+            masks[voxelIdx] = int32_t(mask);
+        },
+        probeIteration(false));
 }
 
 // Reverse map: rev[i, k] = o where nbr[o, k] = i. The tap fixes the output coordinate,
@@ -1922,36 +1825,36 @@ probeBatchScan(GridBatchData const &rowGrid,
                int32_t *scratch) {
     using CudaTag  = ::dispatch::tag<torch::kCUDA>;
     auto const acc = dispatch::make_grid_accessor(CudaTag{}, probeGrid);
-    dispatch::forEachActiveVoxel(CudaTag{},
-                                 rowGrid,
-                                 [=] __hostdev__(CudaTag,
-                                                 JIdxType batchIdx,
-                                                 nanovdb::Coord ijk,
-                                                 int64_t voxelIdx,
-                                                 GridBatchData::Accessor) {
-                                     if (voxelIdx < r0 || voxelIdx >= r1)
-                                         return;
-                                     auto treeAcc       = acc.grid(batchIdx)->getAccessor();
-                                     int64_t const base = acc.voxelOffset(batchIdx);
-                                     int32_t *row       = scratch + (voxelIdx - r0) * K;
-                                     for (int k = 0; k < K; ++k) {
-                                         // Computed here: nvcc rejects a lambda's first capture
-                                         // inside if constexpr.
-                                         nanovdb::Coord const tap = geometry.tapCoord(k);
-                                         nanovdb::Coord probe;
-                                         if constexpr (Reverse) {
-                                             if (!geometry.coarseFromFine(ijk, tap, probe)) {
-                                                 row[k] = -1;
-                                                 continue;
-                                             }
-                                         } else {
-                                             probe = geometry.fineFromCoarse(ijk, tap);
-                                         }
-                                         row[k] = treeAcc.isActive(probe)
-                                                      ? int32_t(base + treeAcc.getValue(probe) - 1)
-                                                      : -1;
-                                     }
-                                 });
+    dispatch::forEachActiveVoxel(
+        CudaTag{},
+        rowGrid,
+        [=] __hostdev__(CudaTag,
+                        JIdxType batchIdx,
+                        nanovdb::Coord ijk,
+                        int64_t voxelIdx,
+                        GridBatchData::Accessor) {
+            if (voxelIdx < r0 || voxelIdx >= r1)
+                return;
+            auto treeAcc       = acc.grid(batchIdx)->getAccessor();
+            int64_t const base = acc.voxelOffset(batchIdx);
+            int32_t *row       = scratch + (voxelIdx - r0) * K;
+            for (int k = 0; k < K; ++k) {
+                // Computed here: nvcc rejects a lambda's first capture
+                // inside if constexpr.
+                nanovdb::Coord const tap = geometry.tapCoord(k);
+                nanovdb::Coord probe;
+                if constexpr (Reverse) {
+                    if (!geometry.coarseFromFine(ijk, tap, probe)) {
+                        row[k] = -1;
+                        continue;
+                    }
+                } else {
+                    probe = geometry.fineFromCoarse(ijk, tap);
+                }
+                row[k] = treeAcc.isActive(probe) ? int32_t(base + treeAcc.getValue(probe) - 1) : -1;
+            }
+        },
+        probeIteration(true));
 }
 
 // Tap masks (rowWords[row, w].mask) and degrees of a probed batch, one warp per row: lane b reads
@@ -2293,32 +2196,13 @@ maskedIGemmSparseConvTopology(GridBatchData const &featureGrid,
     auto stream    = c10::cuda::getCurrentCUDAStream();
 
     if (N > 0) {
-        // The staged builder needs a submanifold map with every tap within one leaf of its
-        // voxel. Below ~128K voxels the VoxelBlockManager's cold build (a host sync) costs more
-        // than the probes it saves.
-        bool withinLeaf = submanifold;
-        for (int d = 0; d < 3; ++d)
-            withinLeaf &= (kernelSize[d] - 1) / 2 <= int(nanovdb::OnIndexTree::LeafNodeType::DIM);
-        bool scan = !withinLeaf || N < (int64_t(1) << 17);
-        if (gTestOverrides.stagedBuilder)
-            scan = !(*gTestOverrides.stagedBuilder && withinLeaf);
-        if (scan) {
-            buildNeighborMapScan(featureGrid,
-                                 outputGrid,
-                                 geometry,
-                                 int(K),
-                                 nbr.data_ptr<int32_t>(),
-                                 code.data_ptr<int32_t>(),
-                                 rowMasks.data_ptr<int32_t>());
-        } else {
-            buildNeighborMapStaged(outputGrid,
-                                   geometry,
-                                   int(K),
-                                   nbr.data_ptr<int32_t>(),
-                                   code.data_ptr<int32_t>(),
-                                   rowMasks.data_ptr<int32_t>(),
-                                   stream);
-        }
+        buildNeighborMap(featureGrid,
+                         outputGrid,
+                         geometry,
+                         int(K),
+                         nbr.data_ptr<int32_t>(),
+                         code.data_ptr<int32_t>(),
+                         rowMasks.data_ptr<int32_t>());
     }
 
     auto sortedRows = torch::argsort(code).to(torch::kInt32);

@@ -1844,3 +1844,146 @@ INSTANTIATE_TEST_SUITE_P(KernelSizes, GatherScatterDefaultKernelSizeTest,
     ::testing::ValuesIn(kernelSizeConfigs()), kernelSizeParamName);
 
 // clang-format on
+
+// =============================================================================
+// Topology build: VoxelBlockManager iteration vs leaf scan
+// =============================================================================
+//
+// On CUDA the topology build can walk the output grid's active voxels through
+// the VoxelBlockManager or through the leaf scan. Both must give the same
+// relation as the CPU build. Pair order within a tap comes from atomics and is
+// not deterministic, so topologies are compared as sorted pairs per tap.
+
+namespace {
+
+// Restores the heuristics when a test exits, even through a failed assertion.
+struct GatherScatterOverrideGuard {
+    explicit GatherScatterOverrideGuard(bool vbm) {
+        ops::setGatherScatterDefaultTestOverrides({.vbmIteration = vbm});
+    }
+    ~GatherScatterOverrideGuard() { ops::setGatherScatterDefaultTestOverrides({}); }
+};
+
+// Per-tap pair keys (gather * outputTotal + scatter), sorted within each tap, on the CPU.
+torch::Tensor
+sortedPairsPerTap(ops::GatherScatterDefaultTopology const &topo) {
+    auto const gather  = topo.gatherIndices.cpu().to(torch::kInt64);
+    auto const scatter = topo.scatterIndices.cpu().to(torch::kInt64);
+    auto const keys    = gather * topo.outputTotalVoxels + scatter;
+    auto const off     = topo.offsets.accessor<int64_t, 1>();
+    std::vector<torch::Tensor> taps;
+    for (int64_t k = 0; k < topo.kernelVolume; ++k)
+        taps.push_back(std::get<0>(keys.slice(0, off[k], off[k + 1]).sort()));
+    return taps.empty() ? keys : torch::cat(taps);
+}
+
+void
+expectSameTopology(ops::GatherScatterDefaultTopology const &a,
+                   ops::GatherScatterDefaultTopology const &b,
+                   std::string const &what) {
+    ASSERT_EQ(a.totalPairs, b.totalPairs) << what;
+    ASSERT_EQ(a.kernelVolume, b.kernelVolume) << what;
+    EXPECT_TRUE(torch::equal(a.offsets.cpu(), b.offsets.cpu())) << what << ": offsets differ";
+    EXPECT_TRUE(torch::equal(sortedPairsPerTap(a), sortedPairsPerTap(b)))
+        << what << ": pairs differ";
+}
+
+// A batch of three grids with very different leaf occupancy: a sparse random cloud spread over
+// many leaves, a single voxel (one partial VBM block), and a dense 12^3 block.
+std::vector<torch::Tensor>
+mixedOccupancyIjk() {
+    torch::manual_seed(1234);
+    auto sparse = torch::randint(-60, 60, {3000, 3}, torch::dtype(torch::kInt32));
+    sparse      = std::get<0>(torch::unique_dim(sparse, 0));
+    auto single = torch::tensor({{5, -7, 3}}, torch::dtype(torch::kInt32));
+    auto dense  = torch::stack(torch::meshgrid({torch::arange(12, torch::kInt32),
+                                                torch::arange(12, torch::kInt32),
+                                                torch::arange(12, torch::kInt32)},
+                                              "ij"),
+                              -1)
+                     .reshape({-1, 3}) +
+                 20;
+    return {sparse, single, dense.to(torch::kInt32)};
+}
+
+c10::intrusive_ptr<GridBatchData>
+makeBatch(std::vector<torch::Tensor> const &ijks, torch::Device device) {
+    std::vector<torch::Tensor> onDevice;
+    for (auto const &t: ijks)
+        onDevice.push_back(t.to(device));
+    JaggedTensor jt(onDevice);
+    std::vector<nanovdb::Vec3d> voxelSizes(ijks.size(), {1.0, 1.0, 1.0});
+    std::vector<nanovdb::Vec3d> origins(ijks.size(), {0.0, 0.0, 0.0});
+    return ops::createNanoGridFromIJK(jt, voxelSizes, origins);
+}
+
+struct TopologyCase {
+    nanovdb::Coord kernelSize;
+    nanovdb::Coord stride;
+    bool transposed;
+};
+
+} // namespace
+
+TEST(GatherScatterDefaultTopology, VbmIterationMatchesLeafScanAndCpu) {
+    if (!cudaIsAvailable())
+        GTEST_SKIP() << "CUDA not available";
+
+    auto const ijks = mixedOccupancyIjk();
+    auto const gpu  = makeDevice(torch::kCUDA);
+    auto const cpu  = torch::Device(torch::kCPU);
+    auto const base = std::make_pair(makeBatch(ijks, cpu), makeBatch(ijks, gpu));
+
+    std::vector<TopologyCase> const cases = {
+        {nanovdb::Coord(3), nanovdb::Coord(1), false},
+        {nanovdb::Coord(3), nanovdb::Coord(1), true},
+        {nanovdb::Coord(5, 3, 1), nanovdb::Coord(1), false},
+        {nanovdb::Coord(3), nanovdb::Coord(2), false},
+        {nanovdb::Coord(3), nanovdb::Coord(2), true},
+        {nanovdb::Coord(2), nanovdb::Coord(2), false},
+        {nanovdb::Coord(2), nanovdb::Coord(2), true},
+        {nanovdb::Coord(4, 3, 2), nanovdb::Coord(3, 2, 4), false},
+    };
+
+    for (auto const &c: cases) {
+        std::string const what = "k=" + std::to_string(c.kernelSize[0]) +
+                                 std::to_string(c.kernelSize[1]) + std::to_string(c.kernelSize[2]) +
+                                 " s=" + std::to_string(c.stride[0]) + std::to_string(c.stride[1]) +
+                                 std::to_string(c.stride[2]) +
+                                 (c.transposed ? " transposed" : " forward");
+        bool const sameGrid = c.stride == nanovdb::Coord(1);
+
+        // Feature and output grids, built per device from the same base grids.
+        auto other = [&](c10::intrusive_ptr<GridBatchData> const &g) {
+            if (sameGrid)
+                return g;
+            return c.transposed ? ops::buildGridForConvTranspose(*g, c.kernelSize, c.stride)
+                                : ops::buildGridForConv(*g, c.kernelSize, c.stride);
+        };
+        auto build = [&](GridBatchData const &feature, GridBatchData const &output) {
+            return c.transposed ? ops::gatherScatterDefaultSparseConvTransposeTopology(
+                                      feature, output, c.kernelSize, c.stride)
+                                : ops::gatherScatterDefaultSparseConvTopology(
+                                      feature, output, c.kernelSize, c.stride);
+        };
+
+        auto const cpuOut  = other(base.first);
+        auto const gpuOut  = other(base.second);
+        auto const cpuTopo = build(*base.first, *cpuOut);
+        auto buildGpu      = [&](bool vbm) {
+            GatherScatterOverrideGuard guard(vbm);
+            return build(*base.second, *gpuOut);
+        };
+        auto const vbmTopo  = buildGpu(true);
+        auto const scanTopo = buildGpu(false);
+        ASSERT_GT(cpuTopo.totalPairs, 0) << what;
+
+        expectSameTopology(vbmTopo, scanTopo, what + " VBM vs leaf scan");
+        expectSameTopology(vbmTopo, cpuTopo, what + " VBM vs CPU");
+
+        // The fine grid is the output of a transposed conv and the feature grid otherwise.
+        auto const &fine   = c.transposed ? *gpuOut : *base.second;
+        auto const &coarse = c.transposed ? *base.second : *gpuOut;
+        EXPECT_NO_THROW(ops::validateGatherScatterDefaultTopology(fine, coarse, vbmTopo)) << what;
+    }
+}
