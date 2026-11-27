@@ -63,6 +63,58 @@ class ConvolutionPhasePolicy(StrEnum):
     """Use PyTorch ``padding=floor((kernel_size - 1) / 2)`` phase."""
 
 
+class SerializationOrder(StrEnum):
+    """Space-filling curve along which :func:`fvdb.serialize` orders a grid's voxels."""
+
+    VDB = "vdb"
+    """The grid's native voxel order; the identity permutation."""
+
+    Z = "z"
+    """Morton (z-order) curve."""
+
+    Z_TRANS = "z-trans"
+    """Morton curve with x and y swapped."""
+
+    HILBERT = "hilbert"
+    """Hilbert curve."""
+
+    HILBERT_TRANS = "hilbert-trans"
+    """Hilbert curve with x and y swapped."""
+
+
+class SerializationOffset(StrEnum):
+    """Where the curve's origin sits when :func:`fvdb.serialize` computes codes."""
+
+    GRID = "grid"
+    """Shift each grid by its own minimum coordinate, so the order is translation invariant."""
+
+    BATCH = "batch"
+    """Shift every grid by the minimum coordinate of the whole batch."""
+
+    NONE = "none"
+    """Use the coordinates as they are. They must be non-negative."""
+
+
+class NormKind(StrEnum):
+    """Normalization applied to voxel features by :mod:`fvdb.nn` layers that offer a choice."""
+
+    BATCH = "batch"
+    """Batch normalization over all voxels in the batch."""
+
+    LAYER = "layer"
+    """Layer normalization over each voxel's channels."""
+
+
+class EmbeddingMode(StrEnum):
+    """Stem of :class:`fvdb.nn.PointTransformerV3`."""
+
+    CONV = "conv"
+    """A submanifold sparse convolution."""
+
+    LINEAR = "linear"
+    """A per-voxel linear layer."""
+
+
 class SmoothingMode(IntEnum):
     """
     Laplacian smoothing mode used to de-staircase a signed distance field in

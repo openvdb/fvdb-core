@@ -266,6 +266,45 @@ class TestJaggedTensorTorchFunctions(unittest.TestCase):
         self.assertTrue(torch.allclose(out_std.jdata, torch.std(jt.jdata, dim=-1, unbiased=False)))
         self.assertTrue(torch.allclose(out_norm.jdata, torch.norm(jt.jdata, dim=-1)))
 
+    # -------------- torch.nn layers on trailing dims --------------
+
+    @expand_tests(all_device_dtype_combos)
+    def test_nn_linear(self, device, dtype):
+        jt, _ = self._mk_jt(device, dtype, edims=(6,))
+        layer = torch.nn.Linear(6, 5, device=device, dtype=dtype)
+        out = layer(jt)
+        self.assertIsInstance(out, fvdb.JaggedTensor)
+        self._assert_preserved_layout(out, jt)
+        self.assertTrue(torch.equal(out.jdata, layer(jt.jdata)))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_nn_layer_norm(self, device, dtype):
+        jt, _ = self._mk_jt(device, dtype, edims=(6,))
+        layer = torch.nn.LayerNorm(6, device=device, dtype=dtype)
+        out = layer(jt)
+        self._assert_preserved_layout(out, jt)
+        self.assertTrue(torch.equal(out.jdata, layer(jt.jdata)))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_nn_dropout(self, device, dtype):
+        jt, _ = self._mk_jt(device, dtype, edims=(6,))
+        layer = torch.nn.Dropout(0.5)
+        out = layer(jt)
+        self._assert_preserved_layout(out, jt)
+        kept = out.jdata != 0
+        self.assertTrue(torch.allclose(out.jdata[kept], 2 * jt.jdata[kept]))
+        layer.eval()
+        self.assertTrue(torch.equal(layer(jt).jdata, jt.jdata))
+
+    @expand_tests(all_device_dtype_combos)
+    def test_nn_linear_backward(self, device, dtype):
+        data = torch.randn(40, 6, device=device, dtype=dtype, requires_grad=True)
+        jt = fvdb.JaggedTensor.from_data_and_offsets(data, torch.tensor([0, 15, 40], device=device))
+        layer = torch.nn.Linear(6, 3, device=device, dtype=dtype)
+        layer(jt).jdata.sum().backward()
+        assert data.grad is not None and layer.weight.grad is not None
+        self.assertTrue(torch.allclose(data.grad, layer.weight.sum(0).expand_as(data)))
+
     # -------------- disallowed cases --------------
 
     @expand_tests(all_device_dtype_combos)
