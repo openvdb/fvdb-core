@@ -80,6 +80,23 @@ checkTopologyPreconditions(GridBatchData const &feature_grid,
                 ")");
 }
 
+// Set only by tests and benchmarks (setGatherScatterDefaultTestOverrides).
+constinit GatherScatterDefaultTestOverrides gTestOverrides;
+
+// How the topology build walks the output grid's active voxels. Only CUDA has a choice, and it
+// always takes the VoxelBlockManager: 2.3-4.8x faster than the leaf scan on sparse grids and even
+// on dense ones (RTX PRO 6000, 0.2-2M voxels, k3/k5 s1 and k3 s2). A cold VBM build adds ~20 us,
+// so a fresh output grid costs no more than the leaf scan. The per-tap counters must stay
+// warp-aggregated (atomic_fetch_increment_i32): the VBM fills every lane of a warp with an active
+// voxel, and raw atomics on K shared counters made this path 0.65x before aggregation.
+static dispatch::ActiveVoxelIteration
+topologyIteration(GridBatchData const &output_grid) {
+    using It = dispatch::ActiveVoxelIteration;
+    if (gTestOverrides.vbmIteration)
+        return *gTestOverrides.vbmIteration ? It::Vbm : It::LeafScan;
+    return output_grid.device().is_cuda() ? It::Vbm : It::LeafScan;
+}
+
 // =============================================================================
 // Two-pass topology builder via dispatch framework (CPU + CUDA)
 // =============================================================================
@@ -112,8 +129,9 @@ struct twopass_topology_op {
         auto counts = torch::zeros({K}, optsOn<torch::kInt32>(device));
         auto guard  = make_device_guard(tg, counts);
 
-        auto feature_acc = dispatch::make_grid_accessor(tg, feature_grid);
-        auto *counts_ptr = counts.data_ptr<int32_t>();
+        auto feature_acc     = dispatch::make_grid_accessor(tg, feature_grid);
+        auto *counts_ptr     = counts.data_ptr<int32_t>();
+        auto const iteration = topologyIteration(output_grid);
 
         dispatch::forEachActiveVoxel(
             tg,
@@ -139,7 +157,8 @@ struct twopass_topology_op {
                         dispatch::atomic_fetch_increment_i32(tg_inner, &counts_ptr[k]);
                     }
                 }
-            });
+            },
+            iteration);
 
         // ---- Prefix sums (device-generic torch ops) ----
         auto offsets_dev = torch::zeros({K + 1}, optsOn<torch::kInt64>(device));
@@ -206,7 +225,8 @@ struct twopass_topology_op {
                         scatter_ptr[write_pos]  = static_cast<int32_t>(voxel_idx);
                     }
                 }
-            });
+            },
+            iteration);
 
         return GatherScatterDefaultTopology{
             gatherIndices,
@@ -268,6 +288,11 @@ gatherScatterDefaultSparseConvTransposeTopology(GridBatchData const &feature_gri
                                                 nanovdb::Coord stride) {
     return buildTopologyTwoPass(
         feature_grid, output_grid, kernel_size, stride, ConvDirection::Transposed);
+}
+
+void
+setGatherScatterDefaultTestOverrides(GatherScatterDefaultTestOverrides const &overrides) {
+    gTestOverrides = overrides;
 }
 
 GatherScatterDefaultTopology

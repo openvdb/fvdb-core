@@ -7,6 +7,8 @@
 // Benchmark groups:
 //
 //   TopologyBuild   Topology construction cost (two-pass atomic counting).
+//   TopologyBuildPath  CUDA topology build per output-voxel iteration: leaf scan,
+//                   VoxelBlockManager with a warm cache, VoxelBlockManager cold.
 //   Forward         End-to-end forward sparse convolution (topology amortized).
 //   Backward        End-to-end backward sparse convolution (topology amortized).
 //   DenseBaseline   Equivalent dense torch::conv3d via cuDNN / MKL-DNN.
@@ -23,6 +25,7 @@
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
+#include <fvdb/detail/ops/BuildGridForConv.h>
 #include <fvdb/detail/ops/BuildGridFromIjk.h>
 #include <fvdb/detail/ops/convolution/GatherScatterDefault.h>
 
@@ -125,6 +128,89 @@ BM_Conv_TopologyBuild_CUDA(benchmark::State &state) {
     }
     state.SetItemsProcessed(state.iterations() * grid->totalVoxels());
     state.counters["voxels"] = static_cast<double>(grid->totalVoxels());
+}
+
+// Voxel coordinates of a spherical shell (|x| within 1 of radius), about 25 R^2 voxels.
+static torch::Tensor
+shellIjk(int radius) {
+    auto const r = torch::arange(-radius - 1, radius + 2, torch::kInt32);
+    auto yz      = torch::stack(torch::meshgrid({r, r}, "ij"), -1).reshape({-1, 2});
+    auto yz2     = (yz.to(torch::kFloat64) * yz.to(torch::kFloat64)).sum(1);
+    std::vector<torch::Tensor> slabs;
+    for (int x = -radius - 1; x <= radius + 1; ++x) {
+        auto const d    = torch::sqrt(yz2 + double(x) * double(x)) - double(radius);
+        auto const keep = d.abs() < 1.0;
+        auto const sel  = yz.index({keep});
+        slabs.push_back(torch::cat({torch::full({sel.size(0), 1}, x, torch::kInt32), sel}, 1));
+    }
+    return torch::cat(slabs);
+}
+
+// Shapes: 0 = shell (~1.0M voxels), 1/2/3 = random 128^3 box at 10/50/100% occupancy.
+static torch::Tensor
+topologyShapeIjk(int shape) {
+    if (shape == 0)
+        return shellIjk(200);
+    int const pct       = shape == 1 ? 10 : shape == 2 ? 50 : 100;
+    int64_t const dim   = 128;
+    int64_t const total = dim * dim * dim;
+    torch::manual_seed(42);
+    auto const sel = torch::randperm(total, torch::kInt64).slice(0, 0, total * pct / 100);
+    return torch::stack({sel / (dim * dim), (sel / dim) % dim, sel % dim}, 1).to(torch::kInt32);
+}
+
+// Args: shape, kernel size, stride, path (0 = leaf scan, 1 = VBM warm, 2 = VBM cold).
+// Same grid in and out at stride 1; at stride 2 the output is the conv's coarse grid. The cold
+// path rebuilds the output grid outside the timed region every iteration, so each build pays
+// for its VoxelBlockManager.
+static void
+BM_Conv_TopologyBuildPath_CUDA(benchmark::State &state) {
+    if (!torch::cuda::is_available()) {
+        state.SkipWithError("CUDA not available");
+        return;
+    }
+    int const shape = int(state.range(0));
+    nanovdb::Coord const ks(int(state.range(1)));
+    nanovdb::Coord const stride(int(state.range(2)));
+    int const path = int(state.range(3));
+    if (shape < 0 || shape > 3 || path < 0 || path > 2) {
+        state.SkipWithError("shape must be 0-3 and path 0-2");
+        return;
+    }
+
+    auto const device = torch::Device(torch::kCUDA, 0);
+    auto const ijk    = topologyShapeIjk(shape).to(device);
+    auto const input  = makeGrid(ijk, device);
+    auto makeOutput   = [&] {
+        return stride == nanovdb::Coord(1) ? makeGrid(ijk, device)
+                                             : ops::buildGridForConv(*input, ks, stride);
+    };
+    auto output = stride == nanovdb::Coord(1) ? input : makeOutput();
+
+    ops::setGatherScatterDefaultTestOverrides({.vbmIteration = path != 0});
+    auto topo = ops::gatherScatterDefaultSparseConvTopology(*input, *output, ks, stride);
+    torch::cuda::synchronize();
+
+    for (auto _: state) {
+        if (path == 2) {
+            state.PauseTiming();
+            output = makeOutput();
+            torch::cuda::synchronize();
+            state.ResumeTiming();
+        }
+        auto t = ops::gatherScatterDefaultSparseConvTopology(*input, *output, ks, stride);
+        torch::cuda::synchronize();
+        benchmark::DoNotOptimize(t.totalPairs);
+    }
+    ops::setGatherScatterDefaultTestOverrides({});
+
+    auto const leaves = double(output->totalLeaves());
+    state.SetItemsProcessed(state.iterations() * output->totalVoxels());
+    state.counters["out_voxels"] = double(output->totalVoxels());
+    state.counters["leaf_occupancy"] =
+        double(output->totalVoxels()) /
+        (leaves * double(nanovdb::OnIndexTree::LeafNodeType::NUM_VALUES));
+    state.counters["pairs"] = double(topo.totalPairs);
 }
 
 static void
@@ -555,6 +641,11 @@ BM_Conv_ChannelScale_CPU(benchmark::State &state) {
 // Topology build (larger CUDA sizes expose contention on the per-tap counters)
 BENCHMARK(BM_Conv_TopologyBuild_CUDA)       CONV_GRID_SIZES->Args({64})->Args({128});
 BENCHMARK(BM_Conv_TopologyBuild_CPU)        CONV_GRID_SIZES;
+BENCHMARK(BM_Conv_TopologyBuildPath_CUDA)
+    ->ArgNames({"shape", "k", "s", "path"})
+    ->ArgsProduct({{0, 1, 2, 3}, {3, 5}, {1}, {0, 1, 2}})
+    ->ArgsProduct({{0, 1, 2, 3}, {3}, {2}, {0, 1, 2}})
+    ->UseRealTime();
 
 // Forward
 BENCHMARK(BM_Conv_Forward_CUDA_C32)         CONV_GRID_SIZES;
