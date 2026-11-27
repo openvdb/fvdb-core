@@ -841,7 +841,7 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
     @parameterized.expand([(name,) for name in _NEAREST_BATCH_NAMES])
     def test_from_nearest_voxels_to_points_matches_expected_and_cpu(self, name):
         # CUDA: the floored-ijk base batch is padded by {0,1}^3 in one batched BoxDilate(0, +1)
-        # pass instead of one PadGrid per member.
+        # pass instead of one single-grid pad build per member.
         pts = _nearest_voxel_point_batches()[name]
         vs, og = _NEAREST_VOXEL_SIZE, _NEAREST_ORIGIN
         result = GridBatch.from_nearest_voxels_to_points(

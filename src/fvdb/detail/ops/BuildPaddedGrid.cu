@@ -16,7 +16,7 @@
 #include <fvdb/detail/utils/cuda/GridDim.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
 #include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
-#include <fvdb/detail/utils/nanovdb/PadGrid.cuh> // ErodeKeepMaskFunctor (exclude_border)
+#include <fvdb/detail/utils/nanovdb/ErodeKeepMask.cuh>
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/NanoVDB.h>

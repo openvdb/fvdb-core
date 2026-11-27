@@ -84,7 +84,7 @@ using TopologyBuilderT = nanovdb::tools::cuda::TopologyBuilder<BuildT, BuilderRe
 /// One batched topology pass over the whole batch. `Refine` and `Coarsen` are the factor-2
 /// subdivision / coarsening passes; `BoxDilate` is a Minkowski sum with the axis-aligned box
 /// [boxLo, boxHi] (components in {-1,0,1}), covering NanoVDB's 26-neighbor DilateGrid
-/// (boxLo=-1, boxHi=1) and fvdb's one-sided PadGrid octants ({-1,0}^3 and {0,1}^3). Larger
+/// (boxLo=-1, boxHi=1) and fvdb's one-sided pad octants ({-1,0}^3 and {0,1}^3). Larger
 /// boxes compose from multiple passes (Minkowski sums by boxes compose). `Prune` keeps the source
 /// voxels set in `keepMasks`, one leaf mask per source leaf of the pass, in batch order (the leaves
 /// of grid 0, then grid 1, ...); `numKeepMasks` must equal the source's leaf count, and the masks
