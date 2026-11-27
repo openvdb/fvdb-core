@@ -4,18 +4,18 @@
 // Batched topology passes: builds all grids of a batch per pass with NanoVDB's batch-capable
 // tools::cuda::TopologyBuilder, in as few builder runs as the root-tile cap below allows.
 //
-// NanoVDB's morphology builders (RefineGrid, CoarsenGrid, DilateGrid, PruneGrid) build one grid per
-// call, with several stream synchronizations each, and fvdb would then lay the single-grid results
-// end to end.
-// For generated-topology workloads that rebuild grids every training iteration (issue #755), that
-// per-member overhead dominates. This header drives the builder over the whole batch instead:
+// NanoVDB's morphology builders (RefineGrid, CoarsenGrid, DilateGrid, PruneGrid, MergeGrids) build
+// one grid per call, with several stream synchronizations each, and fvdb would then lay the
+// single-grid results end to end. For generated-topology workloads that rebuild grids every
+// training iteration (issue #755), that per-member overhead dominates. This header drives the
+// builder over the whole batch instead:
 //
 //   roots   one kernel gathers every source grid's upper-node bounding boxes, read back with one
 //           host wait; the host derives each output grid's speculative root tiles from them the way
 //           NanoVDB's single-grid consumers do;
 //   masks   per builder run, one launch over the run's source leaves fills the builder's densified
 //           child masks, through NanoVDB's Refine/Coarsen/Prune internal-node functors or fvdb's
-//           BoxDilate marking;
+//           BoxDilate and Union marking;
 //   build   the builder waits for its node counts (and, from a pass's second run on, for its pinned
 //           staging), allocates the run's buffer, and writes every node; a second launch over the
 //           run's source leaves writes the leaf value masks.
@@ -81,6 +81,8 @@ constexpr uint32_t kLeafMaskWords = LeafMaskT::WORD_COUNT;
 using ProcessedTileMap = nanovdb::tools::cuda::topology::detail::ProcessedTileMap<RootT>;
 using TopologyBuilderT = nanovdb::tools::cuda::TopologyBuilder<BuildT, BuilderResource>;
 
+struct BatchedTopologySource;
+
 /// One batched topology pass over the whole batch. `Refine` and `Coarsen` are the factor-2
 /// subdivision / coarsening passes; `BoxDilate` is a Minkowski sum with the axis-aligned box
 /// [boxLo, boxHi] (components in {-1,0,1}), covering NanoVDB's 26-neighbor DilateGrid
@@ -88,13 +90,16 @@ using TopologyBuilderT = nanovdb::tools::cuda::TopologyBuilder<BuildT, BuilderRe
 /// boxes compose from multiple passes (Minkowski sums by boxes compose). `Prune` keeps the source
 /// voxels set in `keepMasks`, one leaf mask per source leaf of the pass, in batch order (the leaves
 /// of grid 0, then grid 1, ...); `numKeepMasks` must equal the source's leaf count, and the masks
-/// must stay valid on the pass's stream until it ends.
+/// must stay valid on the pass's stream until it ends. `Union` makes output grid g the union of
+/// source grid g and grid g of `other`, a second source with as many grids on the same device,
+/// which must outlive the pass; each output grid takes its GridData header from the first source.
 struct TopologyPassSpec {
-    enum class Op { Refine, Coarsen, BoxDilate, Prune };
+    enum class Op { Refine, Coarsen, BoxDilate, Prune, Union };
     Op op;
-    nanovdb::Coord boxLo{0}, boxHi{0};    // BoxDilate only
-    const LeafMaskT *keepMasks = nullptr; // Prune only
-    int64_t numKeepMasks       = 0;       // Prune only
+    nanovdb::Coord boxLo{0}, boxHi{0};            // BoxDilate only
+    const LeafMaskT *keepMasks         = nullptr; // Prune only
+    int64_t numKeepMasks               = 0;       // Prune only
+    const BatchedTopologySource *other = nullptr; // Union only
 
     static TopologyPassSpec
     refine() {
@@ -119,6 +124,14 @@ struct TopologyPassSpec {
         spec.numKeepMasks = numKeepMasks;
         return spec;
     }
+    static TopologyPassSpec
+    unite(const BatchedTopologySource &other) {
+        TopologyPassSpec spec{Op::Union};
+        spec.other = &other;
+        return spec;
+    }
+    // The spec keeps a pointer to the second source, so a temporary would dangle.
+    static TopologyPassSpec unite(const BatchedTopologySource &&) = delete;
 };
 
 /// Device-pointer view of the B source grids of one pass. The grids may live anywhere (a
@@ -150,12 +163,15 @@ struct BatchedTopologyResult {
 
 /// Per-chunk device tables, indexed by member within the chunk.
 struct PassTables {
-    const GridT *const *src;  // source grids
-    GridT *const *dst;        // output grids (set once the output buffer exists)
-    const RootT *const *root; // processed roots
-    const int64_t *tileBase;  // first processed tile of each grid in the builder's mask arrays
-    const int64_t *leafStart; // [numGrids+1] first source leaf of each grid within the chunk
-    const LeafMaskT *keep;    // Prune: keep masks of the chunk's source leaves, chunk-leaf indexed
+    const GridT *const *src;   // source grids
+    GridT *const *dst;         // output grids (set once the output buffer exists)
+    const RootT *const *root;  // processed roots
+    const int64_t *tileBase;   // first processed tile of each grid in the builder's mask arrays
+    const int64_t *leafStart;  // [numGrids+1] first chunk leaf of each grid (Union: of both
+                               // sources' leaves, split at otherStart)
+    const LeafMaskT *keep;     // Prune: keep masks of the chunk's source leaves, chunk-leaf indexed
+    const GridT *const *other; // Union: second source grids
+    const int64_t *otherStart; // Union: first chunk leaf of each grid's second source
     int32_t numGrids;
 };
 
@@ -180,6 +196,45 @@ gridOfLeaf(const int64_t *leafStart, int32_t numGrids, int64_t leaf) {
 __device__ inline int32_t
 gridOfLeaf(const PassTables &t, int64_t leaf) {
     return gridOfLeaf(t.leafStart, t.numGrids, leaf);
+}
+
+/// Chunk leaf `leaf` of grid g. Union lays out each grid's leaves from its first source, then from
+/// its second (from otherStart[g] on); every other op has only the first source.
+template <TopologyPassSpec::Op Op>
+__device__ inline const LeafT &
+chunkLeaf(const PassTables &t, int32_t g, int64_t leaf) {
+    if constexpr (Op == TopologyPassSpec::Op::Union) {
+        if (leaf >= t.otherStart[g]) {
+            return t.other[g]->tree().template getFirstNode<0>()[leaf - t.otherStart[g]];
+        }
+    }
+    return t.src[g]->tree().template getFirstNode<0>()[leaf - t.leafStart[g]];
+}
+
+/// Marks the leaf at `origin` as a child of its lower node, and that lower node as a child of its
+/// upper node, in the densified masks of the speculative root tile holding `origin`.
+__device__ inline void
+markLeafInMasks(const RootT *root,
+                nanovdb::Mask<5> *upper,
+                nanovdb::Mask<4> (*lower)[nanovdb::Mask<5>::SIZE],
+                const nanovdb::Coord &origin) {
+    const uint32_t upperChild = UpperT::CoordToOffset(origin);
+    const int64_t tileIndex   = root->probeTile(origin) - root->tile(0);
+    upper[tileIndex].setOnAtomic(upperChild);
+    lower[tileIndex][upperChild].setOnAtomic(LowerT::CoordToOffset(origin));
+}
+
+/// ORs `words` into the value mask of the output leaf at `origin`, which must exist.
+__device__ inline void
+orIntoLeafMask(GridT *dst, const nanovdb::Coord &origin, const uint64_t *words) {
+    const LeafT *dstLeaf = dst->tree().root().probeLeaf(origin);
+    NANOVDB_ASSERT(dstLeaf != nullptr);
+    auto &dstMask = const_cast<LeafMaskT &>(dstLeaf->valueMask());
+    for (uint32_t w = 0; w < kLeafMaskWords; ++w) {
+        if (words[w]) {
+            nanovdb::util::atomicOr(&dstMask.words()[w], words[w]);
+        }
+    }
 }
 
 /// Shifts a leaf-mask word along z by s in [-7,7], dropping bits that leave the leaf.
@@ -355,19 +410,19 @@ fillInternalMasks(PassTables t,
         } else if constexpr (Op == TopologyPassSpec::Op::Prune) {
             morph::PruneInternalNodesFunctor<BuildT>()(
                 local, t.src[g], t.root[g], t.keep + t.leafStart[g], upper, lower);
+        } else if constexpr (Op == TopologyPassSpec::Op::Union) {
+            // NanoVDB's MergeInternalNodesFunctor runs a block per source lower node and reads
+            // blockIdx, so it cannot run inside one launch over a batch's leaves; each leaf of
+            // either source marks itself instead, which sets the same child bits.
+            markLeafInMasks(t.root[g], upper, lower, chunkLeaf<Op>(t, g, leaf).origin());
         } else {
-            const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
+            const LeafT &srcLeaf = chunkLeaf<Op>(t, g, leaf);
             uint64_t contribution[kLeafMaskWords];
             if (!boxDilatedContribution(
                     srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
                 continue;
             }
-            const RootT *root           = t.root[g];
-            const nanovdb::Coord origin = srcLeaf.origin() + (db << LeafT::TOTAL);
-            const uint32_t upperChild   = UpperT::CoordToOffset(origin);
-            const int64_t tileIndex     = root->probeTile(origin) - root->tile(0);
-            upper[tileIndex].setOnAtomic(upperChild);
-            lower[tileIndex][upperChild].setOnAtomic(LowerT::CoordToOffset(origin));
+            markLeafInMasks(t.root[g], upper, lower, srcLeaf.origin() + (db << LeafT::TOTAL));
         }
     }
 }
@@ -392,21 +447,19 @@ fillLeafMasks(PassTables t, int64_t numItems, nanovdb::Coord boxLo, nanovdb::Coo
         } else if constexpr (Op == TopologyPassSpec::Op::Prune) {
             morph::PruneLeafMasksFunctor<BuildT>()(
                 local, t.src[g], t.dst[g], t.keep + t.leafStart[g]);
+        } else if constexpr (Op == TopologyPassSpec::Op::Union) {
+            // Both sources may hold a leaf at the same origin, hence the atomic OR (NanoVDB's
+            // MergeLeafNodesFunctor ORs non-atomically, one source per launch).
+            const LeafT &srcLeaf = chunkLeaf<Op>(t, g, leaf);
+            orIntoLeafMask(t.dst[g], srcLeaf.origin(), srcLeaf.valueMask().words());
         } else {
-            const LeafT &srcLeaf = t.src[g]->tree().template getFirstNode<0>()[local];
+            const LeafT &srcLeaf = chunkLeaf<Op>(t, g, leaf);
             uint64_t contribution[kLeafMaskWords];
             if (!boxDilatedContribution(
                     srcLeaf.valueMask().words(), boxLo, boxHi, db, contribution)) {
                 continue;
             }
-            const LeafT *dstLeaf =
-                t.dst[g]->tree().root().probeLeaf(srcLeaf.origin() + (db << LeafT::TOTAL));
-            auto &dstMask = const_cast<LeafMaskT &>(dstLeaf->valueMask());
-            for (uint32_t w = 0; w < kLeafMaskWords; ++w) {
-                if (contribution[w]) {
-                    nanovdb::util::atomicOr(&dstMask.words()[w], contribution[w]);
-                }
-            }
+            orIntoLeafMask(t.dst[g], srcLeaf.origin() + (db << LeafT::TOTAL), contribution);
         }
     }
 }
@@ -637,8 +690,9 @@ checkTopologySource(const BatchedTopologySource &src) {
     }
 }
 
-/// Throws unless `pass` can run on `src`: BoxDilate box components in {-1,0} / {0,1}, and for Prune
-/// one keep mask per source leaf.
+/// Throws unless `pass` can run on `src`: BoxDilate box components in {-1,0} / {0,1}, for Prune one
+/// keep mask per source leaf, and for Union a valid second source with as many grids on the same
+/// device.
 inline void
 checkTopologyPass(const BatchedTopologySource &src, const TopologyPassSpec &pass) {
     if (pass.op == TopologyPassSpec::Op::BoxDilate) {
@@ -662,6 +716,20 @@ checkTopologyPass(const BatchedTopologySource &src, const TopologyPassSpec &pass
         TORCH_CHECK(leaves == 0 || pass.keepMasks != nullptr,
                     "Prune pass requires keep masks for its source leaves");
     }
+    if (pass.op == TopologyPassSpec::Op::Union) {
+        TORCH_CHECK(pass.other != nullptr, "Union pass requires a second source");
+        checkTopologySource(*pass.other);
+        TORCH_CHECK(pass.other->grids.size() == src.grids.size(),
+                    "Union pass: the second source has ",
+                    pass.other->grids.size(),
+                    " grids, the first ",
+                    src.grids.size());
+        TORCH_CHECK(pass.other->device == src.device,
+                    "Union pass: the second source is on ",
+                    pass.other->device,
+                    ", the first on ",
+                    src.device);
+    }
 }
 
 /// Uploads `src`'s grid pointers and per-grid first leaves on `stream` (no host wait).
@@ -682,9 +750,13 @@ sourceLeafTables(const BatchedTopologySource &src, cudaStream_t stream) {
     return tables;
 }
 
-/// Each source grid's upper-node bounding boxes, read back with one host wait.
+/// Each source grid's upper-node bounding boxes, read back with one host wait. When `src` joins two
+/// sources (a Union pass), `secondSourceStart` is the first grid of the second one, and errors name
+/// that source's grids by their own index.
 inline std::vector<std::vector<nanovdb::CoordBBox>>
-readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
+readUpperBBoxes(const BatchedTopologySource &src,
+                cudaStream_t stream,
+                int32_t secondSourceStart = -1) {
     checkTopologySource(src);
     const int32_t numGrids = int32_t(src.grids.size());
     std::vector<int64_t> upperStart(numGrids + 1, 0), gridTable(numGrids);
@@ -717,9 +789,11 @@ readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
     const int32_t *boxes  = counts + numGrids;
     std::vector<std::vector<nanovdb::CoordBBox>> uppers(numGrids);
     for (int32_t g = 0; g < numGrids; ++g) {
+        const bool second = secondSourceStart >= 0 && g >= secondSourceStart;
         TORCH_CHECK(counts[g] <= src.upperCapacity[g],
-                    "batched topology pass: grid ",
-                    g,
+                    "batched topology pass: ",
+                    second ? "second source grid " : "grid ",
+                    second ? g - secondSourceStart : g,
                     " has ",
                     counts[g],
                     " upper nodes, more than its bound of ",
@@ -733,10 +807,10 @@ readUpperBBoxes(const BatchedTopologySource &src, cudaStream_t stream) {
     return uppers;
 }
 
-/// The speculative root tiles of one output grid, from its source grid's upper-node bounding
-/// boxes, as NanoVDB's RefineGrid, CoarsenGrid and DilateGrid derive them. An upper node with an
-/// empty bbox throws: its leaves would still be processed, and the mask fills would look up a
-/// root tile that was never added.
+/// The speculative root tiles of one output grid, from the upper-node bounding boxes of its source
+/// grid (Union: of both sources' grids), as NanoVDB's single-grid consumers derive them for each
+/// op. An upper node with an empty bbox throws: its leaves would still be processed, and the mask
+/// fills would look up a root tile that was never added.
 inline ProcessedTileMap
 processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPassSpec &pass) {
     namespace topo = nanovdb::tools::cuda::topology::detail;
@@ -766,7 +840,46 @@ processedTiles(const std::vector<nanovdb::CoordBBox> &uppers, const TopologyPass
             // builder drops tiles whose upper node ends up empty.
             topo::insertProcessedTile<RootT>(tiles, b.min());
             break;
+        case TopologyPassSpec::Op::Union:
+            // `uppers` holds both sources' upper nodes, and each one's root tile is kept. NanoVDB's
+            // MergeGrids keeps every root tile of either source instead, value tiles included;
+            // fvdb's index grids have none, so the output roots match.
+            topo::insertProcessedTile<RootT>(tiles, b.min());
+            break;
         }
+    }
+    return tiles;
+}
+
+/// The speculative root tiles of every output grid of `pass` over `src`, after one host wait for
+/// the source upper-node bounding boxes. A Union pass reads both sources' boxes in that one wait.
+inline std::vector<ProcessedTileMap>
+passTiles(const BatchedTopologySource &src, const TopologyPassSpec &pass, cudaStream_t stream) {
+    checkTopologySource(src);
+    checkTopologyPass(src, pass);
+    const size_t numGrids = src.grids.size();
+    std::vector<ProcessedTileMap> tiles(numGrids);
+    if (pass.op != TopologyPassSpec::Op::Union) {
+        const auto uppers = readUpperBBoxes(src, stream);
+        for (size_t g = 0; g < numGrids; ++g) {
+            tiles[g] = processedTiles(uppers[g], pass);
+        }
+        return tiles;
+    }
+    // Both sources as one, grids [0, numGrids) from the first and [numGrids, 2 numGrids) from the
+    // second.
+    BatchedTopologySource both = src;
+    both.grids.insert(both.grids.end(), pass.other->grids.begin(), pass.other->grids.end());
+    both.leafCounts.insert(
+        both.leafCounts.end(), pass.other->leafCounts.begin(), pass.other->leafCounts.end());
+    both.upperCapacity.insert(both.upperCapacity.end(),
+                              pass.other->upperCapacity.begin(),
+                              pass.other->upperCapacity.end());
+    auto uppers = readUpperBBoxes(both, stream, int32_t(numGrids));
+    for (size_t g = 0; g < numGrids; ++g) {
+        std::vector<nanovdb::CoordBBox> &grid = uppers[g];
+        grid.insert(grid.end(), uppers[numGrids + g].begin(), uppers[numGrids + g].end());
+        tiles[g] = processedTiles(grid, pass);
     }
     return tiles;
 }
@@ -865,10 +978,13 @@ buildChunk(const BatchedTopologySource &src,
     // 2. Densified child masks, one launch over the chunk's source leaves.
     std::vector<int64_t> srcTable(n), rootTable(n), tileBase(n), leafStart(n + 1, 0);
     for (int32_t i = 0; i < n; ++i) {
-        srcTable[i]      = tableEntry(src.grids[first + i]);
-        rootTable[i]     = tableEntry(builder.deviceProcessedRoot(i));
-        tileBase[i]      = builder.data(i)->tileBase;
-        leafStart[i + 1] = leafStart[i] + src.leafCounts[first + i];
+        srcTable[i]  = tableEntry(src.grids[first + i]);
+        rootTable[i] = tableEntry(builder.deviceProcessedRoot(i));
+        tileBase[i]  = builder.data(i)->tileBase;
+        // A Union pass processes the leaves of both sources (checkTopologyPass above checked
+        // `pass.other` and its grid count).
+        leafStart[i + 1] = leafStart[i] + src.leafCounts[first + i] +
+                           (pass.op == Op::Union ? pass.other->leafCounts[first + i] : 0);
     }
     const int64_t numLeaves = leafStart[n];
     torch::Tensor srcDev    = uploadTable(srcTable, src.device, stream);
@@ -891,6 +1007,21 @@ buildChunk(const BatchedTopologySource &src,
         }
         t.keep = pass.keepMasks + before;
     }
+    t.other      = nullptr;
+    t.otherStart = nullptr;
+    torch::Tensor otherDev, otherStartDev;
+    if (pass.op == Op::Union) {
+        // Each grid's second-source leaves follow its first-source leaves.
+        std::vector<int64_t> otherTable(n), otherStart(n);
+        for (int32_t i = 0; i < n; ++i) {
+            otherTable[i] = tableEntry(pass.other->grids[first + i]);
+            otherStart[i] = leafStart[i] + src.leafCounts[first + i];
+        }
+        otherDev      = uploadTable(otherTable, src.device, stream);
+        otherStartDev = uploadTable(otherStart, src.device, stream);
+        t.other       = reinterpret_cast<const GridT *const *>(otherDev.data_ptr<int64_t>());
+        t.otherStart  = otherStartDev.data_ptr<int64_t>();
+    }
     t.numGrids = n;
     if (numLeaves > 0) {
         switch (pass.op) {
@@ -905,6 +1036,9 @@ buildChunk(const BatchedTopologySource &src,
             break;
         case Op::Prune:
             launchFillInternalMasks<Op::Prune>(t, numLeaves, pass, builder, stream);
+            break;
+        case Op::Union:
+            launchFillInternalMasks<Op::Union>(t, numLeaves, pass, builder, stream);
             break;
         }
     }
@@ -938,6 +1072,7 @@ buildChunk(const BatchedTopologySource &src,
         case Op::Coarsen: launchFillLeafMasks<Op::Coarsen>(t, numLeaves, pass, stream); break;
         case Op::BoxDilate: launchFillLeafMasks<Op::BoxDilate>(t, numLeaves, pass, stream); break;
         case Op::Prune: launchFillLeafMasks<Op::Prune>(t, numLeaves, pass, stream); break;
+        case Op::Union: launchFillLeafMasks<Op::Union>(t, numLeaves, pass, stream); break;
         }
     }
     builder.processLeafOffsets(stream);
@@ -962,15 +1097,8 @@ runBatchedTopologyPass(const BatchedTopologySource &src,
     TORCH_CHECK(stream == storageStream(src.device),
                 "batched topology pass: stream must be the current torch stream of ",
                 src.device);
-    checkTopologySource(src);
-    checkTopologyPass(src, pass);
-    const int32_t numGrids = int32_t(src.grids.size());
-
-    const auto uppers = readUpperBBoxes(src, stream);
-    std::vector<ProcessedTileMap> tiles(numGrids);
-    for (int32_t g = 0; g < numGrids; ++g) {
-        tiles[g] = processedTiles(uppers[g], pass);
-    }
+    const int32_t numGrids                    = int32_t(src.grids.size());
+    const std::vector<ProcessedTileMap> tiles = passTiles(src, pass, stream);
 
     // Chunks of consecutive grids, each holding at most maxTilesPerChunk() tiles.
     BatchedTopologyResult result;
