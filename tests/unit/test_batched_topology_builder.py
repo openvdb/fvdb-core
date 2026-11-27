@@ -1,11 +1,12 @@
 # Copyright Contributors to the OpenVDB Project
 # SPDX-License-Identifier: Apache-2.0
 #
-"""Equivalence tests for the batched leaf-mask topology builder (issue #755).
+"""Equivalence tests for the batched topology builder (issues #755, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S) build all batch members in a single batched pass instead of
-one NanoVDB build + merge per member. These tests pin the batched results against:
+``conv_transpose_grid`` for K == S) build all batch members together, in one or more
+TopologyBuilder runs per pass, instead of one NanoVDB build + merge per member. These tests pin the
+batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
   compared **elementwise** (``torch.equal`` on ``ijk.jdata``), which pins the canonical NanoVDB
@@ -14,11 +15,16 @@ one NanoVDB build + merge per member. These tests pin the batched results agains
 
 Emphasis is on the cases the batched pipeline must get right and a per-member loop got for free:
 batches with empty members (first/middle/last/all), members of wildly unequal sizes, coordinates
-straddling root-tile boundaries (+-4096) and negative octants (where the sort-key encoding differs
-from the stored ``Tile::key`` encoding), and multi-pass factors (4 = two chained passes).
+straddling root-tile boundaries (+-4096) and negative octants, grids spread over many root tiles,
+multi-pass factors (4 = two chained passes), and batches split into several builder runs by the
+tile cap.
 """
 
+import os
+import subprocess
+import sys
 import unittest
+from unittest import mock
 
 import torch
 from parameterized import parameterized
@@ -56,6 +62,75 @@ def _ijk_sets(grid: GridBatch):
     return [set(map(tuple, t.cpu().to(torch.int64).tolist())) for t in grid.ijk.unbind()]
 
 
+def _run_with_caching_allocator(script: str) -> subprocess.CompletedProcess:
+    """Runs `script` in a fresh Python process with PyTorch's caching allocator on.
+
+    The tests that measure device memory need it: CI sets PYTORCH_NO_CUDA_MEMORY_CACHING=1, under
+    which torch.cuda.memory_allocated() and max_memory_allocated() report 0 and
+    set_per_process_memory_fraction() is not enforced. A fresh process also starts with an empty
+    cache, so free blocks cached by earlier tests cannot serve allocations a cap should refuse.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "PYTORCH_NO_CUDA_MEMORY_CACHING"}
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+
+
+# Run by test_far_flung_voxels_do_not_size_upper_readback_by_bbox; see _run_with_caching_allocator.
+_FAR_FLUNG_PEAK_SCRIPT = """
+import torch
+from fvdb import GridBatch, JaggedTensor
+
+ijk = torch.tensor([[-1_000_000] * 3, [1_000_000] * 3], dtype=torch.int32, device="cuda")
+grid = GridBatch.from_ijk(JaggedTensor([ijk]), voxel_sizes=1.0, origins=0.0)
+torch.cuda.synchronize()
+torch.cuda.reset_peak_memory_stats()
+baseline = torch.cuda.memory_allocated()
+assert baseline > 0, "memory stats are not being recorded"
+grid.refined_grid(2)
+grid.coarsened_grid(2)
+torch.cuda.synchronize()
+peak = torch.cuda.max_memory_allocated() - baseline
+assert peak < 256 * 1024 * 1024, f"peak device allocation {peak} bytes"
+print("ok")
+"""
+
+
+# Run by test_failed_run_releases_builder_scratch; see _run_with_caching_allocator.
+_FAILED_RUN_SCRIPT = """
+import torch
+from fvdb import GridBatch, JaggedTensor
+
+ijk = torch.tensor([[k * 2048 + 10, 10, 10] for k in range(128)], dtype=torch.int32, device="cuda")
+grid = GridBatch.from_ijk(JaggedTensor([ijk]), voxel_sizes=1.0, origins=0.0)
+device = torch.device("cuda", torch.cuda.current_device())
+torch.cuda.synchronize()
+reserved = torch.cuda.memory_reserved(device)
+baseline = torch.cuda.memory_allocated(device)
+assert baseline > 0, "memory stats are not being recorded"
+total = torch.cuda.get_device_properties(device).total_memory
+torch.cuda.set_per_process_memory_fraction((reserved + 512 * 1024 * 1024) / total, device)
+try:
+    grid.refined_grid(2)
+    raise AssertionError("refined_grid did not run out of memory under the cap")
+except torch.OutOfMemoryError:
+    pass
+finally:
+    torch.cuda.set_per_process_memory_fraction(1.0, device)
+torch.cuda.synchronize()
+held = torch.cuda.memory_allocated(device) - baseline
+assert held <= 0, f"{held} bytes still allocated after the failed run"
+refined = grid.refined_grid(2)
+assert refined.total_voxels == 8 * 128, refined.total_voxels
+print("ok")
+"""
+
+
 # Coordinate batches exercising the tricky regimes of the batched builder.
 def _tricky_batches():
     torch.manual_seed(42)
@@ -76,9 +151,8 @@ def _tricky_batches():
             torch.empty((0, 3), dtype=torch.int32),
             torch.empty((0, 3), dtype=torch.int32),
         ],
-        # Straddles the +-4096 root-tile boundaries and negative octants: multiple root tiles per
-        # grid and coordinates where the offset-shifted sort key and stored Tile::key encodings
-        # order tiles differently.
+        # Straddles the +-4096 root-tile boundaries and negative octants, so each grid has
+        # several root tiles and their order depends on the offset-shifted tile key.
         "tile_boundaries": [
             torch.tensor(
                 [
@@ -98,6 +172,18 @@ def _tricky_batches():
         ],
         "single_grid": [
             torch.randint(-16, 16, (400, 3), dtype=torch.int32),
+        ],
+        # Small clusters scattered over many root tiles per grid, so each grid's speculative root
+        # holds dozens of tiles and most of them stay empty.
+        "wide_bbox": [
+            torch.cat(
+                [
+                    torch.randint(-12000, 12000, (1, 3), dtype=torch.int32)
+                    + torch.randint(0, 6, (40, 3), dtype=torch.int32)
+                    for _ in range(12)
+                ]
+            )
+            for _ in range(3)
         ],
         "larger_batch": [torch.randint(-32, 32, (50 + 37 * i, 3), dtype=torch.int32) for i in range(16)],
     }
@@ -200,6 +286,66 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         cpu_mask = JaggedTensor([m.cpu() for m in mask.unbind()])
         cpu_result = cpu_grid.refined_grid(2, mask=cpu_mask)
         self._check_against_cpu(result, cpu_result, "masked refine x2 vs CPU")
+
+    @parameterized.expand([("tile_boundaries",), ("wide_bbox",), ("empty_members",)])
+    def test_chunked_build_matches_unchunked(self, name):
+        # FVDB_TOPOLOGY_MAX_TILES=1 gives every grid its own builder run (a grid needing more tiles
+        # runs alone), so each pass produces several chunks, chained passes read their sources
+        # across chunks, and the last pass assembles the chunks into one storage.
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        ops = {
+            "refine x4": lambda g: g.refined_grid(4),
+            "coarsen x4": lambda g: g.coarsened_grid(4),
+            "conv_grid k3s1": lambda g: g.conv_grid(kernel_size=3, stride=1),
+            "conv_grid k5s1": lambda g: g.conv_grid(kernel_size=5, stride=1),
+            "conv_transpose_grid k3s2": lambda g: g.conv_transpose_grid(kernel_size=3, stride=2),
+        }
+        for op_name, op in ops.items():
+            msg = f"{name} {op_name}"
+            unchunked = op(grid)
+            with mock.patch.dict(os.environ, {"FVDB_TOPOLOGY_MAX_TILES": "1"}):
+                chunked = op(grid)
+            self.assertEqual(chunked.grid_count, unchunked.grid_count, msg)
+            self.assertTrue(torch.equal(chunked.ijk.jdata, unchunked.ijk.jdata), msg)
+            self.assertTrue(torch.equal(chunked.ijk.joffsets, unchunked.ijk.joffsets), msg)
+            for b in range(chunked.grid_count):
+                self.assertTrue(
+                    torch.equal(chunked.bbox_at(b).cpu(), unchunked.bbox_at(b).cpu()),
+                    f"{msg}: bbox of member {b}",
+                )
+
+    @parameterized.expand([("1e3",), ("64k",), ("abc",), ("-5",), ("0",), ("99999999999999999999",)])
+    def test_invalid_max_tiles_env_raises(self, value):
+        grid = _build(_tricky_batches()["single_grid"], "cuda")
+        with mock.patch.dict(os.environ, {"FVDB_TOPOLOGY_MAX_TILES": value}):
+            with self.assertRaisesRegex(RuntimeError, "FVDB_TOPOLOGY_MAX_TILES must be a positive integer"):
+                grid.refined_grid(2)
+
+    def test_far_flung_voxels_do_not_size_upper_readback_by_bbox(self):
+        # Two voxels at +-1e6 span about 489^3 root tiles of bbox but hold only two upper nodes.
+        # Bounding the upper-node readback by bbox volume alone asked for about 2.8 GB here.
+        # The peak is measured in a fresh process (see _run_with_caching_allocator); the outputs
+        # are checked here.
+        result = _run_with_caching_allocator(_FAR_FLUNG_PEAK_SCRIPT)
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        self.assertIn("ok", result.stdout)
+        coords = [torch.tensor([[-1_000_000] * 3, [1_000_000] * 3], dtype=torch.int32)]
+        grid = _build(coords, "cuda")
+        refined = grid.refined_grid(2)
+        coarsened = grid.coarsened_grid(2)
+        self._check_against_expected(refined, [_expected_refine_ijk(c, 2) for c in coords], "far-flung refine x2")
+        self._check_against_expected(coarsened, [_expected_coarsen_ijk(c, 2) for c in coords], "far-flung coarsen x2")
+
+    def test_failed_run_releases_builder_scratch(self):
+        # One voxel pair per source upper node, 4096 apart in x, so refining needs 128 speculative
+        # root tiles and about 2 GiB of densified lower masks. Cap the allocator well below that:
+        # the run fails after allocating its roots and upper masks, and must not leave them held
+        # by the cached builder. The next run must still work. The cap needs the caching allocator
+        # and an empty cache, so this runs in a fresh process (see _run_with_caching_allocator).
+        result = _run_with_caching_allocator(_FAILED_RUN_SCRIPT)
+        self.assertEqual(result.returncode, 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}")
+        self.assertIn("ok", result.stdout)
 
     def test_refine_coarsen_roundtrip_grid_count(self):
         # Serialization-visible metadata: grid_count/address arithmetic must be consistent for a
