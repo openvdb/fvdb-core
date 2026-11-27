@@ -1,7 +1,6 @@
 // Copyright Contributors to the OpenVDB Project
 // SPDX-License-Identifier: Apache-2.0
 //
-#include <fvdb/BuilderResource.h>
 #include <fvdb/GridBatchData.h>
 #include <fvdb/GridStorage.h>
 #include <fvdb/detail/GridBatchDataFactory.h>
@@ -12,17 +11,16 @@
 #include <fvdb/detail/utils/cuda/ForEachCUDA.cuh>
 #include <fvdb/detail/utils/cuda/RAIIRawDeviceBuffer.h>
 #include <fvdb/detail/utils/cuda/StreamOrdering.h>
-#include <fvdb/detail/utils/nanovdb/DeviceGridHandleUtils.cuh>
-#include <fvdb/detail/utils/nanovdb/PadGrid.cuh>
+#include <fvdb/detail/utils/nanovdb/BatchedTopologyBuilder.cuh>
 
 #include <nanovdb/HostBuffer.h>
 #include <nanovdb/tools/CreateNanoGrid.h>
-#include <nanovdb/tools/cuda/PointsToGrid.cuh>
 
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
-#include <c10/cuda/CUDAMathCompat.h>
 #include <torch/types.h>
+
+#include <utility>
+#include <vector>
 
 namespace fvdb {
 namespace detail {
@@ -95,38 +93,30 @@ dispatchBuildGridFromNearestVoxelsToPoints<torch::kCUDA>(
     const JaggedTensor &points, const std::vector<VoxelCoordTransform> &txs) {
     const torch::Device device = points.device();
     c10::cuda::CUDAGuard deviceGuard(device);
-    // The grids are built and their storage retained on the device's current torch stream; the
-    // prototype carries that stream and the device into every allocation the builder makes.
-    const cudaStream_t stream    = storageStream(device);
-    const DeviceGridBuffer proto = GridStorage::deviceProto(device, stream);
+    // The grids are built and their storage retained on the device's current torch stream.
+    const cudaStream_t stream = storageStream(device);
 
     // Build the base grid from the single voxel containing each point. Points are unstructured, so
     // one sort is unavoidable. _createNanoGridFromIJK builds on this same storage stream.
     JaggedTensor flooredIjk = flooredIjkForPoints(points, txs);
     GridStorage base        = ops::_createNanoGridFromIJK(flooredIjk);
-
-    // The 8 nearest voxels of a point are floor(p) + {0,1}^3, so the nearest-voxel grid is the base
-    // grid padded by one positive octant (the Minkowski sum distributes over the point union).
-    const torch::Tensor joffsetsCpu = points.joffsets().cpu();
-    const auto joffsetsAcc          = joffsetsCpu.accessor<fvdb::JOffsetsType, 1>();
-
-    // Pad one grid per batch item, then lay them end to end in one storage.
-    GridStorageParts parts(device, stream, base.gridCount());
-    for (uint32_t i = 0; i < base.gridCount(); i += 1) {
-        if (joffsetsAcc[i + 1] - joffsetsAcc[i] == 0) {
-            // No points in this batch item -> empty grid (>=1 point always yields >=1 base voxel).
-            parts.addEmpty();
-            continue;
-        }
-        nanovdb::OnIndexGrid *grid = base.deviceGridAt<nanovdb::ValueOnIndex>(i);
-        TORCH_CHECK(grid, "Grid is null");
-        morphology::PadGrid<nanovdb::ValueOnIndex, BuilderResource> op(
-            grid, /*positiveOctant=*/true, stream);
-        parts.add(GridStorage(op.getHandle(proto), device));
-        C10_CUDA_KERNEL_LAUNCH_CHECK();
+    if (base.gridCount() == 0) {
+        return base;
     }
 
-    return parts.merge();
+    // The 8 nearest voxels of a point are floor(p) + {0,1}^3, so the nearest-voxel grid is the base
+    // grid padded by one positive octant (the Minkowski sum distributes over the point union). The
+    // whole batch is padded in one batched BoxDilate pass on TopologyBuilder (issue #775, item 6);
+    // members without points have empty base grids and stay empty. The pass only reads topology,
+    // so the base batch is wrapped with unit transforms; the caller applies the real ones.
+    const uint32_t numGrids = base.gridCount();
+    const c10::intrusive_ptr<GridBatchData> baseBatch =
+        makeGridBatchData(std::move(base),
+                          std::vector<nanovdb::Vec3d>(numGrids, nanovdb::Vec3d(1.0)),
+                          std::vector<nanovdb::Vec3d>(numGrids, nanovdb::Vec3d(0.0)));
+    const std::vector<batched::TopologyPassSpec> passes{
+        batched::TopologyPassSpec::boxDilate(nanovdb::Coord(0), nanovdb::Coord(1))};
+    return batched::batchedTopologyStorage(*baseBatch, passes, stream);
 }
 
 template <>

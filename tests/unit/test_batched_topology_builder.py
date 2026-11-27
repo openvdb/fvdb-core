@@ -210,6 +210,94 @@ def _tricky_batches():
     }
 
 
+# Point batches for from_nearest_voxels_to_points. World coordinates are chosen so that, with the
+# voxel size / origin below, the index-space coordinates cover the same tricky regimes as
+# _tricky_batches(): mixed member sizes, empty members (first/middle/last/all), coordinates
+# straddling the +-4096 root-tile boundaries with negative components (points exactly on voxel
+# boundaries included, where floor and the +1 pad land in different root tiles), single members
+# (non-empty, one point, empty), and a 16-member batch.
+_NEAREST_VOXEL_SIZE = 0.5  # power of two: p * (1 / voxel_size) is exact in float32
+_NEAREST_ORIGIN = 0.25  # origin / voxel_size = 0.5 is exact in float32
+# Keys of _nearest_voxel_point_batches(), listed so test parametrization does not build the batches
+# (and reseed torch's global RNG) at import time; a test pins the two against each other.
+_NEAREST_BATCH_NAMES = (
+    "mixed_sizes",
+    "empty_members",
+    "all_empty",
+    "tile_boundaries",
+    "single_grid",
+    "single_point",
+    "single_empty",
+    "larger_batch",
+)
+
+
+def _nearest_voxel_point_batches():
+    torch.manual_seed(11)
+    vs = _NEAREST_VOXEL_SIZE
+    # World position of index-space value `i` (voxel boundary), so floor lands exactly on `i`.
+    world = lambda i: i * vs + _NEAREST_ORIGIN  # noqa: E731
+    return {
+        "mixed_sizes": [
+            torch.rand(2000, 3) * 8 - 4,
+            torch.tensor([[0.3, -0.7, 1.1]]),
+            torch.rand(50, 3) * 0.1 + 5.0,
+            torch.rand(3000, 3) * 40 - 20,
+        ],
+        "empty_members": [
+            torch.empty(0, 3),
+            torch.rand(500, 3) * 6 - 3,
+            torch.empty(0, 3),
+            torch.tensor([[world(5), world(5), world(5)], [world(5), world(5), world(6)]]),
+            torch.empty(0, 3),
+        ],
+        "all_empty": [torch.empty(0, 3), torch.empty(0, 3)],
+        "tile_boundaries": [
+            torch.tensor(
+                [
+                    [world(-4097), world(-4097), world(-4097)],
+                    [world(-4096), world(-4096), world(-4096)],
+                    [world(-4097) + 0.1, world(-4097) + 0.2, world(-4097) + 0.3],
+                    [world(-2049), 0.0, 0.0],
+                    [world(-1), world(-1), world(-1)],
+                    [world(-1) + 0.49, world(-1) + 0.49, world(-1) + 0.49],
+                    [0.0, 0.0, 0.0],
+                    [world(4095), world(4095), world(4095)],
+                    [world(4095) + 0.3, world(4095) + 0.3, world(4095) + 0.3],
+                    [world(4096), world(4096), world(4096)],
+                    [world(4096), world(-4097), world(0)],
+                    [world(-8193), world(0), world(-4097)],
+                ]
+            ),
+            torch.rand(600, 3) * (world(-3900) - world(-4200)) + world(-4200),
+            torch.rand(600, 3) * (world(4200) - world(3900)) + world(3900),
+            torch.cat(
+                [
+                    torch.rand(300, 3) * 20 - world(4110),
+                    torch.rand(300, 3) * 20 + world(4080),
+                ]
+            ),
+        ],
+        "single_grid": [torch.rand(1500, 3) * 16 - 8],
+        "single_point": [torch.tensor([[world(-4097) + 0.1, world(4095) + 0.4, world(-1) + 0.3]])],
+        "single_empty": [torch.empty(0, 3)],
+        "larger_batch": [torch.rand(50 + 137 * i, 3) * 32 - 16 for i in range(16)],
+    }
+
+
+def _expected_nearest_voxels_ijk(points: torch.Tensor, voxel_size: float, origin: float) -> torch.Tensor:
+    """Unique floor(transform(p)) + {0,1}^3 -- the 8 voxels nearest to each point -- computed like
+    the op's VoxelCoordTransform (p * (1 / voxel_size) + (-origin / voxel_size), then floor)."""
+    if points.numel() == 0:
+        return torch.empty((0, 3), dtype=torch.int32)
+    scale = torch.tensor(1.0 / voxel_size, dtype=torch.float32)
+    translate = torch.tensor(-origin / voxel_size, dtype=torch.float32)
+    ijk0 = torch.floor(points.to(torch.float32) * scale + translate).to(torch.int64)
+    offsets = torch.stack(torch.meshgrid(*[torch.arange(2)] * 3, indexing="ij"), dim=-1).reshape(-1, 3)
+    ijk = (ijk0[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
+    return torch.unique(ijk, dim=0).to(torch.int32)
+
+
 @unittest.skipIf(not torch.cuda.is_available(), "CUDA is required for the batched builder")
 class TestBatchedTopologyBuilder(unittest.TestCase):
     def _check_against_expected(self, result: GridBatch, expected_ijks, msg: str):
@@ -569,6 +657,51 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         cat = GridBatch.from_cat([grid, other])
         self.assertEqual(cat.grid_count, num_grids + other.grid_count)
         self.assertTrue(torch.equal(cat.ijk.jdata, torch.cat([grid.ijk.jdata, other.ijk.jdata])))
+
+    def test_nearest_batch_names_match_batches(self):
+        self.assertEqual(_NEAREST_BATCH_NAMES, tuple(_nearest_voxel_point_batches()))
+
+    @parameterized.expand([(name,) for name in _NEAREST_BATCH_NAMES])
+    def test_from_nearest_voxels_to_points_matches_expected_and_cpu(self, name):
+        # CUDA: the floored-ijk base batch is padded by {0,1}^3 in one batched BoxDilate(0, +1)
+        # pass instead of one PadGrid per member.
+        pts = _nearest_voxel_point_batches()[name]
+        vs, og = _NEAREST_VOXEL_SIZE, _NEAREST_ORIGIN
+        result = GridBatch.from_nearest_voxels_to_points(
+            JaggedTensor([p.cuda() for p in pts]), voxel_sizes=vs, origins=og
+        )
+        expected = [_expected_nearest_voxels_ijk(p, vs, og) for p in pts]
+        for p, e in zip(pts, expected):
+            # Every point contributes 8 candidates, so a non-empty member has at least 8 voxels.
+            self.assertEqual(e.shape[0] >= 8, p.shape[0] > 0, f"{name}: expected-set sanity")
+        self._check_against_expected(result, expected, f"from_nearest_voxels_to_points[{name}]")
+        for b, p in enumerate(pts):
+            single = GridBatch.from_nearest_voxels_to_points(JaggedTensor([p.cuda()]), voxel_sizes=vs, origins=og)
+            self.assertTrue(
+                torch.equal(result.ijk[b].jdata, single.ijk.jdata),
+                f"from_nearest_voxels_to_points[{name}]: member {b} differs from its single-member build",
+            )
+        cpu = GridBatch.from_nearest_voxels_to_points(JaggedTensor(pts), voxel_sizes=vs, origins=og)
+        self._check_against_cpu(result, cpu, f"from_nearest_voxels_to_points[{name}] vs CPU")
+
+    def test_from_nearest_voxels_to_points_per_member_transforms(self):
+        # Per-member voxel sizes / origins: each member's base voxels use its own transform, and the
+        # output keeps each member's transform.
+        torch.manual_seed(5)
+        pts = [torch.rand(700, 3) * 10 - 5, torch.empty(0, 3), torch.rand(300, 3) * 3]
+        sizes = [0.5, 1.0, 0.25]
+        origins = [0.0, 0.25, -0.125]
+        kwargs = dict(voxel_sizes=[[v] * 3 for v in sizes], origins=[[o] * 3 for o in origins])
+        result = GridBatch.from_nearest_voxels_to_points(JaggedTensor([p.cuda() for p in pts]), **kwargs)
+        expected = [_expected_nearest_voxels_ijk(p, v, o) for p, v, o in zip(pts, sizes, origins)]
+        self._check_against_expected(result, expected, "from_nearest_voxels_to_points per-member transforms")
+        for b in range(len(pts)):
+            self.assertTrue(
+                torch.allclose(result.voxel_size_at(b).cpu().double(), torch.tensor([sizes[b]] * 3).double())
+            )
+            self.assertTrue(torch.allclose(result.origin_at(b).cpu().double(), torch.tensor([origins[b]] * 3).double()))
+        cpu = GridBatch.from_nearest_voxels_to_points(JaggedTensor(pts), **kwargs)
+        self._check_against_cpu(result, cpu, "from_nearest_voxels_to_points per-member transforms vs CPU")
 
 
 if __name__ == "__main__":
