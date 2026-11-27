@@ -324,6 +324,10 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             _build_padded_grid(grid, -(2**31), 0)
         with self.assertRaises(ValueError):
             _build_padded_grid(grid, -(2**30), 2**30)
+        # bmax == INT_MAX would overflow the CPU path's `d <= bmax` loop; rejected on every device.
+        for device in ("cpu", "cuda"):
+            with self.assertRaises(ValueError):
+                _build_padded_grid(_build(_tricky_batches()["mixed_sizes"], device), 0, 2**31 - 1)
 
     def test_padded_grid_of_sliced_batch(self):
         # Mixed negative/positive pads on a sliced view: both octants' passes must read the

@@ -30,7 +30,11 @@ namespace ops {
 /// @param excludeBorder Erode by the structuring element instead of padding by it
 /// @param dualTransform Reinterpret the result on the dual (corner) lattice by swapping the
 ///        source's primal and dual transforms
-/// @return A new grid batch with the padded or eroded topology
+/// @return A new grid batch with the padded or eroded topology; an empty batch on the source's
+///         device if @p baseBatchHdl holds zero grids (the box is still validated first)
+/// @throws c10::ValueError (Python ValueError) if bmin > 0, bmax < 0, bmax == INT_MAX or
+///         bmax - bmin > INT_MAX, or, on PrivateUse1, if (bmax - bmin + 1)^3 > INT32_MAX
+/// @throws c10::NotImplementedError if @p excludeBorder is set on a PrivateUse1 device
 c10::intrusive_ptr<GridBatchData> buildPaddedGrid(
     const GridBatchData &baseBatchHdl, int bmin, int bmax, bool excludeBorder, bool dualTransform);
 

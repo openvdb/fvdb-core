@@ -405,7 +405,8 @@ dispatchBuildPaddedGrid<torch::kPrivateUse1>(const GridBatchData &baseBatchHdl,
                                              int bmax,
                                              bool excludeBorder) {
     // Multi-GPU / PrivateUse1 keeps the coordinate-list path (TopologyBuilder-based morphology
-    // is single-device). buildPaddedGrid rejects exclude_border on PrivateUse1 before dispatch.
+    // is single-device). buildPaddedGrid rejects exclude_border, and boxes whose volume overflows
+    // paddedIJKForGrid's int32 count, on PrivateUse1 before dispatch.
     TORCH_INTERNAL_ASSERT(!excludeBorder);
     nanovdb::CoordBBox bbox = nanovdb::CoordBBox::createCube(bmin, bmax);
     JaggedTensor coords     = paddedIJKForGrid<torch::kPrivateUse1>(baseBatchHdl, bbox);
@@ -437,18 +438,36 @@ buildPaddedGrid(
                       bmin,
                       ", bmax=",
                       bmax);
-    // Bounds the pass count (bmax - bmin) and keeps -bmin from overflowing.
-    TORCH_CHECK_VALUE(int64_t(bmax) - int64_t(bmin) <= int64_t(std::numeric_limits<int>::max()),
-                      "buildPaddedGrid requires bmax - bmin <= INT_MAX, got bmin=",
-                      bmin,
-                      ", bmax=",
-                      bmax);
+    // Keeps -bmin and bmax - bmin (the pass count) within int, and keeps the CPU paths'
+    // `for (int d = bmin; d <= bmax; ++d)` loops from overflowing. It does not bound the work: a
+    // pad by k runs k unit passes and grows each voxel's neighborhood as k^3.
+    TORCH_CHECK_VALUE(
+        bmax < std::numeric_limits<int>::max() &&
+            int64_t(bmax) - int64_t(bmin) <= int64_t(std::numeric_limits<int>::max()),
+        "buildPaddedGrid requires bmax < INT_MAX and bmax - bmin <= INT_MAX, got bmin=",
+        bmin,
+        ", bmax=",
+        bmax);
     // The exclude-border variant was never supported on PrivateUse1 (its old code path called a
     // CUDA-only helper that asserts is_cuda), so reject it explicitly, for any batch size, rather
     // than crash obscurely.
-    TORCH_CHECK(!(excludeBorder && baseBatchHdl.device().is_privateuseone()),
-                "dual_grid/build_padded_grid with exclude_border=True is not supported on "
-                "PrivateUse1 (multi-GPU) devices");
+    TORCH_CHECK_NOT_IMPLEMENTED(
+        !(excludeBorder && baseBatchHdl.device().is_privateuseone()),
+        "dual_grid/build_padded_grid with exclude_border=True is not supported on "
+        "PrivateUse1 (multi-GPU) devices");
+    // PrivateUse1's coordinate-list path (paddedIJKForGrid) sizes its per-voxel output with an
+    // int32 box volume.
+    if (baseBatchHdl.device().is_privateuseone()) {
+        const int64_t side = int64_t(bmax) - int64_t(bmin) + 1;
+        // side <= 2048 first, so side^3 cannot overflow int64 (side can reach 2^31 here).
+        TORCH_CHECK_VALUE(side <= 2048 &&
+                              side * side * side <= int64_t(std::numeric_limits<int32_t>::max()),
+                          "build_padded_grid on PrivateUse1 requires (bmax - bmin + 1)^3 <= "
+                          "INT32_MAX, got bmin=",
+                          bmin,
+                          ", bmax=",
+                          bmax);
+    }
     // An empty batch pads to an empty batch on every device (matching clip / clone); the CUDA
     // batched path would otherwise reject a zero-grid source.
     if (baseBatchHdl.batchSize() == 0) {
