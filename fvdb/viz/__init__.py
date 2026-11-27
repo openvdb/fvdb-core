@@ -9,6 +9,7 @@ from ._gaussian_splat_3d_view import GaussianSplat3dView
 from ._gaussian_splat_view_data import GaussianSplatViewData, ShOrderingMode
 from ._image_view import ImageView
 from ._level_set_view import LevelSetView
+from ._mesh_view import MeshView
 from ._point_cloud_view import PointCloudView
 from ._scene import Scene, get_scene
 from ._utils import grid_edge_network, gridbatch_edge_network
@@ -27,6 +28,7 @@ __all__ = [
     "CamerasView",
     "ImageView",
     "LevelSetView",
+    "MeshView",
     "get_scene",
     "PointCloudView",
     "Scene",
