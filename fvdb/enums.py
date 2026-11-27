@@ -65,29 +65,28 @@ class ConvolutionPhasePolicy(StrEnum):
 
 class SmoothingMode(IntEnum):
     """
-    Laplacian smoothing mode used to de-staircase a signed distance field in
-    :meth:`fvdb.Grid.reinitialize_sdf` / :meth:`fvdb.Grid.rebuild_narrow_band` (and their
-    :class:`fvdb.GridBatch` counterparts).
+    Umbrella-Laplacian smoothing schedule applied by :meth:`fvdb.Grid.laplacian_smooth` and
+    :meth:`fvdb.GridBatch.laplacian_smooth`.
 
-    The number of smoothing passes is controlled separately by the ``smooth`` argument; this enum
-    selects *which* umbrella-Laplacian flow each pass applies. Smoothing runs after the redistance
-    and is followed by a short second redistance (with a freshly computed sign) so ``|grad phi| = 1``
-    is restored; unlike a pure redistance it therefore *moves* the zero crossing to the smoothed
-    surface. Thin (about one voxel) features can be eroded by :attr:`MEAN_CURVATURE`; prefer
-    :attr:`TAUBIN` or ``smooth=0`` for them. Values mirror the C++
+    Each pass moves every voxel toward the mean of its 6 face neighbours by a weight ``w``; this
+    enum selects the weights of the passes in one iteration. On a signed distance field smoothing
+    *moves* the zero crossing, so follow it with a redistance (:meth:`fvdb.Grid.reinitialize_sdf`)
+    to restore ``|grad phi| = 1``. Thin (about one voxel) features can be eroded by
+    :attr:`MEAN_CURVATURE`; prefer :attr:`TAUBIN` for them. Values mirror the C++
     ``fvdb::detail::ops::SmoothingMode`` enum.
     """
 
     MEAN_CURVATURE = 0
     """
-    Mean-curvature flow: each pass moves every voxel toward the average of its 6 face neighbours.
-    Effective at removing staircase artifacts but shrinks the surface (volume loss) if over-applied.
+    One pass with ``w = 1`` per iteration: every voxel is replaced by the mean of its 6 face
+    neighbours. On a signed distance field this approximates mean-curvature flow, which removes
+    staircase artifacts but shrinks the surface (volume loss) if over-applied.
     """
 
     TAUBIN = 1
     """
-    Volume-preserving Taubin smoothing: alternates a positive (shrinking) and a slightly larger
-    negative (inflating) Laplacian step per pass, de-staircasing with much less volume loss.
+    Volume-preserving Taubin smoothing: a ``w = 0.5`` (shrinking) pass followed by a ``w = -0.53``
+    (inflating) pass per iteration, which smooths with much less volume loss.
     """
 
 

@@ -51,6 +51,7 @@
 
 // Meshing / TSDF
 #include <fvdb/detail/ops/IntegrateTSDF.h>
+#include <fvdb/detail/ops/LaplacianSmooth.h>
 #include <fvdb/detail/ops/MarchingCubes.h>
 #include <fvdb/detail/ops/ReinitializeSdf.h>
 
@@ -481,9 +482,15 @@ bind_grid_batch_ops(py::module &m) {
           py::arg("field"),
           py::arg("band"),
           py::arg("redistance_iters"),
-          py::arg("order"),
-          py::arg("smooth"),
-          py::arg("smoothing"));
+          py::arg("order"));
+
+    m.def("laplacian_smooth",
+          &ops::laplacianSmooth,
+          py::arg("grid"),
+          py::arg("field"),
+          py::arg("iterations"),
+          py::arg("mode"),
+          py::arg("boundary_values"));
 
     m.def("integrate_tsdf",
           &ops::integrateTSDF,

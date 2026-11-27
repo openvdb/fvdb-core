@@ -148,6 +148,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/VoxelToWorld.cu
     fvdb/detail/ops/Refine.cu
     fvdb/detail/ops/ReinitializeSdf.cu
+    fvdb/detail/ops/LaplacianSmooth.cu
     fvdb/detail/ops/VolumeRender.cu
     fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu

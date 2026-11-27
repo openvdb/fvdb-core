@@ -15,19 +15,12 @@ namespace fvdb {
 namespace detail {
 namespace ops {
 
-/// @brief Laplacian smoothing mode for the SDF reinitialization de-staircase passes.
-///        Mirrored by the Python ``fvdb.SmoothingMode`` enum (matching member names).
-enum class SmoothingMode : int32_t {
-    MEAN_CURVATURE = 0, ///< Mean-curvature flow (umbrella Laplacian, weight 1.0 per pass).
-    TAUBIN         = 1, ///< Volume-preserving Taubin smoothing (alternating 0.5 / -0.53 passes).
-};
-
 /// @brief Re-initialize a signed per-voxel field into a signed distance field on the *same* grid.
 ///
 /// Redistances the input field to satisfy |grad phi| = 1 (TVD-RK Godunov upwind eikonal solve with
-/// a frozen Peng sign), then optionally de-staircases it with mean-curvature or volume-preserving
-/// Taubin Laplacian smoothing. The grid topology is unchanged: the returned JaggedTensor has the
-/// same per-voxel ordering as the input.
+/// a frozen Peng sign and a Russo-Smereka subcell fix that anchors the zero crossing). The grid
+/// topology is unchanged: the returned JaggedTensor has the same per-voxel ordering as the
+/// input.
 ///
 /// @param batchHdl    Grid batch defining the sparse topology.
 /// @param field       Per-voxel signed field with finite values and shape (N,) or (N, 1),
@@ -36,31 +29,31 @@ enum class SmoothingMode : int32_t {
 ///                    convergence, accuracy, and sub-voxel surface location. Invalid shapes and
 ///                    NaN/Inf values raise ValueError. Leave no-data voxels inactive. A voxel whose
 ///                    value is exactly 0 has a zero frozen sign and is left at 0 by the redistance
-///                    (no-data pass-through), though its signed neighbours see it as an interface.
+///                    (no-data pass-through). It does not make its neighbours interface cells, but
+///                    their Godunov update reads it as a zero level and redistances them toward it.
 ///                    The surface is where the field changes sign between ACTIVE voxels; a grid
 ///                    whose active values are all one sign has no surface and comes back as the
 ///                    constant -/+band*vx. Voxels must be isotropic (a ValueError is raised
 ///                    otherwise).
 /// @param band        Narrow-band half-width in voxels. The field is clamped to [-band*vx, band*vx]
 ///                    each sweep. Inactive neighbours act as a Dirichlet boundary whose value
-///                    uses the adjacent voxel's frozen sign during redistancing and its current
-///                    sign during smoothing: -band*vx for negative, +band*vx otherwise. An
-///                    IndexGrid has a single background slot, so this is how a narrow band with an
-///                    inactive interior (e.g. the output of rebuild_narrow_band) is kept solid
-///                    rather than hollow.
+///                    uses the adjacent voxel's frozen sign: -band*vx for negative, +band*vx
+///                    otherwise. An IndexGrid has a single background slot, so this is how a
+///                    narrow band with an inactive interior (e.g. the output of
+///                    rebuild_narrow_band) is kept solid rather than hollow.
 /// @param redistanceIters  Number of TVD-RK redistancing sweeps. Pass <= 0 to use the default
-///                         max(6, round(2.5*band) + 2).
-/// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher).
-/// @param smooth      Number of smoothing passes (0 disables smoothing).
-/// @param smoothing   Which Laplacian flow each smoothing pass applies (mean-curvature or Taubin).
+///                         max(20, 6*band). Values propagate about 0.4 voxels per sweep, so a
+///                         small explicit value renormalizes the field only within about
+///                         0.4*redistanceIters voxels of the surface.
+/// @param order       TVD-RK order: 1 (forward Euler), 2 (Heun), or 3 (Shu-Osher). The redistance
+///                    marches to a steady state, so the order does not change the converged result;
+///                    1 is the cheapest in time and scratch memory.
 /// @return A new per-voxel SDF JaggedTensor on the same grid/ordering as @p field.
 JaggedTensor reinitializeSdf(const GridBatchData &batchHdl,
                              const JaggedTensor &field,
                              int band,
                              int redistanceIters,
-                             int order,
-                             int smooth,
-                             SmoothingMode smoothing);
+                             int order);
 
 } // namespace ops
 } // namespace detail
