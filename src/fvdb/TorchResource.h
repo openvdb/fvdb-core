@@ -30,8 +30,8 @@ namespace fvdb {
 ///        torch.cuda.memory.change_current_allocator(CUDAPluggableAllocator(...)).
 ///
 ///        Passed as the ResourceT template parameter of NanoVDB's CUDA builders
-///        (PointsToGrid / DilateGrid / MergeGrids / PruneGrid / RefineGrid /
-///        CoarsenGrid) — always via the fvdb::BuilderResource alias
+///        (PointsToGrid / voxelsToGrid, TopologyBuilder for the batched topology
+///        passes, DilateGrid, indexToGrid) — always via the fvdb::BuilderResource alias
 ///        (BuilderResource.h), never named directly at call sites — it routes
 ///        their internal device scratch — O(N-points) sort
 ///        keys, CUB temp storage, topology mask buffers — through the same pool

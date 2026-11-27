@@ -4,9 +4,9 @@
 """Equivalence tests for the batched topology builder (issues #755, #775, #785).
 
 On CUDA, ``refined_grid`` / ``coarsened_grid`` (and through them ``conv_grid`` /
-``conv_transpose_grid`` for K == S), ``dilated_grid``, and the padding ops ``dual_grid`` /
-``build_padded_grid(bmin, bmax)`` without exclude_border (issue #775), build all batch members
-together, in one or more TopologyBuilder runs per pass, instead of one NanoVDB build + merge per
+``conv_transpose_grid`` for K == S), ``dilated_grid``, the padding ops ``dual_grid`` /
+``build_padded_grid(bmin, bmax)``, ``pruned_grid`` and ``merged_grid`` (issue #775), build all batch
+members together, in one or more TopologyBuilder runs per pass, instead of one NanoVDB build + merge per
 member. These tests pin the batched results against:
 
 - ``from_ijk`` (PointsToGrid) grids built from independently computed expected coordinates,
@@ -338,6 +338,37 @@ def _erosion_batches():
         torch.empty((0, 3), dtype=torch.int32),
         ball,
         block((-2, -2, -2), (3, 3, 3)),
+    ]
+
+
+def _merge_partner(coords, seed: int):
+    """A second batch to merge with `coords`, member by member. Non-empty members get, in turn,
+    a partner that overlaps them (half of their voxels, jittered copies sharing their leaves, and
+    copies moved into other root tiles), an empty partner, and an identical one; empty members get
+    a small cluster or an empty partner, so the batch covers every empty/non-empty pairing."""
+    gen = torch.Generator().manual_seed(seed)
+    partner = []
+    for i, c in enumerate(coords):
+        n = c.shape[0]
+        if n == 0:
+            cluster = torch.randint(-4, 4, (30, 3), dtype=torch.int32, generator=gen)
+            partner.append(cluster if i % 2 == 0 else torch.empty((0, 3), dtype=torch.int32))
+        elif i % 3 == 0:
+            half = c[torch.randperm(n, generator=gen)[: max(n // 2, 1)]]
+            jittered = half + torch.randint(-3, 4, half.shape, dtype=torch.int32, generator=gen)
+            moved = half + torch.tensor([4096, 0, -4096], dtype=torch.int32)
+            partner.append(torch.cat([half, jittered, moved]))
+        elif i % 3 == 1:
+            partner.append(torch.empty((0, 3), dtype=torch.int32))
+        else:
+            partner.append(c.clone())
+    return partner
+
+
+def _expected_merged_ijk(grid: GridBatch, other: GridBatch):
+    """Each member's union of the two grids' coordinates."""
+    return [
+        torch.unique(torch.cat([grid.ijk[b].jdata, other.ijk[b].jdata]), dim=0).cpu() for b in range(grid.grid_count)
     ]
 
 
@@ -702,6 +733,69 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
         self.assertTrue(torch.equal(a.ijk.joffsets, b.ijk.joffsets))
         self.assertTrue(torch.equal(a.ijk.jdata, b.ijk.jdata))
 
+    def _check_merged(self, grid: GridBatch, other: GridBatch, msg: str):
+        """Merges `grid` with `other` on CUDA and pins the result against expected coordinates and
+        against the CPU implementation; the result takes `grid`'s voxel sizes and origins."""
+        result = grid.merged_grid(other)
+        self._check_against_expected(result, _expected_merged_ijk(grid, other), msg)
+        cpu_result = grid.to("cpu").merged_grid(other.to("cpu"))
+        self._check_against_cpu(result, cpu_result, f"{msg} vs CPU")
+        for b in range(result.grid_count):
+            self.assertTrue(
+                torch.allclose(result.voxel_size_at(b).cpu(), grid.voxel_size_at(b).cpu()), f"{msg}: voxel size"
+            )
+            self.assertTrue(torch.allclose(result.origin_at(b).cpu(), grid.origin_at(b).cpu()), f"{msg}: origin")
+        return result
+
+    @parameterized.expand([(name,) for name in _tricky_batches().keys()])
+    def test_merged_grid_matches_expected_and_cpu(self, name):
+        # CUDA: one batched Union pass over both batches, instead of one MergeGrids build per member.
+        coords = _tricky_batches()[name]
+        grid = _build(coords, "cuda")
+        other = _build(_merge_partner(coords, seed=5), "cuda")
+        self._check_merged(grid, other, f"{name} merged with partner")
+        self._check_merged(other, grid, f"{name} partner merged with it")
+        self._check_merged(grid, grid, f"{name} merged with itself")
+
+    def test_merged_grid_takes_the_first_batchs_transforms(self):
+        coords = _tricky_batches()["mixed_sizes"]
+        partner = _merge_partner(coords, seed=9)
+        # One (x, y, z) row per member.
+        grid = GridBatch.from_ijk(
+            JaggedTensor([c.cuda() for c in coords]),
+            voxel_sizes=[[0.5, 0.5, 0.5], [1.0, 2.0, 1.0], [2.0, 2.0, 0.25]],
+            origins=[[0.25, 0.0, 0.0], [-1.0, 3.0, 0.5], [3.0, 3.0, 3.0]],
+        )
+        other = GridBatch.from_ijk(JaggedTensor([c.cuda() for c in partner]), voxel_sizes=0.75, origins=0.0)
+        self._check_merged(grid, other, "per-member transforms")
+
+    def test_merged_grid_of_sliced_batches_matches_standalone(self):
+        coords = _tricky_batches()["mixed_sizes"] + _tricky_batches()["tile_boundaries"]
+        partner = _merge_partner(coords, seed=13)
+        full, full_other = _build(coords, "cuda"), _build(partner, "cuda")
+        merged_view = full[1:4].merged_grid(full_other[2:5])
+        standalone = _build(coords[1:4], "cuda").merged_grid(_build(partner[2:5], "cuda"))
+        self.assertEqual(merged_view.grid_count, standalone.grid_count)
+        self.assertTrue(torch.equal(merged_view.ijk.joffsets, standalone.ijk.joffsets))
+        self.assertTrue(torch.equal(merged_view.ijk.jdata, standalone.ijk.jdata))
+
+    def test_merged_grid_rejects_mismatched_batches(self):
+        coords = _tricky_batches()["mixed_sizes"]
+        for device in ("cuda", "cpu"):
+            grid = _build(coords, "cuda").to(device)
+            with self.assertRaisesRegex(ValueError, "same batch size"):
+                grid.merged_grid(grid[:2])
+            # An empty first batch is checked too, rather than returning an empty batch.
+            with self.assertRaisesRegex(ValueError, "same batch size"):
+                GridBatch.from_zero_grids(device=device).merged_grid(grid)
+        with self.assertRaisesRegex(ValueError, "same device"):
+            _build(coords, "cuda").merged_grid(_build(coords, "cpu"))
+
+    def test_merged_grid_of_empty_batches(self):
+        for device in ("cuda", "cpu"):
+            empty = GridBatch.from_zero_grids(device=device)
+            self.assertEqual(empty.merged_grid(empty).grid_count, 0, device)
+
     @parameterized.expand([("tile_boundaries",), ("wide_bbox",), ("empty_members",)])
     def test_chunked_build_matches_unchunked(self, name):
         # FVDB_TOPOLOGY_MAX_TILES=1 gives every grid its own builder run (a grid needing more tiles
@@ -721,8 +815,10 @@ class TestBatchedTopologyBuilder(unittest.TestCase):
             "pruned_grid": lambda g: g.pruned_grid(prune_mask),
             "padded_grid(-1, 1, exclude_border)": lambda g: _build_padded_grid(g, -1, 1, exclude_border=True),
             "dual_grid(exclude_border)": lambda g: g.dual_grid(exclude_border=True),
+            "merged_grid": lambda g: g.merged_grid(merge_partner),
         }
         prune_mask = _random_prune_masks(grid, seed=3)
+        merge_partner = _build(_merge_partner(coords, seed=3), "cuda")
         for op_name, op in ops.items():
             msg = f"{name} {op_name}"
             unchunked = op(grid)

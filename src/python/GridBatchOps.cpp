@@ -738,12 +738,7 @@ bind_grid_batch_ops(py::module &m) {
 
     m.def(
         "merge_grids",
-        [](const GBI &grid1, const GBI &grid2) {
-            if (grid1.batchSize() == 0) {
-                return fvdb::detail::makeEmptyGridBatchData(grid1.device());
-            }
-            return ops::mergeGrids(grid1, grid2);
-        },
+        [](const GBI &grid1, const GBI &grid2) { return ops::mergeGrids(grid1, grid2); },
         py::arg("grid1"),
         py::arg("grid2"));
 
