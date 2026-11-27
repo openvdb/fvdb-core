@@ -107,7 +107,7 @@ GridStorage::GridStorage(DeviceHandle &&handle, const torch::Device &device)
     checkStorageDevice(mDevice);
     TORCH_CHECK(mDevice.is_cuda(), "GridStorage: a device handle cannot live on ", mDevice);
     auto &h = std::get<DeviceHandle>(mHandle);
-    if (h.isEmpty()) {
+    if (h.empty()) {
         // An empty handle carries whatever resource it was default-constructed with (the current
         // CUDA device, e.g. cuda::copyTo's result for a zero-byte source); re-home it so the
         // buffer agrees with device() for anyone who re-wraps it or uses it as a prototype.
@@ -168,7 +168,7 @@ GridStorage::deviceProto(const torch::Device &requested, cudaStream_t stream) {
 
 bool
 GridStorage::isEmpty() const {
-    return std::visit([](const auto &h) { return h.isEmpty(); }, mHandle);
+    return std::visit([](const auto &h) { return h.empty(); }, mHandle);
 }
 
 uint64_t

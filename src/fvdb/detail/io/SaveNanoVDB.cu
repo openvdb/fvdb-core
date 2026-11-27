@@ -902,7 +902,7 @@ maybeSaveStandardNanovdbGrid(const std::string &path,
                              bool verbose) {
     nanovdb::GridHandle<nanovdb::HostBuffer> gridHandle =
         maybeConvertToStandardNanovdbGrid(gridBatchData, data, names);
-    if (gridHandle.isEmpty()) {
+    if (gridHandle.empty()) {
         return false;
     }
 
