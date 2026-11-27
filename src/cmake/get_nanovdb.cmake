@@ -14,11 +14,14 @@
 # compiles against the same CCCL through NanoVDB::nanovdb, and its -I paths
 # come before the toolkit's. Set CCCL_DIR to use another CCCL.
 
+# TEMPORARY: the head of AcademySoftwareFoundation/openvdb#2447 (on #2427), which adds the
+# per-item merge and box-dilation functors. Before this merges, pin the develop/nanovdb commit
+# that contains #2447.
 CPMAddPackage(
     NAME NanoVDB
     VERSION 32.11
-    GITHUB_REPOSITORY AcademySoftwareFoundation/openvdb
-    GIT_TAG 1b010f05efa19f1243c5cacf50770e53dd606562
+    GITHUB_REPOSITORY swahtz/openvdb
+    GIT_TAG 75b873b80049e249ba98131e24156add1d0dc4b6
     SOURCE_SUBDIR nanovdb/nanovdb
     EXCLUDE_FROM_ALL YES
     OPTIONS
