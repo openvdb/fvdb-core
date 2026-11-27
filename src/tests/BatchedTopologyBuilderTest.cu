@@ -4,7 +4,7 @@
 // Argument checks of the batched topology builder (BatchedTopologyBuilder.cuh) that no Python
 // entry point can reach, because every op builds valid passes and sources. Each check is driven
 // from C++ here, through both pass entry points (runBatchedTopologyPass and buildChunk) where it
-// applies, next to a valid Prune pass as the positive control.
+// applies, next to valid Prune and Union passes as the positive controls.
 
 #include <fvdb/GridBatchData.h>
 #include <fvdb/JaggedTensor.h>
@@ -25,6 +25,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace fvdb::detail {
@@ -163,6 +164,56 @@ TEST_F(BatchedTopologyBuilderTest, StorageFromResultRejectsEmptyOrInconsistentRe
         mSource, b::TopologyPassSpec::prune(keepMasks(), mNumLeaves), mStream);
     result.gridBytes.pop_back();
     expectThrowsWith([&] { b::storageFromResult(std::move(result), mDevice, mStream); }, msg);
+}
+
+TEST_F(BatchedTopologyBuilderTest, UnionWithItselfKeepsEverySourceLeaf) {
+    const auto pass                 = b::TopologyPassSpec::unite(mSource);
+    b::BatchedTopologyResult result = b::runBatchedTopologyPass(mSource, pass, mStream);
+    EXPECT_EQ(result.leafCounts, mSource.leafCounts);
+    // buildChunk over passTiles' root tiles, which read both sources' upper nodes.
+    const auto tiles = b::passTiles(mSource, pass, mStream);
+    b::BatchedTopologyResult chunk;
+    b::buildChunk(mSource, pass, 0, int32_t(mSource.grids.size()), tiles, chunk, mStream);
+    EXPECT_EQ(chunk.leafCounts, mSource.leafCounts);
+}
+
+// The spec keeps a pointer to its second source, so a temporary one must not compile.
+template <typename Source>
+constexpr bool kUniteAccepts =
+    requires(Source &&s) { b::TopologyPassSpec::unite(std::forward<Source>(s)); };
+static_assert(kUniteAccepts<b::BatchedTopologySource &>);
+static_assert(!kUniteAccepts<b::BatchedTopologySource>);
+
+TEST_F(BatchedTopologyBuilderTest, UnionPassRejectsInvalidSecondSource) {
+    const int32_t numGrids = int32_t(mSource.grids.size());
+    const std::vector<b::ProcessedTileMap> tiles(numGrids);
+    // Through both entry points.
+    const auto expectRejected = [&](const b::TopologyPassSpec &pass, const std::string &msg) {
+        expectThrowsWith([&] { b::runBatchedTopologyPass(mSource, pass, mStream); }, msg);
+        b::BatchedTopologyResult result;
+        expectThrowsWith([&] { b::buildChunk(mSource, pass, 0, numGrids, tiles, result, mStream); },
+                         msg);
+    };
+    expectRejected(b::TopologyPassSpec{b::TopologyPassSpec::Op::Union},
+                   "Union pass requires a second source");
+
+    b::BatchedTopologySource fewer = mSource;
+    fewer.grids.pop_back();
+    fewer.leafCounts.pop_back();
+    fewer.upperCapacity.pop_back();
+    expectRejected(b::TopologyPassSpec::unite(fewer),
+                   "Union pass: the second source has " + std::to_string(numGrids - 1) +
+                       " grids, the first " + std::to_string(numGrids));
+
+    b::BatchedTopologySource nullGrid = mSource;
+    nullGrid.grids[0]                 = nullptr;
+    expectRejected(b::TopologyPassSpec::unite(nullGrid), "null source grid");
+
+    // Only the recorded device differs, so no second GPU is needed.
+    b::BatchedTopologySource elsewhere = mSource;
+    elsewhere.device                   = torch::Device(torch::kCUDA, 1);
+    expectRejected(b::TopologyPassSpec::unite(elsewhere),
+                   "Union pass: the second source is on cuda:1, the first on cuda:0");
 }
 
 TEST_F(BatchedTopologyBuilderTest, SourceLeafTablesComeOnlyFromTheSource) {
