@@ -213,7 +213,7 @@ def rebuild_narrow_band_batch(
     """Rebuild a signed field into a clean narrow-band SDF on a (possibly pruned) grid batch.
 
     If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels (so the eikonal solve has room
-    to propagate a full-width band), then :func:`reinitialize_sdf_batch` is run, and finally, if
+    to fill the full ``±band*vx`` band), then :func:`reinitialize_sdf_batch` is run, and finally, if
     ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
     (``|phi| < band*vx*0.999``). The prune reuses :meth:`GridBatch.pruned_grid`; the resulting field
     is selected in the grid's canonical voxel order so it stays aligned with the pruned grid.
@@ -273,7 +273,7 @@ def rebuild_narrow_band_single(
     """Rebuild a signed field into a clean narrow-band SDF on a (possibly pruned) single grid.
 
     If ``pad`` is ``True`` the grid is first dilated by ``band`` voxels (so the eikonal solve has room
-    to propagate a full-width band), then :func:`reinitialize_sdf_single` is run, and finally, if
+    to fill the full ``±band*vx`` band), then :func:`reinitialize_sdf_single` is run, and finally, if
     ``prune`` is ``True``, the grid is pruned to the voxels strictly inside the band
     (``|phi| < band*vx*0.999``).
 

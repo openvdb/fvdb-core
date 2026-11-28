@@ -126,6 +126,8 @@ Meshing and TSDF Integration
 
 .. autofunction:: marching_cubes_batch
 .. autofunction:: marching_cubes_single
+.. autofunction:: dual_contour_batch
+.. autofunction:: dual_contour_single
 .. autofunction:: integrate_tsdf_batch
 .. autofunction:: integrate_tsdf_single
 .. autofunction:: integrate_tsdf_with_features_batch

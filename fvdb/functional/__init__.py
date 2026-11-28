@@ -119,6 +119,8 @@ from ._io import (
 
 # Meshing / TSDF
 from ._meshing import (
+    dual_contour_batch,
+    dual_contour_single,
     integrate_tsdf_batch,
     integrate_tsdf_single,
     integrate_tsdf_with_features_batch,
@@ -298,6 +300,8 @@ __all__ = [
     # Meshing
     "marching_cubes_batch",
     "marching_cubes_single",
+    "dual_contour_batch",
+    "dual_contour_single",
     "integrate_tsdf_batch",
     "integrate_tsdf_single",
     "integrate_tsdf_with_features_batch",
