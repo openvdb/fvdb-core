@@ -914,7 +914,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
         std::vector<cudaStream_t> prefetchStreams(c10::cuda::device_count());
         std::vector<torch::Tensor> dLossDWorldToCamMatricesLocals(c10::cuda::device_count());
 
-        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
+        // Discard and prefetch each output shard before zeroing it for accumulation.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream               = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -927,7 +927,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (computeDLossDWorldToCamMatrices) {
                 // Use the compute stream so the captured cleanup stream follows the kernels and
@@ -957,27 +957,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 memDiscardAndPrefetchBatchAsync(
                     prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
-                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                // Discard invalidates the previous contents, so zero outputs after prefetching.
                 C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
                 C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
                 for (const auto i: c10::irange(prefetchPtrs.size())) {
                     C10_CUDA_CHECK(cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], stream));
                 }
-
-                prefetchPtrs.clear();
-                prefetchSizes.clear();
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
-                                              cameraIndex * dLossDRenderQuantities.stride(0) +
-                                              elementOffset * dLossDRenderQuantities.stride(1));
-                    prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
-                                               sizeof(scalar_t));
-                }
-                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
             }
-            // Join input prefetching after output zeroing, before the SH kernel.
-            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
             C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
@@ -987,7 +973,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 const dim3 NUM_BLOCKS(GET_BLOCKS(elementCount * D, DEFAULT_BLOCK_DIM), C);
@@ -1053,7 +1039,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             std::vector<cudaEvent_t> outputPrefetchEvents(c10::cuda::device_count(), nullptr);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 const auto [elementOffset, elementCount] =
-                    deviceChunk(dLossDWorldToCamMatrices.numel(), deviceId);
+                    partition::range(dLossDWorldToCamMatrices.numel(), deviceId);
                 if (elementCount == 0) {
                     continue;
                 }
@@ -1072,7 +1058,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 C10_CUDA_CHECK(cudaEventRecord(outputPrefetchEvents[deviceId], prefetchStream));
             }
 
-            reduceGradientShards(dLossDWorldToCamMatricesLocals);
+            reduceLocalGradients(dLossDWorldToCamMatricesLocals);
             for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
                 if (outputPrefetchEvents[deviceId]) {
                     C10_CUDA_CHECK(cudaSetDevice(deviceId));
@@ -1081,7 +1067,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                     C10_CUDA_CHECK(cudaEventDestroy(outputPrefetchEvents[deviceId]));
                 }
             }
-            copyGradientShards<scalar_t>(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
+            copyLocalGradients(dLossDWorldToCamMatricesLocals, dLossDWorldToCamMatrices);
 
             // Enqueue frees after reduction and output copies, before merging the compute streams.
             dLossDWorldToCamMatricesLocals.clear();
@@ -1100,7 +1086,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 dLossDSh0Coeffs, dLossDShNCoeffs, dLossDMeans, dLossDWorldToCamMatrices);
         }
 
-        // Prefetch outputs first, then overlap their zeroing with incoming-gradient prefetching.
+        // Discard and prefetch each output shard before zeroing it for accumulation.
         for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
             auto stream         = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -1112,7 +1098,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, prefetchEvent));
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 std::vector<void *> prefetchPtrs;
@@ -1125,27 +1111,13 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
                 memDiscardAndPrefetchBatchAsync(
                     prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
 
-                // Zero outputs once resident while the prefetch stream prepares the inputs.
+                // Discard invalidates the previous contents, so zero outputs after prefetching.
                 C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
                 C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
                 for (const auto i: c10::irange(prefetchPtrs.size())) {
                     C10_CUDA_CHECK(cudaMemsetAsync(prefetchPtrs[i], 0, prefetchSizes[i], stream));
                 }
-
-                prefetchPtrs.clear();
-                prefetchSizes.clear();
-                for (int cameraIndex = 0; cameraIndex < C; ++cameraIndex) {
-                    prefetchPtrs.emplace_back(dLossDRenderQuantities.data_ptr<scalar_t>() +
-                                              cameraIndex * dLossDRenderQuantities.stride(0) +
-                                              elementOffset * dLossDRenderQuantities.stride(1));
-                    prefetchSizes.emplace_back(elementCount * dLossDRenderQuantities.stride(1) *
-                                               sizeof(scalar_t));
-                }
-                memPrefetchBatchAsync(prefetchPtrs, prefetchSizes, deviceId, prefetchStream);
             }
-            // Join input prefetching after output zeroing, before the SH kernel.
-            C10_CUDA_CHECK(cudaEventRecord(prefetchEvent, prefetchStream));
-            C10_CUDA_CHECK(cudaStreamWaitEvent(stream, prefetchEvent));
             C10_CUDA_CHECK(cudaEventDestroy(prefetchEvent));
         }
 
@@ -1154,7 +1126,7 @@ dispatchEvaluateSphericalHarmonicsBwd<torch::kPrivateUse1>(
             auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
             int64_t elementOffset, elementCount;
-            std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+            std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
             if (elementCount > 0) {
                 const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);

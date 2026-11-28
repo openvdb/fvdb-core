@@ -758,7 +758,7 @@ dispatchProjectGaussiansUnscentedFwd<torch::kPrivateUse1>(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceProblemOffset, deviceProblemSize;
-        std::tie(deviceProblemOffset, deviceProblemSize) = deviceChunk(N, deviceId);
+        std::tie(deviceProblemOffset, deviceProblemSize) = partition::range(N, deviceId);
 
         if (deviceProblemSize > 0) {
             const dim3 NUM_BLOCKS(GET_BLOCKS(deviceProblemSize, DEFAULT_BLOCK_DIM), C);

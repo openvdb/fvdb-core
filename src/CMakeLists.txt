@@ -45,8 +45,8 @@ set(FVDB_CPP_FILES
     fvdb/Config.cpp
     fvdb/detail/io/GaussianPlyIO.cpp
     fvdb/detail/io/LoadNanovdb.cpp
+    fvdb/detail/utils/cuda/GradientReduction.cpp
     fvdb/detail/utils/cuda/LocalGradient.cpp
-    fvdb/detail/utils/cuda/Prefetch.cpp
     fvdb/detail/ops/jagged/JaggedReductions.cpp
     fvdb/detail/viewer/GaussianSplat3dView.cpp
     fvdb/detail/viewer/Viewer.cpp
@@ -55,6 +55,7 @@ set(FVDB_CPP_FILES
 )
 
 set(FVDB_CU_FILES
+    fvdb/detail/utils/cuda/Prefetch.cu
     fvdb/GridBatchData.cu
     fvdb/GridStorage.cu
     fvdb/detail/utils/nanovdb/GridAssembly.cu
@@ -152,6 +153,7 @@ set(FVDB_CU_FILES
     fvdb/detail/ops/NeighborIndexes.cu
     fvdb/detail/ops/VoxelsAlongRays.cu
     fvdb/detail/utils/cuda/ForEachCUDA.cu
+    fvdb/detail/utils/cuda/Utils.cu
 )
 
 # Build library

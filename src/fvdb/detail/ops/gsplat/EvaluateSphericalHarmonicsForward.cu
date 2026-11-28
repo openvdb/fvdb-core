@@ -470,7 +470,7 @@ dispatchEvaluateSphericalHarmonicsFwd<torch::kPrivateUse1>(const int64_t shDegre
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t elementOffset, elementCount;
-        std::tie(elementOffset, elementCount) = deviceChunk(N, deviceId);
+        std::tie(elementOffset, elementCount) = partition::range(N, deviceId);
 
         if (elementCount > 0) {
             const auto NUM_BLOCKS = GET_BLOCKS(C * elementCount * D, DEFAULT_BLOCK_DIM);

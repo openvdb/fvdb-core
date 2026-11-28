@@ -327,9 +327,10 @@ dispatchInject<torch::kPrivateUse1>(const GridBatchData &dstGridBatch,
             cudaStream_t stream = c10::cuda::getCurrentCUDAStream(deviceId).stream();
 
             size_t deviceSrcLeafOffset, deviceSrcLeafCount;
-            std::tie(deviceSrcLeafOffset, deviceSrcLeafCount) = deviceChunk(srcLeafCount, deviceId);
+            std::tie(deviceSrcLeafOffset, deviceSrcLeafCount) =
+                partition::range(srcLeafCount, deviceId);
             if (deviceSrcLeafCount == 0) {
-                // deviceChunk may yield 0 leaves on some devices when
+                // partition::range may yield 0 leaves on some devices when
                 // srcLeafCount < device_count(). Skip — CUDA rejects <<<0, ...>>>.
                 continue;
             }

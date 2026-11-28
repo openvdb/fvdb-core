@@ -7,7 +7,6 @@
 #include <fvdb/detail/utils/Nvtx.h>
 #include <fvdb/detail/utils/Utils.h>
 #include <fvdb/detail/utils/cuda/BinSearch.cuh>
-#include <fvdb/detail/utils/cuda/Prefetch.h>
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/cuda/math/AffineTransform.cuh>
 #include <fvdb/detail/utils/cuda/math/Rotation.cuh>
@@ -702,55 +701,13 @@ launchRasterizeForwardKernels(
     // Sparse active-tile lists retain their flat partition; empty images need nonzero alignment.
     const int64_t tileAlignment = isSparse || tileCount == 0 ? 1 : tileExtentW;
 
-    std::vector<cudaEvent_t> events(c10::cuda::device_count());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaEventCreateWithFlags(&events[deviceId], cudaEventDisableTiming));
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], stream));
-    }
-
-    auto reshapedAlphas  = outAlphas.jdata().view({C, renderWindow.height, renderWindow.width, 1});
-    auto reshapedLastIds = outLastIds.jdata().view({C, renderWindow.height, renderWindow.width});
-    auto reshapedFeatures =
-        outFeatures.jdata().view({C, renderWindow.height, renderWindow.width, channels});
-
-    std::vector<torch::Tensor> tileTensors = {
-        tileOffsets, reshapedAlphas, reshapedLastIds, reshapedFeatures};
-
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto prefetchStream = c10::cuda::getStreamFromPool(false, deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(prefetchStream, events[deviceId]));
-
-        int64_t deviceTileOffset, deviceTileCount;
-        std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
-        if (deviceTileCount) {
-            std::vector<void *> prefetchPointers;
-            std::vector<size_t> prefetchSizes;
-            const TilePrefetchRange tileRange{deviceTileOffset,
-                                              deviceTileCount,
-                                              tileExtentH,
-                                              tileExtentW,
-                                              renderWindow.height,
-                                              renderWindow.width,
-                                              tileSize};
-            appendPerTilePrefetchRanges(prefetchPointers, prefetchSizes, tileTensors, tileRange);
-            memPrefetchBatchAsync(prefetchPointers, prefetchSizes, deviceId, prefetchStream);
-        }
-        C10_CUDA_CHECK(cudaEventRecord(events[deviceId], prefetchStream));
-    }
-
-    for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
-        C10_CUDA_CHECK(cudaSetDevice(deviceId));
-        auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-        C10_CUDA_CHECK(cudaStreamWaitEvent(stream, events[deviceId]));
-        C10_CUDA_CHECK(cudaEventDestroy(events[deviceId]));
 
         uint32_t deviceTileOffset, deviceTileCount;
         std::tie(deviceTileOffset, deviceTileCount) =
-            deviceAlignedChunk(tileAlignment, tileCount, deviceId);
+            partition::aligned_range(tileAlignment, tileCount, deviceId);
         if (deviceTileCount) {
             auto args =
                 RasterizeForwardArgs<ScalarType, NUM_CHANNELS, NUM_SHARED_CHANNELS, IS_PACKED>(

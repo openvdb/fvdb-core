@@ -127,7 +127,7 @@ forEachLeafPrivateUse1(int64_t numChannels,
 
         size_t deviceLeafOffset, deviceLeafCount;
         std::tie(deviceLeafOffset, deviceLeafCount) =
-            fvdb::detail::deviceChunk(leafCount, deviceId);
+            fvdb::detail::partition::range(leafCount, deviceId);
 
         const auto deviceLeafChannelCount  = deviceLeafCount * numChannels;
         const auto deviceLeafChannelOffset = deviceLeafOffset * numChannels;
@@ -171,7 +171,7 @@ forEachVoxelPrivateUse1(int64_t numChannels,
 
         size_t deviceLeafOffset, deviceLeafCount;
         std::tie(deviceLeafOffset, deviceLeafCount) =
-            fvdb::detail::deviceChunk(leafCount, deviceId);
+            fvdb::detail::partition::range(leafCount, deviceId);
 
         const auto deviceLeafVoxelChannelCount  = deviceLeafCount * VOXELS_PER_LEAF * numChannels;
         const auto deviceLeafVoxelChannelOffset = deviceLeafOffset * VOXELS_PER_LEAF * numChannels;
@@ -215,7 +215,7 @@ forEachJaggedElementChannelPrivateUse1(int64_t numChannels,
 
         size_t deviceElementOffset, deviceElementCount;
         std::tie(deviceElementOffset, deviceElementCount) =
-            fvdb::detail::deviceChunk(jaggedTensor.element_count(), deviceId);
+            fvdb::detail::partition::range(jaggedTensor.element_count(), deviceId);
 
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, NumThreads);
         if (deviceNumBlocks > 0) {
@@ -256,7 +256,7 @@ forEachTensorElementChannelPrivateUse1(int64_t numChannels,
 
         size_t deviceElementOffset, deviceElementCount;
         std::tie(deviceElementOffset, deviceElementCount) =
-            fvdb::detail::deviceChunk(tensor.size(0), deviceId);
+            fvdb::detail::partition::range(tensor.size(0), deviceId);
 
         const int64_t deviceNumBlocks = GET_BLOCKS(deviceElementCount, NumThreads);
         if (deviceNumBlocks > 0) {

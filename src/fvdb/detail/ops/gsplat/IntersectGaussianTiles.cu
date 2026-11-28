@@ -9,8 +9,6 @@
 #include <fvdb/detail/utils/cuda/Utils.cuh>
 #include <fvdb/detail/utils/gsplat/GaussianIntersectionRange.h>
 
-#include <nanovdb/util/cuda/Util.h>
-
 #include <c10/cuda/CUDAGuard.h>
 
 #include <cub/cub.cuh>
@@ -1269,15 +1267,6 @@ intersectGaussianTilesCudaImpl(
     }
 }
 
-namespace {
-
-[[maybe_unused]] __global__ void
-sleepKernel() {
-    __nanosleep(1000000U); // Puts the calling thread to sleep
-}
-
-} // namespace
-
 std::tuple<torch::Tensor, torch::Tensor>
 intersectGaussianTilesPrivateUse1Impl(
     const torch::Tensor &means2d,                   // [C, N, 2] or [M, 2]
@@ -1417,6 +1406,8 @@ intersectGaussianTilesPrivateUse1Impl(
 
     const int deviceCount       = static_cast<int>(c10::cuda::device_count());
     const int64_t totalTileKeys = static_cast<int64_t>(numCameras) * totalTiles;
+    // Dense tile ownership must match rasterization's full-width tile rows.
+    const size_t tileAlignment = isSparse || totalTileKeys == 0 ? 1 : numTilesW;
 
     // Give each device a contiguous range of the tile-key space [0, numCameras * totalTiles). The
     // linear tile-key L = cidx * totalTiles + tileIdx is monotonic in (camera, tile) -- the high
@@ -1444,8 +1435,10 @@ intersectGaussianTilesPrivateUse1Impl(
         C10_CUDA_CHECK(cudaMallocHost(&packedRanges, deviceCount * sizeof(*packedRanges)));
         for (const auto deviceId: c10::irange(deviceCount)) {
             C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream                      = c10::cuda::getCurrentCUDAStream(deviceId);
-            const auto [keyOffset, keyCount] = deviceChunk(totalTileKeys, deviceId);
+            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
+            size_t keyOffset, keyCount;
+            std::tie(keyOffset, keyCount) =
+                partition::aligned_range(tileAlignment, totalTileKeys, deviceId);
             if (keyCount == 0) {
                 continue;
             }
@@ -1472,7 +1465,8 @@ intersectGaussianTilesPrivateUse1Impl(
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
 
         int64_t deviceKeyOffset, deviceKeyCount;
-        std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
+        std::tie(deviceKeyOffset, deviceKeyCount) =
+            partition::aligned_range(tileAlignment, totalTileKeys, deviceId);
         if (deviceKeyCount == 0) {
             continue;
         }
@@ -1612,25 +1606,6 @@ intersectGaussianTilesPrivateUse1Impl(
             }
         }
 
-        // intersectionValues is returned as a managed tensor, so prefetch each device's slice
-        // [intersectionOffset, intersectionOffset + intersectionCount) before the emit and sort.
-        // The temporary keys are already device-local and require no prefetch.
-        for (const auto deviceId: c10::irange(deviceCount)) {
-            C10_CUDA_CHECK(cudaSetDevice(deviceId));
-            auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
-
-            const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
-            const int64_t intersectionCount  = deviceIntersectionCount[deviceId];
-            if (intersectionCount > 0) {
-                sleepKernel<<<1, 1, 0, stream>>>();
-                C10_CUDA_CHECK(nanovdb::util::cuda::memPrefetchAsync(
-                    intersectionValues.data_ptr<int32_t>() + intersectionOffset,
-                    intersectionCount * sizeof(int32_t),
-                    deviceId,
-                    stream));
-            }
-        }
-
         // Emit only the device's Gaussian range, using its local scan offsets and retaining global
         // Gaussian IDs. Tile-key clipping still handles cameras shared by adjacent devices.
         for (const auto deviceId: c10::irange(deviceCount)) {
@@ -1644,7 +1619,8 @@ intersectGaussianTilesPrivateUse1Impl(
             }
 
             size_t deviceKeyOffset, deviceKeyCount;
-            std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
+            std::tie(deviceKeyOffset, deviceKeyCount) =
+                partition::aligned_range(tileAlignment, totalTileKeys, deviceId);
 
             const int64_t keyStart = static_cast<int64_t>(deviceKeyOffset);
             const int64_t keyEnd   = static_cast<int64_t>(deviceKeyOffset + deviceKeyCount);
@@ -1755,7 +1731,8 @@ intersectGaussianTilesPrivateUse1Impl(
             const int64_t intersectionOffset = deviceIntersectionOffset[deviceId];
             const int64_t intersectionCount  = deviceIntersectionCount[deviceId];
             size_t deviceKeyOffset, deviceKeyCount;
-            std::tie(deviceKeyOffset, deviceKeyCount) = deviceChunk(totalTileKeys, deviceId);
+            std::tie(deviceKeyOffset, deviceKeyCount) =
+                partition::aligned_range(tileAlignment, totalTileKeys, deviceId);
             const int64_t workCount =
                 intersectionCount > 0 ? intersectionCount : static_cast<int64_t>(deviceKeyCount);
             if (workCount > 0) {

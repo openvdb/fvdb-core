@@ -45,8 +45,6 @@ copyImageToDevicePrivateUse1(const torch::Tensor &image, torch::Device device) {
     const int H  = image.size(2);
     const int W  = image.size(3);
 
-    prefetchImages({}, {result});
-
     const auto *sourceData = static_cast<const uint8_t *>(image.const_data_ptr());
     auto *targetData       = static_cast<uint8_t *>(result.data_ptr());
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
@@ -55,7 +53,7 @@ copyImageToDevicePrivateUse1(const torch::Tensor &image, torch::Device device) {
         const auto chunk = imageBlockChunk(B, H, W, deviceId);
         std::vector<void *> pointers;
         std::vector<size_t> sizes;
-        appendImagePrefetchRanges(
+        appendImageCopyRanges(
             pointers, sizes, {result}, chunk.tileRowOffset, chunk.tileRowCount, B, CH, H, W);
         // Copy full-width tile rows using the same ownership as the image kernels.
         for (const auto rangeId: c10::irange(pointers.size())) {

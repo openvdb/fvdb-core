@@ -3,13 +3,16 @@
 
 #include <fvdb/detail/utils/cuda/GradientReduction.h>
 #include <fvdb/detail/utils/cuda/LocalGradient.h>
+#include <fvdb/detail/utils/cuda/PartitionUtils.h>
 
+#include <ATen/ops/from_blob.h>
 #include <c10/cuda/CUDAGuard.h>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -33,7 +36,7 @@ TEST(GradientReductionValidationTest, RejectsNonzeroStorageOffset) {
     const auto gradient = torch::zeros({deviceCount + 1}, options).narrow(0, 1, deviceCount);
     const std::vector<torch::Tensor> localGradients(deviceCount, gradient);
     try {
-        fvdb::detail::reduceGradientShards(localGradients);
+        fvdb::detail::reduceLocalGradients(localGradients);
         FAIL() << "Expected a nonzero storage offset to be rejected";
     } catch (const c10::Error &error) {
         EXPECT_NE(std::string(error.what_without_backtrace()).find("beginning of its storage"),
@@ -57,7 +60,7 @@ TEST(GradientReductionValidationTest, RejectsIncorrectStorageSize) {
         const auto gradient = torch::zeros({storageElements}, options).narrow(0, 0, 1);
         const std::vector<torch::Tensor> localGradients(deviceCount, gradient);
         try {
-            fvdb::detail::reduceGradientShards(localGradients);
+            fvdb::detail::reduceLocalGradients(localGradients);
             FAIL() << "Expected incorrect padded storage size to be rejected";
         } catch (const c10::Error &error) {
             EXPECT_NE(std::string(error.what_without_backtrace())
@@ -103,7 +106,7 @@ TEST_P(GradientReductionTest, MatchesIndependentSumAndPreservesLogicalShape) {
         localGradients.emplace_back(std::move(gradient));
     }
 
-    fvdb::detail::reduceGradientShards(localGradients);
+    fvdb::detail::reduceLocalGradients(localGradients);
     for (const auto deviceId: c10::irange(deviceCount)) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         C10_CUDA_CHECK(cudaStreamSynchronize(streams[deviceId]));
@@ -112,8 +115,10 @@ TEST_P(GradientReductionTest, MatchesIndependentSumAndPreservesLogicalShape) {
     // Reassemble the public logical shards independently of the reduction's padded views.
     auto actual = torch::empty_like(expected);
     for (const auto deviceId: c10::irange(deviceCount)) {
-        const int64_t begin = std::min<int64_t>(deviceId * shardSize, numElements);
-        const int64_t end   = std::min<int64_t>((deviceId + 1) * shardSize, numElements);
+        const int64_t begin = deviceId * (numElements / deviceCount) +
+                              std::min<int64_t>(deviceId, numElements % deviceCount);
+        const int64_t end =
+            begin + numElements / deviceCount + (deviceId < numElements % deviceCount);
         ASSERT_EQ(localGradients[deviceId].sizes(), shape.sizes());
         actual.slice(0, begin, end)
             .copy_(localGradients[deviceId].view({-1}).slice(0, begin, end).cpu());
@@ -126,6 +131,181 @@ TEST_P(GradientReductionTest, MatchesIndependentSumAndPreservesLogicalShape) {
     EXPECT_TRUE(torch::equal(actual, expected));
 }
 
+TEST_P(GradientReductionTest, CameraShardsMatchIndependentSum) {
+    const int deviceCount = c10::cuda::device_count();
+    if (deviceCount == 0) {
+        GTEST_SKIP() << "CUDA is required for gradient reduction tests";
+    }
+    const auto [numGaussians, dtype, useNonDefaultStreams] = GetParam();
+    const c10::cuda::CUDAGuard deviceGuard(0);
+    std::vector<c10::cuda::CUDAStream> streams;
+    fvdb::detail::DeviceLists deviceLists(deviceCount);
+    std::vector<c10::DeviceIndex> allDevices;
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        streams.emplace_back(useNonDefaultStreams ? c10::cuda::getStreamFromPool(false, deviceId)
+                                                  : c10::cuda::getDefaultCUDAStream(deviceId));
+        deviceLists[deviceId].push_back(deviceId);
+        allDevices.push_back(deviceId);
+    }
+    // Mix one camera per GPU with an all-device reduction and a camera with no contributors.
+    // On three or more GPUs, also exercise deferred summation of point-to-point contributions.
+    deviceLists.push_back(allDevices);
+    deviceLists.emplace_back();
+    if (deviceCount > 2) {
+        deviceLists.push_back({allDevices.front(), allDevices.back()});
+    }
+    const c10::cuda::CUDAMultiStreamGuard streamGuard(streams);
+    const auto options        = torch::TensorOptions().dtype(dtype).device(torch::kCPU);
+    const int64_t numCameras  = deviceLists.size();
+    const int64_t numChannels = 3;
+    const auto shape  = torch::zeros({}, options).expand({numCameras, numGaussians, numChannels});
+    auto expected     = torch::zeros({numCameras, numGaussians, numChannels}, options);
+    const auto values = torch::arange(numGaussians * numChannels, options)
+                            .remainder(17)
+                            .view({numGaussians, numChannels});
+    std::vector<torch::Tensor> localGradients;
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        auto gradient = fvdb::detail::makeLocalGradient<false>(shape, deviceId, streams[deviceId]);
+        auto input    = torch::zeros_like(expected);
+        for (const auto cameraId: c10::irange(numCameras)) {
+            const auto &sources = deviceLists[cameraId];
+            if (std::find(sources.begin(), sources.end(), deviceId) != sources.end()) {
+                // Distinct exact values catch swapped cameras, missing peers, and duplicate sums.
+                input.select(0, cameraId).copy_(values - 8 + 3 * deviceId + 5 * cameraId);
+            }
+        }
+        expected += input;
+        gradient.copy_(input);
+        localGradients.emplace_back(std::move(gradient));
+    }
+
+    fvdb::detail::reduceLocalGradients<false>(localGradients, deviceLists);
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        C10_CUDA_CHECK(cudaSetDevice(deviceId));
+        C10_CUDA_CHECK(cudaStreamSynchronize(streams[deviceId]));
+    }
+
+    // Reassemble each camera's Gaussian shards without using the production copy helper.
+    const int64_t shardSize = fvdb::detail::localGradientShardSize(numGaussians, deviceCount);
+    const int64_t paddedNumGaussians = shardSize * deviceCount;
+    auto actual                      = torch::empty_like(expected);
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        const auto &gradient = localGradients[deviceId];
+        const int64_t begin  = deviceId * (numGaussians / deviceCount) +
+                              std::min<int64_t>(deviceId, numGaussians % deviceCount);
+        const int64_t end =
+            begin + numGaussians / deviceCount + (deviceId < numGaussians % deviceCount);
+        ASSERT_EQ(gradient.sizes(), shape.sizes());
+        ASSERT_EQ(gradient.scalar_type(), dtype);
+        actual.slice(1, begin, end).copy_(gradient.slice(1, begin, end).cpu());
+        const auto padding = gradient
+                                 .as_strided({numCameras, paddedNumGaussians, numChannels},
+                                             {paddedNumGaussians * numChannels, numChannels, 1})
+                                 .slice(1, numGaussians, paddedNumGaussians)
+                                 .cpu();
+        EXPECT_EQ(padding.count_nonzero().item<int64_t>(), 0);
+    }
+    EXPECT_TRUE(torch::equal(actual, expected));
+}
+
+TEST(CompactCameraGradientTest, ReducesAndPublishesOnlyOwnedShards) {
+    const int deviceCount = c10::cuda::device_count();
+    if (deviceCount == 0) {
+        GTEST_SKIP() << "CUDA is required for gradient reduction tests";
+    }
+    const c10::cuda::CUDAGuard deviceGuard(0);
+    std::vector<c10::cuda::CUDAStream> streams;
+    for (const auto deviceId: c10::irange(deviceCount)) {
+        streams.emplace_back(c10::cuda::getStreamFromPool(false, deviceId));
+    }
+    const c10::cuda::CUDAMultiStreamGuard streamGuard(streams);
+    const auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU);
+    using fvdb::detail::DeviceLists;
+    using fvdb::detail::makeDeviceLists;
+    const c10::DeviceIndex lastDevice      = deviceCount - 1;
+    const std::vector<DeviceLists> layouts = {
+        makeDeviceLists(1, 16 * deviceCount, 4, deviceCount), // One camera shared by every GPU.
+        makeDeviceLists(2, 16 * deviceCount, 4, deviceCount), // Two cameras, including 2C/4GPU.
+        makeDeviceLists(2, 15, 3, deviceCount),               // A rank can straddle cameras.
+        makeDeviceLists(deviceCount, 16 * deviceCount, 4, deviceCount), // One camera per GPU.
+        DeviceLists{{lastDevice}, {}}, // Receive-only ranks and a camera with no contributors.
+        DeviceLists{{}}};              // Every rank has an empty logical accumulation tensor.
+
+    for (const auto &deviceLists: layouts) {
+        const int64_t numCameras = deviceLists.size();
+        for (const int64_t numGaussians: {int64_t{0}, int64_t{1}, int64_t{17}}) {
+            SCOPED_TRACE(numCameras);
+            SCOPED_TRACE(numGaussians);
+            constexpr int64_t numChannels = 3;
+            const int64_t shardSize =
+                fvdb::detail::localGradientShardSize(numGaussians, deviceCount);
+            const auto shape =
+                torch::zeros({}, options).expand({numCameras, numGaussians, numChannels});
+            auto expected = torch::zeros({numCameras, numGaussians, numChannels}, options);
+            // A managed CUDA output exercises the production copy helper from every device,
+            // including ranks whose logical accumulation tensor is empty but whose tail is not.
+            // Initialize it before queuing any GPU work for this case.
+            C10_CUDA_CHECK(cudaSetDevice(0));
+            void *outputData = nullptr;
+            C10_CUDA_CHECK(cudaMallocManaged(
+                &outputData, std::max<int64_t>(expected.numel(), 1) * sizeof(float)));
+            auto output = at::from_blob(
+                outputData,
+                expected.sizes(),
+                [](void *data) { C10_CUDA_CHECK(cudaFree(data)); },
+                options.device(torch::kCUDA, 0));
+            std::fill_n(static_cast<float *>(outputData),
+                        expected.numel(),
+                        std::numeric_limits<float>::quiet_NaN());
+            const auto values = torch::arange(numGaussians * numChannels, options)
+                                    .remainder(17)
+                                    .view({numGaussians, numChannels});
+            std::vector<int64_t> cameraOffsets(deviceCount, 0);
+            std::vector<torch::Tensor> localGradients(deviceCount);
+            for (const auto deviceId: c10::irange(deviceCount)) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                int64_t cameraCount = 0;
+                auto input          = torch::zeros_like(expected);
+                for (const auto cameraId: c10::irange(numCameras)) {
+                    const auto &sources = deviceLists[cameraId];
+                    if (std::find(sources.begin(), sources.end(), deviceId) == sources.end()) {
+                        continue;
+                    }
+                    if (cameraCount == 0) {
+                        cameraOffsets[deviceId] = cameraId;
+                    }
+                    cameraCount = cameraId + 1 - cameraOffsets[deviceId];
+                    input.select(0, cameraId).copy_(values - 8 + 3 * deviceId + 5 * cameraId);
+                }
+                expected += input;
+                auto gradient = fvdb::detail::makeLocalGradient<false>(
+                    shape, deviceId, streams[deviceId], cameraCount);
+                const int64_t gaussianCount =
+                    numGaussians / deviceCount + (deviceId < numGaussians % deviceCount);
+                const int64_t storageElements = (cameraCount * shardSize * deviceCount +
+                                                 (numCameras - cameraCount) * gaussianCount) *
+                                                numChannels;
+                ASSERT_EQ(gradient.size(0), cameraCount);
+                ASSERT_EQ(gradient.storage().nbytes(), storageElements * sizeof(float));
+                gradient.copy_(input.narrow(0, cameraOffsets[deviceId], cameraCount));
+                localGradients[deviceId] = std::move(gradient);
+            }
+
+            fvdb::detail::reduceLocalGradients<false>(localGradients, deviceLists, cameraOffsets);
+            fvdb::detail::copyLocalGradients<false>(localGradients, output, cameraOffsets);
+            // Exercise stream-ordered release after copies have been queued.
+            localGradients.clear();
+            for (const auto deviceId: c10::irange(deviceCount)) {
+                C10_CUDA_CHECK(cudaSetDevice(deviceId));
+                C10_CUDA_CHECK(cudaStreamSynchronize(streams[deviceId]));
+            }
+            C10_CUDA_CHECK(cudaSetDevice(0));
+            EXPECT_TRUE(torch::equal(output.cpu(), expected));
+        }
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(ShapesAndStreams,
                          GradientReductionTest,
                          ::testing::Combine(::testing::Values(int64_t{0},
@@ -134,10 +314,71 @@ INSTANTIATE_TEST_SUITE_P(ShapesAndStreams,
                                                               int64_t{3},
                                                               int64_t{7},
                                                               int64_t{17},
+                                                              int64_t{21},
+                                                              int64_t{130},
                                                               int64_t{1023},
                                                               int64_t{1024},
                                                               int64_t{1025}),
                                             ::testing::Values(torch::kFloat32, torch::kFloat64),
                                             ::testing::Bool()));
+
+TEST(DeviceListsTest, UsesActualAlignedTileRanges) {
+    using fvdb::detail::DeviceLists;
+    using fvdb::detail::makeDeviceLists;
+    EXPECT_EQ(makeDeviceLists(1, 24, 4, 2), (DeviceLists{{0, 1}}));
+    EXPECT_EQ(makeDeviceLists(2, 24, 4, 2), (DeviceLists{{0}, {1}}));
+    EXPECT_EQ(makeDeviceLists(2, 24, 4, 4), (DeviceLists{{0, 1}, {2, 3}}));
+    // A device's tile rows can straddle a camera boundary.
+    EXPECT_EQ(makeDeviceLists(2, 15, 3, 4), (DeviceLists{{0, 1}, {1, 2, 3}}));
+    EXPECT_EQ(makeDeviceLists(2, 30, 3, 8), (DeviceLists{{0, 1, 2, 3}, {3, 4, 5, 6, 7}}));
+    EXPECT_EQ(makeDeviceLists(1, 63, 3, 8), (DeviceLists{{0, 1, 2, 3, 4, 5, 6, 7}}));
+    EXPECT_EQ(makeDeviceLists(3, 10, 5, 2), (DeviceLists{{0}, {0, 1}, {1}}));
+    // Empty raster ranks, empty images, and one device all use the same partition rule.
+    EXPECT_EQ(makeDeviceLists(2, 1, 1, 4), (DeviceLists{{0}, {1}}));
+    EXPECT_EQ(makeDeviceLists(2, 0, 1, 4), (DeviceLists{{}, {}}));
+    EXPECT_EQ(makeDeviceLists(3, 24, 4, 1), (DeviceLists{{0}, {0}, {0}}));
+    // Sparse membership stays conservative, but devices with no active tiles are excluded.
+    EXPECT_EQ(makeDeviceLists(2, 24, 1, 4, 2), (DeviceLists{{0, 1}, {0, 1}}));
+}
+
+TEST(PartitionTest, BalancesTileRowsAndClipsPartialFinalUnit) {
+    using fvdb::detail::partition::aligned_range;
+    const std::vector<std::tuple<size_t, size_t>> tileRows = {
+        {0, 3}, {3, 3}, {6, 3}, {9, 3}, {12, 3}, {15, 2}, {17, 2}, {19, 2}};
+    const std::vector<std::tuple<size_t, size_t>> pixelRows = {
+        {0, 48}, {48, 48}, {96, 48}, {144, 48}, {192, 48}, {240, 32}, {272, 32}, {304, 20}};
+    for (c10::DeviceIndex rank = 0; rank < 8; ++rank) {
+        EXPECT_EQ(aligned_range(1, 21, rank, 8), tileRows[rank]);
+        EXPECT_EQ(aligned_range(16, 324, rank, 8), pixelRows[rank]);
+    }
+    EXPECT_EQ(aligned_range(16, 324, 3, 4), std::make_tuple(size_t{256}, size_t{68}));
+    EXPECT_EQ(aligned_range(2, 5, 3, 4), std::make_tuple(size_t{5}, size_t{0}));
+    EXPECT_EQ(aligned_range(16, 0, 3, 4), std::make_tuple(size_t{0}, size_t{0}));
+}
+
+TEST(PartitionTest, ValidatesRanksAndAvoidsAlignedRangeOverflow) {
+    using fvdb::detail::partition::aligned_range;
+    const auto maxSize = std::numeric_limits<size_t>::max();
+    EXPECT_EQ(aligned_range(maxSize, maxSize, 0, 8), std::make_tuple(size_t{0}, maxSize));
+    EXPECT_EQ(aligned_range(maxSize, maxSize, 7, 8), std::make_tuple(maxSize, size_t{0}));
+    EXPECT_EQ(aligned_range(16, maxSize, 7, 8),
+              std::make_tuple(maxSize - maxSize / 8, maxSize / 8));
+    EXPECT_THROW(aligned_range(0, 21, 0, 8), c10::Error);
+    EXPECT_THROW(aligned_range(1, 21, 0, 0), c10::Error);
+    EXPECT_THROW(aligned_range(1, 21, -1, 8), c10::Error);
+    EXPECT_THROW(aligned_range(1, 21, 8, 8), c10::Error);
+}
+
+TEST(PartitionTest, DistinguishesInternalAndTrailingPadding) {
+    using fvdb::detail::partition::has_internal_padding;
+    EXPECT_TRUE(has_internal_padding(21, 1, 8));
+    EXPECT_TRUE(has_internal_padding(21 * 3, 3, 8));
+    EXPECT_FALSE(has_internal_padding(23, 1, 8));
+    EXPECT_FALSE(has_internal_padding(16, 1, 8));
+    EXPECT_FALSE(has_internal_padding(7, 1, 8));
+    EXPECT_FALSE(has_internal_padding(21, 1, 2));
+    EXPECT_EQ(fvdb::detail::partition::slot_size(21, 1, 8), 3);
+    EXPECT_EQ(fvdb::detail::partition::padded_size(21, 1, 8), 24);
+}
 
 } // namespace

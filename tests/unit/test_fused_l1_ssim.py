@@ -38,19 +38,26 @@ def test_fused_l1_ssim_forward_backward(shape, weight):
     torch.testing.assert_close(actual.grad.cpu(), reference.grad.cpu(), rtol=2e-4, atol=2e-6)
 
 
+@pytest.mark.parametrize("target_dtype", [torch.float32, torch.uint8, torch.uint16])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_fused_l1_ssim_noncontiguous_inputs():
+def test_fused_l1_ssim_noncontiguous_inputs(target_dtype):
     img1, img2 = make_images((2, 3, 33, 38))
+    normalize_target = target_dtype != torch.float32
+    divisor = 65535 if target_dtype == torch.uint16 else 255
+    if normalize_target:
+        img2 = (img2 * divisor).to(target_dtype)
     reference = img1.to("cuda").requires_grad_()
     actual = img1.to("cuda").requires_grad_()
-    reference_target = img2.to("cuda")[..., 1::2]
+    reference_target = img2.to(device="cuda", dtype=torch.float32)[..., 1::2]
+    if normalize_target:
+        reference_target = reference_target / divisor
     actual_target = img2.to("cuda")[..., 1::2]
     expected = torch.lerp(
         nnf.l1_loss(reference[..., 1::2], reference_target),
         1.0 - ssim(reference[..., 1::2], reference_target),
         0.2,
     )
-    result = fused_l1_ssim_loss(actual[..., 1::2], actual_target, 0.2)
+    result = fused_l1_ssim_loss(actual[..., 1::2], actual_target, 0.2, normalize_target=normalize_target)
     expected.backward()
     result.backward()
     torch.testing.assert_close(result.cpu(), expected.detach().cpu(), rtol=2e-5, atol=2e-6)

@@ -604,13 +604,6 @@ fusedSSIMPrivateUse1(
     auto img1_ = img1.contiguous();
     auto img2_ = img2.contiguous();
 
-    std::vector<torch::Tensor> inputs  = {img1_, img2_};
-    std::vector<torch::Tensor> outputs = {ssim_map};
-    if (train) {
-        outputs = {ssim_map, dm_dmu1, dm_dsigma1_sq, dm_dsigma12};
-    }
-    prefetchImages(inputs, outputs);
-
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
         auto stream = c10::cuda::getCurrentCUDAStream(deviceId);
@@ -676,11 +669,6 @@ fusedSSIMBackwardPrivateUse1(const torch::Tensor &img1,
     auto dm_dmu1_       = dm_dmu1.contiguous();
     auto dm_dsigma1_sq_ = dm_dsigma1_sq.contiguous();
     auto dm_dsigma12_   = dm_dsigma12.contiguous();
-
-    std::vector<torch::Tensor> inputs = {
-        img1_, img2_, dL_dmap_, dm_dmu1_, dm_dsigma1_sq_, dm_dsigma12_};
-    std::vector<torch::Tensor> outputs = {dL_dimg1};
-    prefetchImages(inputs, outputs);
 
     for (const auto deviceId: c10::irange(c10::cuda::device_count())) {
         C10_CUDA_CHECK(cudaSetDevice(deviceId));
