@@ -1504,25 +1504,29 @@ class Grid:
         field: torch.Tensor,
         band: int = 3,
         smooth: int = 0,
-        order: int = 3,
+        order: int = 1,
         smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
     ) -> torch.Tensor:
         """Re-initialize a signed per-voxel field into an SDF on this grid (topology unchanged).
 
-        Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen
-        Peng sign), then optionally de-staircases it with curvature-based smoothing.
+        Redistances ``field`` to ``|grad phi| = 1`` (TVD-RK Godunov eikonal solve with a frozen Peng
+        sign and a Russo-Smereka subcell fix that anchors the zero crossing), then optionally
+        de-staircases it with curvature-based smoothing.
 
         Args:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels (clamps the field to ``[-band*vx, band*vx]``).
             smooth (int): Number of smoothing passes (``0`` disables smoothing).
-            order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+            order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
+                change the converged result; ``1`` is the cheapest in time and memory.
             smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.
             redistance_iters (int): Number of redistancing sweeps; ``<= 0`` uses the default
-                ``max(6, round(2.5*band) + 2)``.
+                ``max(20, 6*band)``. The same count is used for the redistance that follows smoothing,
+                so a small explicit value renormalizes the smoothed field only within about
+                ``0.4*redistance_iters`` voxels of the surface.
 
         Returns:
             sdf (torch.Tensor): The re-initialized SDF, shape ``(num_voxels,)``.
@@ -1545,9 +1549,9 @@ class Grid:
               *inactive* rather than assigning them NaN/Inf values.
             * Voxels whose value is exactly ``0`` have a zero frozen sign and are left at ``0`` by the
               redistance (a no-data pass-through; :meth:`ray_implicit_intersection` treats exact
-              ``0`` as a gap). Their signed neighbours, however, see them as an interface and are
-              redistanced toward them, and smoothing blends them -- prune such voxels first when you
-              can.
+              ``0`` as a gap). They do not make their neighbours interface cells, but the neighbours'
+              Godunov update reads them as a zero level and redistances toward them, and smoothing
+              blends them -- prune such voxels first when you can.
             * Voxels must be isotropic (``ValueError`` otherwise). CUDA only; ``float32`` or
               ``float64``.
         """
@@ -1560,7 +1564,7 @@ class Grid:
         field: torch.Tensor,
         band: int = 3,
         smooth: int = 0,
-        order: int = 3,
+        order: int = 1,
         smoothing: SmoothingMode = SmoothingMode.MEAN_CURVATURE,
         redistance_iters: int = -1,
         pad: bool = True,
@@ -1577,7 +1581,8 @@ class Grid:
             field (torch.Tensor): Per-voxel signed field, shape ``(num_voxels,)`` or ``(num_voxels, 1)``.
             band (int): Narrow-band half-width in voxels.
             smooth (int): Number of smoothing passes (``0`` disables smoothing).
-            order (int): TVD-RK order, one of ``1``, ``2``, or ``3``.
+            order (int): TVD-RK order, one of ``1`` (default), ``2``, or ``3``. The order does not
+                change the converged result; ``1`` is the cheapest in time and memory.
             smoothing (SmoothingMode): Which Laplacian flow each smoothing pass applies --
                 :attr:`~fvdb.SmoothingMode.MEAN_CURVATURE` (default) or
                 :attr:`~fvdb.SmoothingMode.TAUBIN` (volume-preserving). Only used when ``smooth > 0``.

@@ -15,6 +15,20 @@ fVDB Version History
   Code that serves CUDA and PrivateUse1 alike should use `deviceBytes()` and `deviceGridAt()`.
   `TorchDeviceResource` and `GridStorage::deviceProto` now accept CUDA devices only.
 
+### SDF & Ray Traversal
+
+- Fixed `reinitialize_sdf` eroding features one to three voxels thick a little more with every redistancing
+  sweep. The Godunov solve had no steady state there; interface cells now take a Russo-Smereka subcell update
+  that anchors the zero crossing where the input placed it. The distance estimate uses the central-difference
+  gradient norm so oblique surfaces are not overestimated, and is shared across each crossing edge so one-voxel
+  oblique slabs and rods are fixed points under repeated calls (#796).
+- **Default changes:** `reinitialize_sdf` and `rebuild_narrow_band` default to `order=1` (the converged result does
+  not depend on the RK order) and `redistance_iters <= 0` now means `max(20, 6*band)` instead of
+  `max(6, round(2.5*band) + 2)`. The redistance after smoothing uses the same sweep count (#796).
+- Reduced `reinitialize_sdf` peak scratch memory from 6x the field (7x at order 2) to 2x at order 1 or 2 and 3x at
+  order 3, plus 1x when smoothing. The input tensor doubles as the frozen phi0, and the non-finite check reduces the
+  field to its min and max instead of materializing a per-voxel mask (#796).
+
 ## Version 0.6.0 - September 18, 2026
 
 *91 commits, 260 files changed, 5 contributors.*
